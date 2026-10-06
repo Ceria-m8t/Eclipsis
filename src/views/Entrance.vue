@@ -13,11 +13,18 @@ const rooms = [
 function enterRoom(id: string) {
   router.push(`/${id}`)
 }
+
+function openSettings() {
+  router.push('/settings')
+}
 </script>
 
 <template>
   <div class="entrance">
-    <h1>我们的家</h1>
+    <div class="header">
+      <h1>我们的家</h1>
+      <button class="settings-btn" @click="openSettings">⚙</button>
+    </div>
     <div class="rooms-grid">
       <div
         v-for="room in rooms"
@@ -45,9 +52,33 @@ function enterRoom(id: string) {
   padding: 24px;
 }
 
+.header {
+  position: relative;
+  width: 100%;
+  max-width: 400px;
+  margin-bottom: 48px;
+}
+
 h1 {
   font-size: 28px;
-  margin-bottom: 48px;
+  text-align: center;
+  color: #c8c8d0;
+}
+
+.settings-btn {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: #888;
+  font-size: 20px;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+
+.settings-btn:hover {
   color: #c8c8d0;
 }
 

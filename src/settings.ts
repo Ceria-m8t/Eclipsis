@@ -1,23 +1,30 @@
 // src/settings.ts
-const DEFAULTS = {
-  apiBase: import.meta.env.VITE_API_BASE || '',
-  apiKey: import.meta.env.VITE_API_KEY || '',
-  model: import.meta.env.VITE_MODEL || ''
+export interface Settings {
+  apiBase: string
+  apiKey: string
+  model: string
 }
 
-export function getSettings() {
-  const saved = localStorage.getItem('our-home-settings')
-  if (saved) {
+const DEFAULT_SETTINGS: Settings = {
+  apiBase: '',
+  apiKey: 'erica-heartbeat-gateway-2026',
+  model: 'claude-fable-5[次]'
+}
+
+const STORAGE_KEY = 'our-home-settings'
+
+export function getSettings(): Settings {
+  const stored = localStorage.getItem(STORAGE_KEY)
+  if (stored) {
     try {
-      const parsed = JSON.parse(saved)
-      return { ...DEFAULTS, ...parsed }
+      return { ...DEFAULT_SETTINGS, ...JSON.parse(stored) }
     } catch {
-      return { ...DEFAULTS }
+      return DEFAULT_SETTINGS
     }
   }
-  return { ...DEFAULTS }
+  return DEFAULT_SETTINGS
 }
 
-export function saveSettings(s: { apiBase: string; apiKey: string; model: string }) {
-  localStorage.setItem('our-home-settings', JSON.stringify(s))
+export function saveSettings(settings: Settings): void {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(settings))
 }
