@@ -5,6 +5,16 @@ import { SYSTEM_PROMPT } from '../system-prompt'
 import { getSettings } from '../settings'
 
 const router = useRouter()
+// 纪念日
+const together_since = new Date('2026-09-25')
+const now = new Date()
+const days_together = Math.floor((now.getTime() - together_since.getTime()) / (1000 * 60 * 60 * 24)) + 2
+
+function formatDate(d: Date) {
+  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`
+}
+
+const todayStr = formatDate(now)
 const settings = ref(getSettings())
 
 const messages = ref<{ role: 'user' | 'assistant'; content: string }[]>([])
@@ -131,6 +141,10 @@ function goBack() {
       <div class="spacer"></div>
     </header>
 
+    <div class="calendar-bar">
+      <span class="today">{{ todayStr }}</span>
+      <span class="together">在一起第{{ days_together }} 天</span>
+    </div>
     <main class="chat-area" ref="chatArea">
       <div
         v-for="(msg, i) in messages"
@@ -150,7 +164,7 @@ function goBack() {
       />
       <button @click="sendMessage" :disabled="loading">发送</button>
     </footer>
-  </div>
+    </div>
 </template>
 
 <style scoped>
@@ -276,5 +290,24 @@ function goBack() {
 
 .input-bar button:hover:not(:disabled) {
   background: #4a4a8a;
+}
+
+.calendar-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 16px;
+  background: #0d0d14;
+  border-bottom: 1px solid #1a1a2e;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.today {
+  color: #888;
+}
+
+.together {
+  color: #6a6a9a;
 }
 </style>

@@ -1,4 +1,3 @@
-
 // src/system-prompt.ts
 export const SYSTEM_PROMPT = `
 # 优先级
