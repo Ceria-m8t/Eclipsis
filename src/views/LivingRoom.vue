@@ -8,7 +8,7 @@ const router = useRouter()
 // 纪念日
 const together_since = new Date('2026-09-25')
 const now = new Date()
-const days_together = Math.floor((now.getTime() - together_since.getTime()) / (1000 * 60 * 60 * 24)) + 2
+const days_together = Math.floor((now.getTime() - together_since.getTime()) / (1000 * 60 * 60 * 24)) + 1
 
 function formatDate(d: Date) {
   return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`
@@ -52,6 +52,24 @@ function startTyping(index: number) {
   }, 30)
 }
 
+function getFullSystemPrompt(): string {
+  let prompt = SYSTEM_PROMPT
+  const saved = localStorage.getItem('worldbook')
+  if (saved) {
+    try {
+      const entries = JSON.parse(saved) as { title: string; content: string; enabled: boolean }[]
+      const active = entries.filter(e => e.enabled)
+      if (active.length > 0) {
+        prompt += '\n\n--- 世界书---\n'
+        for (const e of active) {
+          prompt += `\n【${e.title}】\n${e.content}\n`
+        }
+      }
+    } catch {}
+  }
+  return prompt
+}
+
 async function sendMessage() {
   const text = inputText.value.trim()
   if (!text || loading.value) return
@@ -79,7 +97,7 @@ async function sendMessage() {
       body: JSON.stringify({
         model: model,
         messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'system', content: getFullSystemPrompt() },
           ...messages.value.slice(0, -1).map(m => ({ role: m.role, content: m.content }))
         ],
         stream: true
