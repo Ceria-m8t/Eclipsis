@@ -1,14 +1,21 @@
-// src/settings.ts
 export interface Settings {
   apiBase: string
   apiKey: string
   model: string
+  chatBg: string
+  avatarUser: string
+  avatarAI: string
+  bubbleTheme: string
 }
 
 const DEFAULT_SETTINGS: Settings = {
   apiBase: '',
   apiKey: 'erica-heartbeat-gateway-2026',
-  model: 'claude-fable-5[次]'
+  model: 'claude-fable-5[次]',
+  chatBg: '',
+  avatarUser: '/avatar-erica.jpg',
+  avatarAI: '/avatar-claude.jpg',
+  bubbleTheme: 'glass-light'
 }
 
 const STORAGE_KEY = 'our-home-settings'

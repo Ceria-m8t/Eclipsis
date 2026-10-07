@@ -1,192 +1,47 @@
 <script setup lang="ts">
-import { ref, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
-import { SYSTEM_PROMPT } from '../system-prompt'
-import { getSettings } from '../settings'
 
 const router = useRouter()
-// 纪念日
-const together_since = new Date('2026-09-25')
-const now = new Date()
-const days_together = Math.floor((now.getTime() - together_since.getTime()) / (1000 * 60 * 60 * 24)) + 1
 
-function formatDate(d: Date) {
-  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`
-}
-
-const todayStr = formatDate(now)
-const settings = ref(getSettings())
-
-const messages = ref<{ role: 'user' | 'assistant'; content: string }[]>([])
-const inputText = ref('')
-const loading = ref(false)
-const chatArea = ref<HTMLElement | null>(null)
-
-let charQueue: string[] = []
-let typingTimer: number | null = null
-let currentAssistantIndex = -1
-
-function scrollToBottom() {
-  nextTick(() => {
-    if (chatArea.value) {
-      chatArea.value.scrollTop = chatArea.value.scrollHeight
-    }
-  })
-}
-
-function startTyping(index: number) {
-  currentAssistantIndex = index
-  if (typingTimer) return
-  typingTimer = window.setInterval(() => {
-    if (charQueue.length === 0) {
-      if (!loading.value) {
-        window.clearInterval(typingTimer!)
-        typingTimer = null
-      }
-      return
-    }
-    const count = charQueue.length > 20 ? 3 : charQueue.length > 5 ? 2 : 1
-    const chars = charQueue.splice(0, count).join('')
-    messages.value[currentAssistantIndex].content += chars
-    scrollToBottom()
-  }, 30)
-}
-
-function getFullSystemPrompt(): string {
-  let prompt = SYSTEM_PROMPT
-  const saved = localStorage.getItem('worldbook')
-  if (saved) {
-    try {
-      const entries = JSON.parse(saved) as { title: string; content: string; enabled: boolean }[]
-      const active = entries.filter(e => e.enabled)
-      if (active.length > 0) {
-        prompt += '\n\n--- 世界书---\n'
-        for (const e of active) {
-          prompt += `\n【${e.title}】\n${e.content}\n`
-        }
-      }
-    } catch {}
-  }
-  return prompt
-}
-
-async function sendMessage() {
-  const text = inputText.value.trim()
-  if (!text || loading.value) return
-
-  messages.value.push({ role: 'user', content: text })
-  inputText.value = ''
-  loading.value = true
-  charQueue = []
-  scrollToBottom()
-
-  const assistantIndex = messages.value.length
-  messages.value.push({ role: 'assistant', content: '' })
-  startTyping(assistantIndex)
-
-  const { apiBase, apiKey, model } = settings.value
-  const url = apiBase ? `${apiBase}/chat/completions` : '/api/chat/completions'
-
-  try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
-      body: JSON.stringify({
-        model: model,
-        messages: [
-          { role: 'system', content: getFullSystemPrompt() },
-          ...messages.value.slice(0, -1).map(m => ({ role: m.role, content: m.content }))
-        ],
-        stream: true
-      })
-    })
-
-    if (!res.ok) {
-      messages.value[assistantIndex].content = `[错误 ${res.status}] ${await res.text()}`
-      return
-    }
-
-    const reader = res.body!.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() || ''
-
-      for (const line of lines) {
-        const trimmed = line.trim()
-        if (!trimmed || !trimmed.startsWith('data: ')) continue
-        const data = trimmed.slice(6)
-        if (data === '[DONE]') break
-
-        try {
-          const parsed = JSON.parse(data)
-          const delta = parsed.choices?.[0]?.delta?.content
-          if (delta) {
-            charQueue.push(...delta.split(''))
-          }
-        } catch {
-          // 忽略
-        }
-      }
-    }
-  } catch (err: any) {
-    messages.value[assistantIndex].content = `[请求失败] ${err.message}`
-  } finally {
-    loading.value = false
-    scrollToBottom()
-  }
-}
-
-function goBack() {
-  router.push('/')
-}
+function goBack() { router.push('/') }
+function goChat() { router.push('/living/chat') }
+function goStudy() { router.push('/study') }
 </script>
 
 <template>
-  <div class="living-room">
-    <header class="room-header">
+  <div class="living-scene">
+    <!--顶部信息栏 -->
+    <header class="scene-header">
       <button class="back-btn" @click="goBack">← 玄关</button>
-      <span class="room-title">客厅</span>
-      <div class="spacer"></div>
+      <span class="scene-title">客厅</span>
     </header>
 
-    <div class="calendar-bar">
-      <span class="today">{{ todayStr }}</span>
-      <span class="together">在一起第{{ days_together }} 天</span>
-    </div>
-    <main class="chat-area" ref="chatArea">
-      <div
-        v-for="(msg, i) in messages"
-        :key="i"
-        :class="['bubble', msg.role]"
-      >
-        {{ msg.content }}
-      </div>
-      <div v-if="loading && messages[messages.length - 1]?.content === ''" class="bubble assistant typing">……</div>
-    </main>
+    <!-- 背景图 + 热区 -->
+    <div class="scene-container">
+      <img src="/living-room-bg.jpg" class="scene-bg" alt="客厅" />
 
-    <footer class="input-bar">
-      <input
-        v-model="inputText"
-        placeholder="说点什么…"
-        @keydown.enter="sendMessage"
-      />
-      <button @click="sendMessage" :disabled="loading">发送</button>
-    </footer>
+      <!-- 可点击热区 -->
+      <button class="hotspot sofa" @click="goChat">
+        <span class="hotspot-label">💬坐下聊天</span>
+      </button>
+
+      <button class="hotspot calendar" @click="$router.push('/living/calendar')">
+        <span class="hotspot-label">📅 日历</span>
+      </button>
+
+      <button class="hotspot bookshelf" @click="goStudy">
+        <span class="hotspot-label">📚 书房</span>
+      </button>
+
+      <button class="hotspot record-player">
+        <span class="hotspot-label">🎵 唱片机</span>
+      </button>
     </div>
+  </div>
 </template>
 
 <style scoped>
-.living-room {
+.living-scene {
   display: flex;
   flex-direction: column;
   height: 100vh;
@@ -195,137 +50,99 @@ function goBack() {
   max-width: 480px;
   margin: 0 auto;
   background: #0a0a0f;
-  color: #e0e0e0;
+  overflow: hidden;
 }
 
-.room-header {
+.scene-header {
   display: flex;
   align-items: center;
-  padding: 16px;
-  border-bottom: 1px solid #1a1a2e;
-  flex-shrink: 0;
+  padding: 12px 16px;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  max-width: 480px;
+  margin: 0 auto;
+  z-index: 10;
+  background: linear-gradient(to bottom, rgba(0,0,0,0.5) 0%, transparent 100%);
 }
-
 .back-btn {
   background: none;
   border: none;
-  color: #888;
+  color: rgba(255,255,255,0.8);
   font-size: 14px;
   cursor: pointer;
   padding: 4px 8px;
 }
-
-.back-btn:hover {
-  color: #c8c8d0;
-}
-
-.room-title {
+.back-btn:hover { color: #fff; }
+.scene-title {
   flex: 1;
   text-align: center;
-  font-size: 18px;
+  font-size: 17px;
   font-weight: 600;
-  color: #c8c8d0;
+  color: rgba(255,255,255,0.9);
 }
 
-.spacer {
-  width: 60px;
+/* 场景容器 */
+.scene-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+.scene-bg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
-.chat-area {
-  flex: 1;
-  overflow-y: auto;
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  -webkit-overflow-scrolling: touch;
-}
-
-.bubble {
-  max-width: 78%;
-  padding: 10px 14px;
-  border-radius: 16px;
-  font-size: 15px;
-  line-height: 1.6;
-  word-break: break-word;
-  white-space: pre-wrap;
-}
-
-.bubble.user {
-  align-self: flex-end;
-  background: #2a2a4a;
-  border-bottom-right-radius: 4px;
-}
-
-.bubble.assistant {
-  align-self: flex-start;
-  background: #1a1a2e;
-  border-bottom-left-radius: 4px;
-}
-
-.bubble.typing {
-  opacity: 0.5;
-}
-
-.input-bar {
-  display: flex;
-  gap: 8px;
-  padding: 12px 16px;
-  padding-bottom: max(12px, env(safe-area-inset-bottom));
-  border-top: 1px solid #1a1a2e;
-  background: #0d0d14;
-  flex-shrink: 0;
-}
-
-.input-bar input {
-  flex: 1;
-  padding: 10px 14px;
-  border: 1px solid #2a2a4a;
-  border-radius: 20px;
-  background: #12121e;
-  color: #e0e0e0;
-  font-size: 15px;
-  outline: none;
-}
-
-.input-bar input::placeholder {
-  color: #555;
-}
-
-.input-bar button {
-  padding: 10px 20px;
+/* 热区按钮 */
+.hotspot {
+  position: absolute;
+  background: none;
   border: none;
-  border-radius: 20px;
-  background: #3a3a6a;
-  color: #e0e0e0;
-  font-size: 14px;
   cursor: pointer;
+  padding: 0;
 }
-
-.input-bar button:disabled {
-  opacity: 0.4;
-}
-
-.input-bar button:hover:not(:disabled) {
-  background: #4a4a8a;
-}
-
-.calendar-bar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+.hotspot-label {
+  display: inline-block;
   padding: 8px 16px;
-  background: #0d0d14;
-  border-bottom: 1px solid #1a1a2e;
-  font-size: 13px;
-  flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.85);
+  border-radius: 20px;
+  font-size: 14px;
+  color: #4a3a2a;
+  font-weight: 500;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.15);
+  backdrop-filter: blur(4px);
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+.hotspot:hover .hotspot-label {
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+  transform: scale(1.05);
+}
+.hotspot:active .hotspot-label {
+  transform: scale(0.97);
 }
 
-.today {
-  color: #888;
+/* 热区位置 — 根据你的背景图调整这些值 */
+.hotspot.sofa {
+  bottom: 40%;
+  left: 50%;
+  transform: translateX(-50%);
 }
-
-.together {
-  color: #6a6a9a;
+.hotspot.calendar {
+  top: 28%;
+  right: 12%;
+}
+.hotspot.bookshelf {
+  top: 35%;
+  left: 8%;
+}
+.hotspot.record-player {
+  bottom: 25%;
+  right: 10%;
 }
 </style>
