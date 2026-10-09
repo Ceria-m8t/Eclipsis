@@ -179,7 +179,7 @@ function domainIcon(domains: string[]): string {
 }
 
 function goBack() {
-  router.push('/')
+  router.push('/living')
 }
 
 onMounted(() => {

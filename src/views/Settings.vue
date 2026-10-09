@@ -29,11 +29,11 @@ function clearImage(field: 'chatBg' | 'avatarUser' | 'avatarAI') {
 
 function save() {
   saveSettings(settings.value)
-  router.push('/')
+  router.push('/living')
 }
 
 function cancel() {
-  router.push('/')
+  router.push('/living')
 }
 </script>
 
