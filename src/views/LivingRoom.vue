@@ -51,6 +51,7 @@ onMounted(() => {
     <!-- 顶部信息栏 -->
     <header class="scene-header">
       <span class="scene-title">Eclipsis</span>
+      <button class="settings-btn" @click="$router.push('/settings')">⚙</button>
     </header>
 
     <!-- 可横向滑动的场景容器 -->
@@ -63,7 +64,7 @@ onMounted(() => {
       @pointercancel="onPointerUp"
     >
       <div class="scene-inner">
-        <img src="/living-room.jpg" class="scene-bg" alt="客厅" draggable="false" />
+        <img src="/living-room.jpg" class="scene-bg" alt=" 客厅" draggable="false" />
 
         <!-- 热区按钮 -->
         <button class="hotspot sofa" @click.stop="onHotspot('/living/chat')">
@@ -228,4 +229,99 @@ onMounted(() => {
   top: 45%;
   left: 1%;
 }
+
+/* 图片相关 */
+.input-footer {
+  position: relative;
+  z-index: 2;
+  flex-shrink: 0;
+  background: rgba(25, 20, 40, 0.85);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-top: 1px solid rgba(140, 120, 180, 0.15);
+}
+
+.image-preview-bar {
+  display: flex;
+  gap: 8px;
+  padding: 8px 14px 0;
+  overflow-x: auto;
+}
+
+.preview-thumb {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.preview-thumb img {
+  width: 60px;
+  height: 60px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.remove-img {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(200, 60, 60, 0.8);
+  color: white;
+  font-size: 10px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.attach-btn {
+  font-size: 20px;
+  cursor: pointer;
+  padding: 4px;
+  user-select: none;
+}
+
+.msg-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.msg-image {
+  max-width: 200px;
+  max-height: 200px;
+  border-radius: 12px;
+  object-fit: cover;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.scene-header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 16px;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  background: linear-gradient(to bottom, rgba(0,0,0,0.4) 0%, transparent 100%);
+}
+
+.settings-btn {
+  position: absolute;
+  right: 16px;
+  background: none;
+  border: none;
+  font-size: 18px;
+  color: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+}
+.settings-btn:hover { color: rgba(255, 255, 255, 0.8); }
+
 </style>

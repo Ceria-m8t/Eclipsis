@@ -40,7 +40,7 @@ function cancel() {
 <template>
   <div class="settings">
     <header class="room-header">
-      <button class="back-btn" @click="cancel">←玄关</button>
+      <button class="back-btn" @click="cancel">← 客厅</button>
       <span class="room-title">设置</span>
       <div class="spacer"></div>
     </header>
@@ -73,7 +73,7 @@ function cancel() {
         <div class="image-setting">
           <span class="image-label">我的头像</span>
           <div class="image-row">
-            < img :src="settings.avatarUser" class="avatar-preview" />
+            <img :src="settings.avatarUser" class="avatar-preview" />
             <label class="upload-btn">
               更换
               <input type="file" accept="image/*" hidden @change="handleImageUpload($event, 'avatarUser')" />
@@ -84,7 +84,7 @@ function cancel() {
         <div class="image-setting">
           <span class="image-label">Claude 头像</span>
           <div class="image-row">
-            < img :src="settings.avatarAI" class="avatar-preview" />
+            <img :src="settings.avatarAI" class="avatar-preview" />
             <label class="upload-btn">
               更换
               <input type="file" accept="image/*" hidden @change="handleImageUpload($event, 'avatarAI')" />

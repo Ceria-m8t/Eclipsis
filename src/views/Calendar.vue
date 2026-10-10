@@ -136,7 +136,7 @@ function cancelEdit() {
   <div class="calendar-page">
     <!-- 顶栏 -->
     <header class="cal-header">
-      <button class="back-btn" @click="router.push('/living')">← 客厅</button>
+      <button class="back-btn" @click="router.push('/living')">←  客厅</button>
       <span class="header-title">日历</span>
       <span class="header-spacer"></span>
     </header>

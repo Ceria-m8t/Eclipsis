@@ -268,7 +268,7 @@ function toggleEntry(id: string) {
 
 <template>
   <div class="study"><header class="room-header">
-      <button class="back-btn" @click="goBack">←玄关</button>
+      <button class="back-btn" @click="goBack">← 客厅</button>
       <span class="room-title">书房</span>
       <div class="spacer"></div>
     </header>

@@ -11,7 +11,7 @@ function goBack() {
 <template>
   <div class="bedroom">
     <header class="room-header">
-      <button class="back-btn" @click="goBack">← 玄关</button>
+      <button class="back-btn" @click="goBack">←  客厅</button>
       <span class="room-title">卧室</span>
       <div class="spacer"></div>
     </header>
