@@ -309,9 +309,8 @@ async function sendMessage() {
 
     <!-- 顶栏 -->
     <header class="chat-header">
-      <button class="back-btn" @click="router.push('/living')">←</button>
       <img :src="settings.avatarAI" class="header-avatar" />
-      <span class="header-name">Claude</span>
+      <span class="header-name">小克^ ^</span>
       <span class="header-spacer"></span>
       <button class="style-btn" @click="showStylePanel = !showStylePanel">⚙</button>
     </header>
@@ -449,11 +448,8 @@ async function sendMessage() {
   position: relative;
   display: flex;
   flex-direction: column;
-  height: 100vh;
-  height: 100dvh;
+  height: 100%;
   width: 100%;
-  max-width: 480px;
-  margin: 0 auto;
   overflow: hidden;
 }
 
