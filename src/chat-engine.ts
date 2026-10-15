@@ -1,5 +1,5 @@
 // 聊天引擎：拼上下文、流式解析、多轮工具调用
-import { SYSTEM_PROMPT } from './system-prompt'
+import { composePrompt } from './prompt-store'
 import { type Settings, apiUrl, apiHeaders } from './settings'
 import { type McpServer, type ToolCall, buildToolDefinitions, executeToolCall } from './mcp'
 import type { ChatMessage, MessageVersion, ToolEvent, ApiTurn } from './db'
@@ -39,7 +39,7 @@ export function buildSystemPrompt(): string {
   const byPri = (a: Entry, b: Entry) => (b.priority ?? 50) - (a.priority ?? 50)
   before.sort(byPri)
   after.sort(byPri)
-  return [...before.map(e => e.content), SYSTEM_PROMPT, ...after.map(e => e.content)]
+  return [...before.map(e => e.content), composePrompt(), ...after.map(e => e.content)]
     .filter(Boolean).join('\n\n').trim()
 }
 

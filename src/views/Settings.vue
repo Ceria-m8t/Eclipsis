@@ -373,6 +373,11 @@ onMounted(() => {
           他的回复按行拆成多个气泡
         </label>
 
+        <RouterLink to="/settings/prompt" class="prompt-entry">
+          <span>系统提示词</span>
+          <small>他的人设、关系、文风，以及家里能做什么</small>
+        </RouterLink>
+
         <div class="section-title">头像设置</div>
 
         <div class="image-setting">
@@ -885,4 +890,11 @@ label input:focus { border-color: rgba(0, 0, 0, 0.25); }
   display: block; text-align: center; padding: 12px; border-radius: 16px; margin-bottom: 16px;
   background: rgba(255, 255, 255, 0.6); color: var(--danger, #d0566a); text-decoration: none; font-size: 15px;
 }
+.prompt-entry {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 13px 16px; margin: 4px 0 20px; border-radius: 18px;
+  background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.85);
+  color: var(--text); text-decoration: none; font-size: 15px;
+}
+.prompt-entry small { font-size: 12px; color: var(--text-2); }
 </style>

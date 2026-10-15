@@ -5,6 +5,7 @@ const router = createRouter({
   routes: [
     // 聊天页全屏，不带底部导航（输入栏是悬浮的，和底栏会打架）
     { path: '/chat', component: () => import('./views/Chat.vue') },
+    { path: '/settings/prompt', component: () => import('./views/PromptEditor.vue') },
     {
       path: '/',
       component: () => import('./views/Home.vue'),
