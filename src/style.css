@@ -19,6 +19,8 @@
   /* 默认背景：浅雾蓝到奶白 */
   --page-bg: linear-gradient(165deg, #e9eef7 0%, #f3f1f6 45%, #f7f3ee 100%);
 
+  --app-h: 100dvh;   /* 由 viewport.ts 实时更新 */
+  --app-top: 0px;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
 

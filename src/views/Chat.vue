@@ -8,6 +8,7 @@ import { renderMd, splitBubbles } from '../markdown'
 import { generate, finalizeVersion, buildContext, type BuiltContext } from '../chat-engine'
 import { compressImage } from '../image'
 import { copyText, hexToRgba, hhmm, dividerTime, downloadText } from '../utils'
+import { keyboardOpen, vvDebug } from '../viewport'
 import {
   type ChatMessage, type MessageVersion,
   getAllMessages, putMessage, deleteMessage as dbDelete, clearMessages,
@@ -129,12 +130,6 @@ const pageStyle = computed(() => {
     '--footer-bg': `rgba(255, 255, 255, ${chatStyle.value.footerOpacity})`,
   }
   if (chatStyle.value.fontFamily) s['--bubble-font'] = `'${chatStyle.value.fontFamily}', var(--sans)`
-  if (viewportH.value) {
-    // 跟着可视区域走：高度=键盘以上的部分，top=iOS 把页面推上去的距离
-    s.height = viewportH.value + 'px'
-    s.top = viewportTop.value + 'px'
-    s.bottom = 'auto'
-  }
   s['--footer-h'] = footerH.value + 'px'
   return s
 })
@@ -228,8 +223,26 @@ const rows = computed<Row[]>(() => {
 // ================= 输入 =================
 const inputText = ref('')
 const pendingImages = ref<string[]>([])
-const inputEl = ref<HTMLTextAreaElement | null>(null)
+// 输入框用 contenteditable 而不是 textarea：iOS 不会在键盘上方加那条"上下箭头+完成"的工具栏
+const inputEl = ref<HTMLDivElement | null>(null)
 const composing = ref(false)
+
+function readInput() {
+  // innerText 会把 <br>/<div> 换成换行；只剩一个换行时视为空
+  const t = inputEl.value?.innerText ?? ''
+  inputText.value = t === '\n' ? '' : t
+}
+function clearInput() {
+  if (inputEl.value) inputEl.value.textContent = ''
+  inputText.value = ''
+}
+// 粘贴只要纯文字，不要带进别处的样式
+function onPaste(e: ClipboardEvent) {
+  e.preventDefault()
+  const text = e.clipboardData?.getData('text/plain') || ''
+  document.execCommand('insertText', false, text)
+  readInput()
+}
 
 // 回车：把这一句先发出去（不触发回复）；发送按钮：让他回复
 function onInputKeydown(e: KeyboardEvent) {
@@ -237,14 +250,8 @@ function onInputKeydown(e: KeyboardEvent) {
   // 中文输入法选字时的回车不算
   if (composing.value || e.isComposing || e.keyCode === 229) return
   e.preventDefault()
+  readInput()
   pushUserMessage()
-}
-
-function autoGrow() {
-  const el = inputEl.value
-  if (!el) return
-  el.style.height = 'auto'
-  el.style.height = Math.min(el.scrollHeight, 120) + 'px'
 }
 
 async function pushUserMessage(): Promise<boolean> {
@@ -257,9 +264,8 @@ async function pushUserMessage(): Promise<boolean> {
     images: pendingImages.value.length ? [...pendingImages.value] : undefined
   }
   messages.value.push(msg)
-  inputText.value = ''
+  clearInput()
   pendingImages.value = []
-  nextTick(autoGrow)
   stickToBottom = true
   scrollToBottom()
   await persist(msg, true)
@@ -278,6 +284,7 @@ const unanswered = computed(() => {
 
 async function onSendButton() {
   if (generating.value) { stopGenerating(); return }
+  readInput()
   await pushUserMessage()
   if (unanswered.value === 0) { toast('先说点什么吧'); return }
   await runGeneration()
@@ -566,6 +573,9 @@ async function doClear() {
   toast('已清空')
 }
 
+// 键盘开合时保持在底部
+watch(keyboardOpen, () => scrollToBottom())
+
 watch(showMenu, v => { if (!v) confirmClear.value = 0 })
 
 // ================= 代码块复制（v-html 内容用事件委托）=================
@@ -591,30 +601,7 @@ function toast(t: string) {
 }
 
 // ================= 生命周期 =================
-const viewportH = ref<number | null>(null)
-const viewportTop = ref(0)
-const keyboardOpen = ref(false)
-// 地址后加 ?vv 可以在屏幕上看到视口数据，方便排查键盘位置
-const debugVv = new URLSearchParams(location.search).has('vv')
-const debugText = ref('')
-function onViewport() {
-  const vv = window.visualViewport
-  if (!vv) return
-  viewportH.value = vv.height
-  viewportTop.value = vv.offsetTop
-  if (debugVv) debugText.value = `inner ${window.innerHeight} · vv ${Math.round(vv.height)} · top ${Math.round(vv.offsetTop)} · screen ${screen.height} · scrollY ${Math.round(window.scrollY)}`
-  // 可视高度比整屏矮一大截 = 键盘弹起
-  keyboardOpen.value = window.screen.height - vv.height > 200 && document.activeElement === inputEl.value
-  scrollToBottom()
-}
-
-function onInputBlur() {
-  setTimeout(onViewport, 50)
-}
-
 onMounted(async () => {
-  window.visualViewport?.addEventListener('resize', onViewport)
-  window.visualViewport?.addEventListener('scroll', onViewport)
   applyCustomCSS()
   loadCustomFont()
   try {
@@ -638,8 +625,6 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
-  window.visualViewport?.removeEventListener('resize', onViewport)
-  window.visualViewport?.removeEventListener('scroll', onViewport)
   ro?.disconnect()
   // 离开页面前把待保存的写进去
   for (const [id, t] of saveTimers) {
@@ -656,7 +641,7 @@ const subtitle = computed(() =>
 </script>
 
 <template>
-  <div :class="['chat-page', { 'kb-open': keyboardOpen }]" :style="pageStyle">
+  <div class="chat-page" :style="pageStyle">
     <div class="chat-bg" :style="bgStyle" aria-hidden="true"></div>
 
     <!-- ===== 顶栏 ===== -->
@@ -725,7 +710,7 @@ const subtitle = computed(() =>
       <button v-if="hiddenCount" class="load-earlier" @click="loadEarlier">
         还有 {{ hiddenCount }} 条更早的消息
       </button>
-      <div v-if="loaded && !messages.length" class="empty">说点什么吧</div>
+      <div v-if="loaded && !messages.length" class="chat-empty">说点什么吧</div>
 
       <template v-for="row in rows" :key="row.key">
         <div v-if="row.divider" class="time-divider"><span>{{ row.divider }}</span></div>
@@ -844,21 +829,24 @@ const subtitle = computed(() =>
             <button aria-label="移除这张图片" @click="pendingImages.splice(i, 1)"><Icon name="close" :size="12" /></button>
           </div>
         </div>
-        <textarea
+        <div
           ref="inputEl"
-          v-model="inputText"
           class="input-text"
-          rows="1"
-          :placeholder="unanswered ? `已发 ${unanswered} 条，点右边让他回复` : '说点什么…'"
-          enterkeyhint="send"
+          :class="{ 'is-empty': !inputText }"
+          contenteditable="plaintext-only"
+          role="textbox"
+          aria-multiline="true"
           aria-label="输入消息"
-          @input="autoGrow"
+          :data-placeholder="unanswered ? `已发 ${unanswered} 条，点右边让他回复` : '说点什么…'"
+          enterkeyhint="send"
+          autocapitalize="off"
+          spellcheck="false"
+          @input="readInput"
+          @paste="onPaste"
           @keydown="onInputKeydown"
-          @focus="onViewport"
-          @blur="onInputBlur"
           @compositionstart="composing = true"
-          @compositionend="composing = false"
-        ></textarea>
+          @compositionend="composing = false; readInput()"
+        ></div>
         <div class="input-tools">
           <label class="tool-btn" aria-label="发送图片">
             <Icon name="attach" />
@@ -986,7 +974,7 @@ const subtitle = computed(() =>
       </div>
     </transition>
 
-    <div v-if="debugVv" class="vv-debug">{{ debugText || '点一下输入框' }}</div>
+    <div v-if="vvDebug" class="vv-debug">{{ vvDebug }}</div>
 
     <transition name="fade">
       <div v-if="toastMsg" class="toast glass-strong" role="status">{{ toastMsg }}</div>
@@ -997,8 +985,9 @@ const subtitle = computed(() =>
 <style scoped>
 .chat-page {
   position: fixed;
-  inset: 0;
-  height: 100dvh;
+  left: 0; right: 0;
+  top: var(--app-top);
+  height: var(--app-h);
   overflow: hidden;
   color: var(--text);
 }
@@ -1070,10 +1059,11 @@ const subtitle = computed(() =>
 .pulse-flow {
   stroke: url(#pulseGrad);
   stroke-width: 1.9;
-  /* 每次只亮一小段，从头像往爱心跑 */
+  /* 亮段 26、暗段 74，正好一整圈 100。偏移量匀速走完一圈，
+     下一圈的开头和这一圈的结尾是同一个位置，所以看不出断点 */
   stroke-dasharray: 26 74;
-  stroke-dashoffset: 100;
-  animation: flow 2.4s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  stroke-dashoffset: 0;
+  animation: flow 2.4s linear infinite;
   filter: drop-shadow(0 0 2px rgba(228, 154, 174, 0.55));
 }
 .pulse-heart path {
@@ -1093,14 +1083,16 @@ const subtitle = computed(() =>
 
 @keyframes flow {
   from { stroke-dashoffset: 100; }
-  to { stroke-dashoffset: -26; }
+  to { stroke-dashoffset: 0; }
 }
+/* 亮段的头在 0% 时刚好到达爱心，所以每圈开头跳一下；
+   首尾帧都是 scale(1)，循环接得上 */
 @keyframes heartbeat {
-  0%, 62% { transform: scale(1); }
-  72% { transform: scale(1.28); }
-  80% { transform: scale(0.96); }
-  88% { transform: scale(1.14); }
-  100% { transform: scale(1); }
+  0% { transform: scale(1); }
+  6% { transform: scale(1.26); }
+  13% { transform: scale(0.97); }
+  20% { transform: scale(1.12); }
+  30%, 100% { transform: scale(1); }
 }
 
 .header-name {
@@ -1166,7 +1158,7 @@ const subtitle = computed(() =>
   flex-direction: column;
 }
 
-.load-earlier, .empty {
+.load-earlier, .chat-empty {
   align-self: center;
   margin: 8px 0 16px;
   font-size: 12px;
@@ -1178,7 +1170,7 @@ const subtitle = computed(() =>
   border-radius: 999px;
   padding: 6px 14px;
 }
-.empty { margin-top: 30vh; font-size: 14px; color: var(--text-3); }
+.chat-empty { margin-top: 30vh; font-size: 14px; color: var(--text-3); }
 
 .time-divider {
   display: flex;
@@ -1436,10 +1428,10 @@ const subtitle = computed(() =>
   transition: padding 0.15s;
 }
 /* 键盘弹起时底部横条区域被键盘盖住，不需要再留安全区 */
-.kb-open .input-footer { padding-bottom: 6px; }
+:global(.kb-open) .input-footer { padding-bottom: 6px; }
 .input-capsule {
-  border-radius: 26px;
-  padding: 10px 10px 8px 16px;
+  border-radius: 28px;
+  padding: 14px 10px 10px 18px;
   display: flex;
   flex-direction: column;
 }
@@ -1457,15 +1449,25 @@ const subtitle = computed(() =>
 }
 .input-text {
   width: 100%;
-  border: none;
-  outline: none;
-  resize: none;
-  background: transparent;
-  line-height: 1.5;
+  min-height: 1.5em;
   max-height: 120px;
-  padding: 2px 0 6px;
+  overflow-y: auto;
+  outline: none;
+  background: transparent;
+  font-size: 16px;   /* 小于 16px 时 iOS 聚焦会自动放大页面 */
+  line-height: 1.5;
+  padding: 4px 0 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  -webkit-user-select: text;
+  user-select: text;
+  cursor: text;
 }
-.input-text::placeholder { color: var(--text-3); }
+.input-text.is-empty::before {
+  content: attr(data-placeholder);
+  color: var(--text-3);
+  pointer-events: none;
+}
 .input-tools { display: flex; align-items: center; gap: 6px; }
 .tool-btn {
   display: inline-flex; align-items: center; justify-content: center;

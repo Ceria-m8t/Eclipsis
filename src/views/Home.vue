@@ -48,7 +48,9 @@ const isHome = () => route.path !== '/chat' && route.path !== '/settings'
 .home-container {
   position: fixed;
   inset: 0;
-  height: 100dvh;
+  top: var(--app-top);
+  bottom: auto;
+  height: var(--app-h);
   overflow: hidden;
 }
 
