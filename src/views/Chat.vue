@@ -666,15 +666,31 @@ const subtitle = computed(() =>
       </button>
 
       <div class="header-card glass-bar">
-        <div class="header-avatars">
-          <img :src="settings.avatarAI" class="h-avatar" :alt="settings.nameAI" />
-          <svg class="pulse" viewBox="0 0 64 20" aria-hidden="true" :class="{ beating: generating }">
-            <polyline points="0,10 18,10 23,4 28,16 33,2 38,14 42,10 64,10" />
+        <img :src="settings.avatarAI" class="h-avatar" :alt="settings.nameAI" />
+        <div class="header-mid">
+          <!-- 心电图：两边的波形向中间流动，汇到爱心。他回复时跳得更快 -->
+          <svg class="pulse" :class="{ fast: generating }" viewBox="0 0 120 32" aria-hidden="true">
+            <defs>
+              <linearGradient id="pulseGrad" x1="0" x2="1">
+                <stop offset="0" stop-color="#9fb2dc" />
+                <stop offset="0.5" stop-color="#e49aae" />
+                <stop offset="1" stop-color="#9fb2dc" />
+              </linearGradient>
+            </defs>
+            <!-- 底线（静态、很淡） -->
+            <path class="pulse-base" d="M0 16 H14 L18 10 L22 22 L26 4 L30 26 L34 13 L38 16 H46 M74 16 H82 L86 13 L90 26 L94 4 L98 22 L102 10 L106 16 H120" />
+            <!-- 流动的高亮段 -->
+            <path class="pulse-flow" pathLength="100" d="M0 16 H14 L18 10 L22 22 L26 4 L30 26 L34 13 L38 16 H46" />
+            <path class="pulse-flow" pathLength="100" d="M120 16 H106 L102 10 L98 22 L94 4 L90 26 L86 13 L82 16 H74" />
+            <!-- 爱心 -->
+            <g class="pulse-heart">
+              <path d="M60 24 C52 18 50 14 50 11.5 C50 8.8 52 7 54.6 7 C56.8 7 58.4 8.2 60 10.2 C61.6 8.2 63.2 7 65.4 7 C68 7 70 8.8 70 11.5 C70 14 68 18 60 24 Z" />
+            </g>
           </svg>
-          <img :src="settings.avatarUser" class="h-avatar" :alt="settings.nameUser" />
+          <div class="header-name">{{ settings.nameAI }}</div>
+          <div v-if="subtitle" class="header-sub">{{ subtitle }}</div>
         </div>
-        <div class="header-name">{{ settings.nameAI }}</div>
-        <div v-if="subtitle" class="header-sub">{{ subtitle }}</div>
+        <img :src="settings.avatarUser" class="h-avatar" :alt="settings.nameUser" />
       </div>
 
       <button class="glass-btn" aria-label="菜单" :aria-expanded="showMenu" @click="showMenu = !showMenu">
@@ -1002,14 +1018,16 @@ const subtitle = computed(() =>
   top: 0; left: 0; right: 0;
   z-index: 20;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  padding: calc(var(--safe-top) + 8px) 12px 0;
+  gap: 8px;
+  padding: calc(var(--safe-top) + 6px) 10px 0;
   pointer-events: none;
 }
 .chat-header > * { pointer-events: auto; }
-.chat-header .glass-btn { margin-top: 22px; }
+.chat-header .glass-btn { width: 38px; height: 38px; flex-shrink: 0; }
+
+
 
 .glass-bar {
   background: var(--header-bg);
@@ -1023,37 +1041,70 @@ const subtitle = computed(() =>
 .header-card {
   flex: 1 1 auto;
   min-width: 0;
-  max-width: 70%;
-  border-radius: 30px;
-  padding: 10px 24px 11px;
+  border-radius: 36px;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+/* 头像贴着卡片两端，撑开整个顶栏 */
+.h-avatar {
+  width: 58px; height: 58px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid rgba(255, 255, 255, 0.95);
+  box-shadow: 0 3px 10px rgba(60, 72, 110, 0.16);
+}
+.header-mid {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
 }
-.header-avatars { display: flex; align-items: center; gap: 6px; }
-.h-avatar {
-  width: 46px; height: 46px;
-  border-radius: 50%;
-  object-fit: cover;
-  border: 2px solid rgba(255, 255, 255, 0.9);
-  box-shadow: 0 2px 8px rgba(60, 72, 110, 0.15);
+
+.pulse { width: 100%; max-width: 150px; height: 30px; overflow: visible; }
+.pulse path { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.pulse-base { stroke: rgba(111, 134, 184, 0.22); stroke-width: 1.4; }
+.pulse-flow {
+  stroke: url(#pulseGrad);
+  stroke-width: 1.9;
+  /* 每次只亮一小段，从头像往爱心跑 */
+  stroke-dasharray: 26 74;
+  stroke-dashoffset: 100;
+  animation: flow 2.4s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  filter: drop-shadow(0 0 2px rgba(228, 154, 174, 0.55));
 }
-.pulse { width: 60px; height: 20px; }
-.pulse polyline {
-  fill: none;
-  stroke: var(--accent);
-  stroke-width: 1.6;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  opacity: 0.75;
-  stroke-dasharray: 90;
-  stroke-dashoffset: 0;
+.pulse-heart path {
+  fill: #e8a0b4;
+  stroke: rgba(255, 255, 255, 0.9);
+  stroke-width: 1;
+  filter: drop-shadow(0 0 3px rgba(232, 160, 180, 0.6));
 }
-.pulse.beating polyline { animation: beat 1.2s linear infinite; }
-@keyframes beat { from { stroke-dashoffset: 180; } to { stroke-dashoffset: 0; } }
+.pulse-heart {
+  transform-box: fill-box;
+  transform-origin: center;
+  /* 波形到达爱心时跳一下 */
+  animation: heartbeat 2.4s ease-in-out infinite;
+}
+.pulse.fast .pulse-flow { animation-duration: 1.1s; }
+.pulse.fast .pulse-heart { animation-duration: 1.1s; }
+
+@keyframes flow {
+  from { stroke-dashoffset: 100; }
+  to { stroke-dashoffset: -26; }
+}
+@keyframes heartbeat {
+  0%, 62% { transform: scale(1); }
+  72% { transform: scale(1.28); }
+  80% { transform: scale(0.96); }
+  88% { transform: scale(1.14); }
+  100% { transform: scale(1); }
+}
 
 .header-name {
-  margin-top: 4px;
+  margin-top: 1px;
   font-size: 16px;
   font-weight: 600;
   letter-spacing: 0.5px;
@@ -1074,7 +1125,7 @@ const subtitle = computed(() =>
 .menu-pop {
   position: absolute;
   z-index: 31;
-  top: calc(var(--safe-top) + 72px);
+  top: calc(var(--safe-top) + 92px);
   right: 12px;
   width: 240px;
   border-radius: 20px;
@@ -1110,7 +1161,7 @@ const subtitle = computed(() =>
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
-  padding: calc(var(--safe-top) + 124px) 12px calc(var(--footer-h, 90px) + 16px);
+  padding: calc(var(--safe-top) + 100px) 12px calc(var(--footer-h, 90px) + 16px);
   display: flex;
   flex-direction: column;
 }

@@ -47,6 +47,17 @@ body {
   background-attachment: fixed;
 }
 
+/* 状态栏是 black-translucent（白字、透明），所有页面顶部垫一层淡渐变保证可读 */
+body::before {
+  content: '';
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: var(--safe-top);
+  z-index: 1000;
+  pointer-events: none;
+  background: linear-gradient(to bottom, rgba(70, 80, 110, 0.32), rgba(70, 80, 110, 0.08));
+}
+
 button, input, textarea, select { font: inherit; color: inherit; }
 button { cursor: pointer; }
 
