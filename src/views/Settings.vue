@@ -3,6 +3,13 @@ import { ref, computed, onMounted } from 'vue'
 import { getSettings, saveSettings, apiUrl, apiHeaders } from '../settings'
 import { loadMcpServers, saveMcpServers, discoverTools, type McpServer } from '../mcp'
 import { compressImage } from '../image'
+import { isViewportDebug, setViewportDebug } from '../viewport'
+
+const viewportDebug = ref(isViewportDebug())
+function toggleViewportDebug() {
+  viewportDebug.value = !viewportDebug.value
+  setViewportDebug(viewportDebug.value)
+}
 
 const settings = ref(getSettings())
 
@@ -442,6 +449,12 @@ onMounted(() => {
           </div>
         </div>
         <button class="wb-add" @click="addMcpServer">+ 添加 MCP 服务器</button>
+
+        <div class="section-title">排查</div>
+        <label class="check-row">
+          <input type="checkbox" :checked="viewportDebug" @change="toggleViewportDebug" />
+          在屏幕左上角显示尺寸数据（排查白条、键盘位置用）
+        </label>
 
         <!-- Worldbook -->
         <div class="section-title">世界书</div>

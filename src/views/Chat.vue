@@ -8,7 +8,7 @@ import { renderMd, splitBubbles } from '../markdown'
 import { generate, finalizeVersion, buildContext, type BuiltContext } from '../chat-engine'
 import { compressImage } from '../image'
 import { copyText, hexToRgba, hhmm, dividerTime, downloadText } from '../utils'
-import { keyboardOpen, vvDebug } from '../viewport'
+import { keyboardOpen } from '../viewport'
 import {
   type ChatMessage, type MessageVersion,
   getAllMessages, putMessage, deleteMessage as dbDelete, clearMessages,
@@ -223,25 +223,14 @@ const rows = computed<Row[]>(() => {
 // ================= 输入 =================
 const inputText = ref('')
 const pendingImages = ref<string[]>([])
-// 输入框用 contenteditable 而不是 textarea：iOS 不会在键盘上方加那条"上下箭头+完成"的工具栏
-const inputEl = ref<HTMLDivElement | null>(null)
+const inputEl = ref<HTMLTextAreaElement | null>(null)
 const composing = ref(false)
 
-function readInput() {
-  // innerText 会把 <br>/<div> 换成换行；只剩一个换行时视为空
-  const t = inputEl.value?.innerText ?? ''
-  inputText.value = t === '\n' ? '' : t
-}
-function clearInput() {
-  if (inputEl.value) inputEl.value.textContent = ''
-  inputText.value = ''
-}
-// 粘贴只要纯文字，不要带进别处的样式
-function onPaste(e: ClipboardEvent) {
-  e.preventDefault()
-  const text = e.clipboardData?.getData('text/plain') || ''
-  document.execCommand('insertText', false, text)
-  readInput()
+function autoGrow() {
+  const el = inputEl.value
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = Math.min(el.scrollHeight, 120) + 'px'
 }
 
 // 回车：把这一句先发出去（不触发回复）；发送按钮：让他回复
@@ -250,7 +239,6 @@ function onInputKeydown(e: KeyboardEvent) {
   // 中文输入法选字时的回车不算
   if (composing.value || e.isComposing || e.keyCode === 229) return
   e.preventDefault()
-  readInput()
   pushUserMessage()
 }
 
@@ -264,8 +252,9 @@ async function pushUserMessage(): Promise<boolean> {
     images: pendingImages.value.length ? [...pendingImages.value] : undefined
   }
   messages.value.push(msg)
-  clearInput()
+  inputText.value = ''
   pendingImages.value = []
+  nextTick(autoGrow)
   stickToBottom = true
   scrollToBottom()
   await persist(msg, true)
@@ -284,7 +273,6 @@ const unanswered = computed(() => {
 
 async function onSendButton() {
   if (generating.value) { stopGenerating(); return }
-  readInput()
   await pushUserMessage()
   if (unanswered.value === 0) { toast('先说点什么吧'); return }
   await runGeneration()
@@ -829,24 +817,19 @@ const subtitle = computed(() =>
             <button aria-label="移除这张图片" @click="pendingImages.splice(i, 1)"><Icon name="close" :size="12" /></button>
           </div>
         </div>
-        <div
+        <textarea
           ref="inputEl"
+          v-model="inputText"
           class="input-text"
-          :class="{ 'is-empty': !inputText }"
-          contenteditable="plaintext-only"
-          role="textbox"
-          aria-multiline="true"
-          aria-label="输入消息"
-          :data-placeholder="unanswered ? `已发 ${unanswered} 条，点右边让他回复` : '说点什么…'"
+          rows="1"
+          :placeholder="unanswered ? `已发 ${unanswered} 条，点右边让他回复` : '说点什么…'"
           enterkeyhint="send"
-          autocapitalize="off"
-          spellcheck="false"
-          @input="readInput"
-          @paste="onPaste"
+          aria-label="输入消息"
+          @input="autoGrow"
           @keydown="onInputKeydown"
           @compositionstart="composing = true"
-          @compositionend="composing = false; readInput()"
-        ></div>
+          @compositionend="composing = false"
+        ></textarea>
         <div class="input-tools">
           <label class="tool-btn" aria-label="发送图片">
             <Icon name="attach" />
@@ -973,8 +956,6 @@ const subtitle = computed(() =>
         <img :src="previewImg" alt="图片预览" />
       </div>
     </transition>
-
-    <div v-if="vvDebug" class="vv-debug">{{ vvDebug }}</div>
 
     <transition name="fade">
       <div v-if="toastMsg" class="toast glass-strong" role="status">{{ toastMsg }}</div>
@@ -1425,10 +1406,9 @@ const subtitle = computed(() =>
   left: 0; right: 0; bottom: 0;
   z-index: 20;
   padding: 0 12px calc(var(--safe-bottom) + 10px);
-  transition: padding 0.15s;
 }
 /* 键盘弹起时底部横条区域被键盘盖住，不需要再留安全区 */
-:global(.kb-open) .input-footer { padding-bottom: 6px; }
+
 .input-capsule {
   border-radius: 28px;
   padding: 14px 10px 10px 18px;
@@ -1448,26 +1428,18 @@ const subtitle = computed(() =>
   display: flex; align-items: center; justify-content: center;
 }
 .input-text {
+  display: block;
   width: 100%;
-  min-height: 1.5em;
-  max-height: 120px;
-  overflow-y: auto;
+  border: none;
   outline: none;
+  resize: none;
   background: transparent;
   font-size: 16px;   /* 小于 16px 时 iOS 聚焦会自动放大页面 */
   line-height: 1.5;
+  max-height: 120px;
   padding: 4px 0 8px;
-  white-space: pre-wrap;
-  word-break: break-word;
-  -webkit-user-select: text;
-  user-select: text;
-  cursor: text;
 }
-.input-text.is-empty::before {
-  content: attr(data-placeholder);
-  color: var(--text-3);
-  pointer-events: none;
-}
+.input-text::placeholder { color: var(--text-3); }
 .input-tools { display: flex; align-items: center; gap: 6px; }
 .tool-btn {
   display: inline-flex; align-items: center; justify-content: center;
@@ -1632,10 +1604,7 @@ const subtitle = computed(() =>
   text-overflow: ellipsis;
 }
 
-.vv-debug {
-  position: absolute; z-index: 70; left: 8px; top: calc(var(--safe-top) + 2px);
-  font: 11px var(--mono); background: rgba(0,0,0,0.6); color: #fff; padding: 2px 6px; border-radius: 6px;
-}
+
 
 /* ===== 动画 ===== */
 .fade-enter-active, .fade-leave-active { transition: opacity 0.2s; }
@@ -1644,4 +1613,10 @@ const subtitle = computed(() =>
 .sheet-enter-from, .sheet-leave-to { transform: translateY(105%); opacity: 0.6; }
 .pop-enter-active, .pop-leave-active { transition: transform 0.18s, opacity 0.18s; transform-origin: top right; }
 .pop-enter-from, .pop-leave-to { transform: scale(0.9); opacity: 0; }
+</style>
+
+<style>
+/* 键盘弹起时底部横条被键盘盖住，不需要再留安全区。
+   html 上的 .kb-open 由 viewport.ts 切换；放在非 scoped 样式里才能跨组件匹配 */
+html.kb-open .chat-page .input-footer { padding-bottom: 6px !important; }
 </style>
