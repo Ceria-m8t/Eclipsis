@@ -1,0 +1,29 @@
+[Unit]
+Description=Eclipsis login service (nginx auth_request backend)
+After=network.target
+
+[Service]
+Type=simple
+User=eclipsis-auth
+Group=eclipsis-auth
+ExecStart=/usr/local/bin/node /opt/eclipsis/auth/server.mjs
+Environment=AUTH_PORT=3470
+Environment=AUTH_DATA_DIR=/var/lib/eclipsis-auth
+Restart=always
+RestartSec=3
+
+# 加固：只能写自己的数据目录
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/eclipsis-auth
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

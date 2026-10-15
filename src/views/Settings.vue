@@ -450,6 +450,9 @@ onMounted(() => {
         </div>
         <button class="wb-add" @click="addMcpServer">+ 添加 MCP 服务器</button>
 
+        <div class="section-title">账户</div>
+        <a class="logout-link" href="/logout">退出登录</a>
+
         <div class="section-title">排查</div>
         <label class="check-row">
           <input type="checkbox" :checked="viewportDebug" @change="toggleViewportDebug" />
@@ -878,4 +881,8 @@ label input:focus { border-color: rgba(0, 0, 0, 0.25); }
 .hint.err { color: var(--danger, #d0566a); }
 .check-row { flex-direction: row !important; align-items: center; gap: 8px; }
 .check-row input { width: auto !important; }
+.logout-link {
+  display: block; text-align: center; padding: 12px; border-radius: 16px; margin-bottom: 16px;
+  background: rgba(255, 255, 255, 0.6); color: var(--danger, #d0566a); text-decoration: none; font-size: 15px;
+}
 </style>
