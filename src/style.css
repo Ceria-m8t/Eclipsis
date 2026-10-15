@@ -1,102 +1,116 @@
+/* Eclipsis 全局样式：浅色液态玻璃 */
 :root {
-  --text: #5a5565;
-  --text-h: #1a1a1a;
-  --bg: #f5f3f0;
-  --border: #e0ddd8;
-  --code-bg: #eae8e3;
-  --accent: #888;
-  --accent-bg: rgba(0, 0, 0, 0.04);
-  --accent-border: rgba(0, 0, 0, 0.15);
-  --social-bg: rgba(0, 0, 0, 0.03);
-  --shadow:
-    rgba(0, 0, 0, 0.06) 0 10px 15px -3px, rgba(0, 0, 0, 0.03) 0 4px 6px -2px;
+  --text: rgba(28, 32, 44, 0.86);
+  --text-2: rgba(28, 32, 44, 0.55);
+  --text-3: rgba(28, 32, 44, 0.36);
+  --accent: #6f86b8;
+  --danger: #d0566a;
 
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --mono: ui-monospace, Consolas, monospace;
+  /* 玻璃材质 */
+  --glass-bg: rgba(255, 255, 255, 0.42);
+  --glass-bg-strong: rgba(255, 255, 255, 0.68);
+  --glass-border: rgba(255, 255, 255, 0.7);
+  --glass-blur: blur(22px) saturate(180%);
+  --glass-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.85),
+    inset 0 -1px 1px rgba(255, 255, 255, 0.25),
+    0 8px 28px rgba(60, 72, 110, 0.12);
 
-  font: 18px/145% var(--sans);
-  letter-spacing: 0.18px;
+  /* 默认背景：浅雾蓝到奶白 */
+  --page-bg: linear-gradient(165deg, #e9eef7 0%, #f3f1f6 45%, #f7f3ee 100%);
+
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+
+  --sans: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', system-ui, sans-serif;
+  --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
   color-scheme: light;
+  font-family: var(--sans);
   color: var(--text);
-  background: var(--bg);
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
 
-  @media (max-width: 1024px) {
-    font-size: 16px;
-  }
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body, #app {
+  height: 100%;
+  /* 主屏幕模式下禁止整页回弹，滚动只在内容区发生 */
+  overscroll-behavior: none;
 }
 
 body {
-  margin: 0;
-  background: #f5f3f0;
+  background: #eef0f5;
+  background-image: var(--page-bg);
+  background-attachment: fixed;
 }
 
-h1,
-h2 {
-  font-family: var(--heading);
-  font-weight: 500;
-  color: var(--text-h);
+button, input, textarea, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+
+/* iOS 输入框字号小于 16px 会自动放大页面 */
+input, textarea, select { font-size: 16px; }
+
+/* 通用玻璃面板 */
+.glass {
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+}
+.glass-strong {
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
 }
 
-h1 {
-  font-size: 56px;
-  letter-spacing: -1.68px;
-  margin: 32px 0;
-  @media (max-width: 1024px) {
-    font-size: 36px;
-    margin: 20px 0;
-  }
-}
-h2 {
-  font-size: 24px;
-  line-height: 118%;
-  letter-spacing: -0.24px;
-  margin: 0 0 8px;
-  @media (max-width: 1024px) {
-    font-size: 20px;
-  }
-}
-p {
-  margin: 0;
-}
-
-code,
-.counter {
-  font-family: var(--mono);
+/* 圆形玻璃按钮 */
+.glass-btn {
   display: inline-flex;
-  border-radius: 4px;
-  color: var(--text-h);
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--glass-shadow);
+  color: var(--text);
+  transition: transform 0.15s, background 0.15s;
+}
+.glass-btn:active { transform: scale(0.94); background: var(--glass-bg-strong); }
+
+.icon { width: 20px; height: 20px; flex-shrink: 0; }
+
+/* 无障碍：仅屏幕阅读器可见 */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
 }
 
-code {
-  font-size: 15px;
-  line-height: 135%;
-  padding: 4px 8px;
-  background: var(--code-bg);
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
 
-.counter {
-  font-size: 16px;
-  padding: 5px 10px;
-  border-radius: 5px;
-  color: var(--accent);
-  background: var(--accent-bg);
-  border: 2px solid transparent;
-  transition: border-color 0.3s;
-  margin-bottom: 24px;
-}
-
-#app {
-  width: 1126px;
-  max-width: 100%;
-  margin: 0 auto;
-  text-align: center;
-  min-height: 100svh;
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
-}
+/* highlight.js 浅色主题（GitHub 风格简化版） */
+.hljs { color: #24292e; }
+.hljs-comment, .hljs-quote { color: #6a737d; font-style: italic; }
+.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-type { color: #d73a49; }
+.hljs-string, .hljs-regexp, .hljs-addition, .hljs-attribute { color: #22863a; }
+.hljs-number, .hljs-symbol, .hljs-bullet, .hljs-variable, .hljs-template-variable { color: #005cc5; }
+.hljs-title, .hljs-section, .hljs-function .hljs-title { color: #6f42c1; }
+.hljs-built_in, .hljs-builtin-name, .hljs-meta { color: #e36209; }
+.hljs-tag, .hljs-name, .hljs-selector-id, .hljs-selector-class { color: #22863a; }
+.hljs-attr, .hljs-property { color: #005cc5; }
+.hljs-deletion { color: #b31d28; background: #ffeef0; }
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: 600; }

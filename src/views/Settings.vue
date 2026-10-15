@@ -1,18 +1,38 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { getSettings, saveSettings } from '../settings'
+import { getSettings, saveSettings, apiUrl, apiHeaders } from '../settings'
 import { loadMcpServers, saveMcpServers, discoverTools, type McpServer } from '../mcp'
+import { compressImage } from '../image'
 
 const settings = ref(getSettings())
 
-function handleImageUpload(event: Event, field: 'avatarUser' | 'avatarAI') {
-  const file = (event.target as HTMLInputElement).files?.[0]
+async function handleImageUpload(event: Event, field: 'avatarUser' | 'avatarAI') {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
   if (!file) return
-  const reader = new FileReader()
-  reader.onload = (e) => {
-    settings.value[field] = e.target?.result as string
+  // 头像存在 localStorage 里，压到 256px 足够清楚
+  settings.value[field] = await compressImage(file, 256, 0.9)
+}
+
+// ===== 模型列表 / 连接测试 =====
+const models = ref<string[]>([])
+const modelsState = ref<'' | 'loading' | 'ok' | 'error'>('')
+const modelsError = ref('')
+
+async function fetchModels() {
+  modelsState.value = 'loading'
+  modelsError.value = ''
+  try {
+    const res = await fetch(apiUrl(settings.value, '/models'), { headers: apiHeaders(settings.value) })
+    if (!res.ok) throw new Error(`HTTP ${res.status}：${(await res.text()).slice(0, 200)}`)
+    const data = await res.json()
+    models.value = (data.data || []).map((m: any) => m.id).filter(Boolean)
+    modelsState.value = 'ok'
+  } catch (e: any) {
+    modelsState.value = 'error'
+    modelsError.value = e.message
   }
-  reader.readAsDataURL(file)
 }
 
 function clearImage(field: 'avatarUser' | 'avatarAI') {
@@ -24,8 +44,12 @@ function clearImage(field: 'avatarUser' | 'avatarAI') {
 }
 
 function save() {
-  saveSettings(settings.value)
-  showToast('已保存')
+  try {
+    saveSettings(settings.value)
+    showToast('已保存')
+  } catch {
+    showToast('保存失败：存储空间不够')
+  }
 }
 
 // ===== Toast =====
@@ -286,18 +310,60 @@ onMounted(() => {
 
         <label>
           API 地址
-          <input v-model="settings.apiBase" placeholder="留空用默认代理" />
-          <span class="hint">本地开发留空即可</span>
+          <input v-model="settings.apiBase" placeholder="留空 = 用服务器上的 Dylan 网关" autocapitalize="off" autocorrect="off" />
+          <span class="hint">留空时请求走本站 /api，网关 key 由服务器自动带上。填其他地址（以 /v1 结尾）可以直连别的 API。</span>
         </label>
 
         <label>
           API Key
-          <input v-model="settings.apiKey" type="password" placeholder="网关密钥" />
+          <input v-model="settings.apiKey" type="password" placeholder="用默认网关时留空" autocomplete="off" />
+          <span class="hint">只在直连其他 API 时需要填。会保存在这台设备的浏览器里。</span>
         </label>
 
         <label>
-          模型名
-          <input v-model="settings.model" placeholder="claude-fable-5[次]" />
+          模型
+          <span class="model-row">
+            <input v-model="settings.model" list="model-options" placeholder="模型名" autocapitalize="off" autocorrect="off" />
+            <button type="button" class="reset-btn" :disabled="modelsState === 'loading'" @click="fetchModels">
+              {{ modelsState === 'loading' ? '读取中…' : '读取列表' }}
+            </button>
+          </span>
+          <datalist id="model-options">
+            <option v-for="m in models" :key="m" :value="m" />
+          </datalist>
+          <span v-if="modelsState === 'ok'" class="hint">连接正常，共 {{ models.length }} 个模型。点输入框可以选。</span>
+          <span v-else-if="modelsState === 'error'" class="hint err">连接失败：{{ modelsError }}</span>
+        </label>
+        <div v-if="models.length" class="model-chips">
+          <button
+            v-for="m in models" :key="m" type="button"
+            :class="['model-chip', { on: settings.model === m }]"
+            @click="settings.model = m"
+          >{{ m }}</button>
+        </div>
+
+        <div class="section-title">聊天</div>
+
+        <label>
+          他的名字
+          <input v-model="settings.nameAI" />
+        </label>
+        <label>
+          我的名字
+          <input v-model="settings.nameUser" />
+        </label>
+        <label>
+          顶栏小字
+          <input v-model="settings.chatSubtitle" placeholder="比如一句签名，可以留空" />
+        </label>
+        <label>
+          聊天记录上限（约 {{ (settings.contextTokens / 1000).toFixed(0) }}k tokens）
+          <input v-model.number="settings.contextTokens" type="range" min="10000" max="180000" step="5000" />
+          <span class="hint">每次发给他的聊天记录最多这么多，超出的旧消息不发送，本地记录不会删除。不含系统提示词和世界书。</span>
+        </label>
+        <label class="check-row">
+          <input v-model="settings.splitBubbles" type="checkbox" />
+          他的回复按行拆成多个气泡
         </label>
 
         <div class="section-title">头像设置</div>
@@ -315,7 +381,7 @@ onMounted(() => {
         </div>
 
         <div class="image-setting">
-          <span class="image-label">小克头像</span>
+          <span class="image-label">他的头像</span>
           <div class="image-row">
             <img :src="settings.avatarAI" class="avatar-preview" />
             <label class="upload-btn">
@@ -327,7 +393,7 @@ onMounted(() => {
         </div>
 
         <div class="actions">
-          <button class="primary" @click="save">保存连接 & 头像</button>
+          <button class="primary" @click="save">保存</button>
         </div>
 
         <!-- MCP Servers -->
@@ -493,13 +559,24 @@ onMounted(() => {
   flex-direction: column;
   height: 100%;
   width: 100%;
-  background: #f5f3f0;
-  color: rgba(0, 0, 0, 0.75);
+  background: transparent;
+  color: var(--text);
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
-.content { flex: 1; padding: 24px; padding-bottom: 60px; }
-.form { max-width: 500px; margin: 0 auto; }
+.content { flex: 1; padding: calc(var(--safe-top) + 16px) 14px 120px; }
+.form {
+  max-width: 520px;
+  margin: 0 auto;
+  padding: 18px 16px 22px;
+  border-radius: 28px;
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+}
 
 .section-title {
   font-size: 13px; color: rgba(0, 0, 0, 0.4); text-transform: uppercase;
@@ -514,8 +591,8 @@ label input[type="text"],
 label input[type="password"],
 label input:not([type]) {
   display: block; width: 100%; margin-top: 8px; padding: 10px 14px;
-  border: 1px solid rgba(0, 0, 0, 0.1); border-radius: 8px; background: rgba(255, 255, 255, 0.7);
-  color: rgba(0, 0, 0, 0.8); font-size: 15px; outline: none; box-sizing: border-box;
+  border: 1px solid rgba(255, 255, 255, 0.8); border-radius: 14px; background: rgba(255, 255, 255, 0.6);
+  color: var(--text); font-size: 16px; outline: none; box-sizing: border-box;
 }
 label input:focus { border-color: rgba(0, 0, 0, 0.25); }
 
@@ -546,8 +623,8 @@ label input:focus { border-color: rgba(0, 0, 0, 0.25); }
 .actions { margin-top: 32px; }
 
 .primary {
-  width: 100%; padding: 12px; border: none; border-radius: 8px;
-  font-size: 15px; cursor: pointer; background: rgba(0, 0, 0, 0.08); color: rgba(0, 0, 0, 0.7);
+  width: 100%; padding: 13px; border: none; border-radius: 16px;
+  font-size: 15px; cursor: pointer; background: rgba(111, 134, 184, 0.88); color: #fff;
 }
 .primary:hover { background: rgba(0, 0, 0, 0.12); }
 
@@ -773,4 +850,19 @@ label input:focus { border-color: rgba(0, 0, 0, 0.25); }
 }
 .fade-enter-active, .fade-leave-active { transition: opacity 0.3s; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
+
+.model-row { display: flex; gap: 8px; align-items: center; }
+.model-row input { flex: 1; min-width: 0; }
+.model-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: -4px 0 12px; }
+.model-chip {
+  border: 1px solid var(--glass-border, rgba(0,0,0,0.08));
+  background: rgba(255, 255, 255, 0.5);
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: 13px;
+}
+.model-chip.on { background: rgba(111, 134, 184, 0.85); color: #fff; }
+.hint.err { color: var(--danger, #d0566a); }
+.check-row { flex-direction: row !important; align-items: center; gap: 8px; }
+.check-row input { width: auto !important; }
 </style>

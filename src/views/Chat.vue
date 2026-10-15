@@ -1,27 +1,23 @@
 <script setup lang="ts">
-import { ref, nextTick, computed, onMounted, watch } from 'vue'
-import { marked } from 'marked'
-import DOMPurify from 'dompurify'
-import { SYSTEM_PROMPT } from '../system-prompt'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
+import { useRouter } from 'vue-router'
+import Icon from '../components/Icon.vue'
 import { getSettings } from '../settings'
-import { loadMcpServers, buildToolDefinitions, executeToolCall, type McpServer, type ToolCall, type ToolResult } from '../mcp'
+import { loadMcpServers } from '../mcp'
+import { renderMd, splitBubbles } from '../markdown'
+import { generate, finalizeVersion, buildContext, type BuiltContext } from '../chat-engine'
+import { compressImage } from '../image'
+import { copyText, hexToRgba, hhmm, dividerTime, downloadText } from '../utils'
+import {
+  type ChatMessage, type MessageVersion,
+  getAllMessages, putMessage, deleteMessage as dbDelete, clearMessages,
+  migrateFromLocalStorage, requestPersist, exportJson, importJson, newId
+} from '../db'
 
-// Configure marked
-marked.setOptions({
-  breaks: true,
-  gfm: true
-})
-
-function renderMd(text: string): string {
-  if (!text) return ''
-  const raw = marked.parse(text) as string
-  return DOMPurify.sanitize(raw)
-}
-
+const router = useRouter()
 const settings = ref(getSettings())
-const mcpServers = ref<McpServer[]>(loadMcpServers())
 
-// ===== Chat Style =====
+// ================= 聊天样式 =================
 interface ChatStyle {
   bgColor: string
   bgImage: string
@@ -31,1247 +27,1519 @@ interface ChatStyle {
   userBubbleOpacity: number
   fontSize: number
   fontFamily: string
+  fontData: string     // 自定义字体的 dataURL，刷新后重新加载
   customCSS: string
 }
 
-const DEFAULT_CHAT_STYLE: ChatStyle = {
-  bgColor: '#f5f3f0',
+const STYLE_KEY = 'eclipsis-chat-style-v2'
+const DEFAULT_STYLE: ChatStyle = {
+  bgColor: '',
   bgImage: '',
   aiBubbleBg: '#ffffff',
-  aiBubbleOpacity: 0.9,
-  userBubbleBg: '#e8e5e0',
-  userBubbleOpacity: 0.9,
+  aiBubbleOpacity: 0.55,
+  userBubbleBg: '#dfe7f5',
+  userBubbleOpacity: 0.6,
   fontSize: 15,
   fontFamily: '',
+  fontData: '',
   customCSS: ''
 }
 
-const chatStyle = ref<ChatStyle>(loadChatStyle())
-const showStylePanel = ref(false)
-const customStyleEl = ref<HTMLStyleElement | null>(null)
-
-function loadChatStyle(): ChatStyle {
+function loadStyle(): ChatStyle {
   try {
-    const saved = localStorage.getItem('eclipsis-chat-style')
-    if (saved) return { ...DEFAULT_CHAT_STYLE, ...JSON.parse(saved) }
+    const v2 = localStorage.getItem(STYLE_KEY)
+    if (v2) return { ...DEFAULT_STYLE, ...JSON.parse(v2) }
+    // 旧版：只沿用背景图、字体、自定义 CSS，气泡配色换成新的玻璃默认值
+    const v1 = localStorage.getItem('eclipsis-chat-style')
+    if (v1) {
+      const o = JSON.parse(v1)
+      return { ...DEFAULT_STYLE, bgImage: o.bgImage || '', fontSize: o.fontSize || 15, customCSS: o.customCSS || '' }
+    }
   } catch {}
-  return { ...DEFAULT_CHAT_STYLE }
+  return { ...DEFAULT_STYLE }
 }
 
-function saveChatStyle() {
-  localStorage.setItem('eclipsis-chat-style', JSON.stringify(chatStyle.value))
+const chatStyle = ref<ChatStyle>(loadStyle())
+const showStylePanel = ref(false)
+let customStyleEl: HTMLStyleElement | null = null
+
+function saveStyle() {
+  try {
+    localStorage.setItem(STYLE_KEY, JSON.stringify(chatStyle.value))
+  } catch {
+    toast('样式保存失败：背景图或字体太大了')
+  }
   applyCustomCSS()
 }
-
-function resetChatStyle() {
-  chatStyle.value = { ...DEFAULT_CHAT_STYLE }
-  saveChatStyle()
-}
+watch(chatStyle, saveStyle, { deep: true })
 
 function applyCustomCSS() {
-  if (!customStyleEl.value) {
-    customStyleEl.value = document.createElement('style')
-    customStyleEl.value.id = 'eclipsis-custom-css'
-    document.head.appendChild(customStyleEl.value)
+  if (!customStyleEl) {
+    customStyleEl = document.createElement('style')
+    customStyleEl.id = 'eclipsis-custom-css'
+    document.head.appendChild(customStyleEl)
   }
-  customStyleEl.value.textContent = chatStyle.value.customCSS
+  customStyleEl.textContent = chatStyle.value.customCSS
+}
+
+async function loadCustomFont() {
+  const { fontFamily, fontData } = chatStyle.value
+  if (!fontFamily || !fontData) return
+  try {
+    const face = new FontFace(fontFamily, `url(${fontData})`)
+    document.fonts.add(await face.load())
+  } catch {}
 }
 
 function handleFontUpload(e: Event) {
-  const file = (e.target as HTMLInputElement).files?.[0]
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
   if (!file) return
-  const name = file.name.replace(/\.[^.]+$/, '').replace(/\s+/g, '-')
+  if (file.size > 3 * 1024 * 1024) { toast('字体文件超过 3MB，存不下'); return }
+  const name = 'custom-' + file.name.replace(/\.[^.]+$/, '').replace(/[^\w-]/g, '')
   const reader = new FileReader()
-  reader.onload = (ev) => {
-    const url = ev.target?.result as string
-    const fontFace = new FontFace(name, `url(${url})`)
-    fontFace.load().then((loaded) => {
-      document.fonts.add(loaded)
-      chatStyle.value.fontFamily = name
-      saveChatStyle()
-    })
+  reader.onload = async () => {
+    chatStyle.value.fontFamily = name
+    chatStyle.value.fontData = reader.result as string
+    await loadCustomFont()
   }
   reader.readAsDataURL(file)
 }
 
-function handleBgUpload(e: Event) {
-  const file = (e.target as HTMLInputElement).files?.[0]
+async function handleBgUpload(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
   if (!file) return
-  const reader = new FileReader()
-  reader.onload = (ev) => {
-    chatStyle.value.bgImage = ev.target?.result as string
-    saveChatStyle()
-  }
-  reader.readAsDataURL(file)
+  // 背景图存 localStorage，压小一点
+  chatStyle.value.bgImage = await compressImage(file, 1400, 0.8)
 }
 
-function clearBg() {
-  chatStyle.value.bgImage = ''
-  saveChatStyle()
-}
-
-const bgStyle = computed(() => {
-  const s: Record<string, string> = {}
-  if (chatStyle.value.bgImage) {
-    s.backgroundImage = `url(${chatStyle.value.bgImage})`
+const pageStyle = computed(() => {
+  const s: Record<string, string> = {
+    '--bubble-ai': hexToRgba(chatStyle.value.aiBubbleBg, chatStyle.value.aiBubbleOpacity),
+    '--bubble-user': hexToRgba(chatStyle.value.userBubbleBg, chatStyle.value.userBubbleOpacity),
+    '--bubble-font-size': chatStyle.value.fontSize + 'px',
   }
-  s.backgroundColor = chatStyle.value.bgColor
+  if (chatStyle.value.fontFamily) s['--bubble-font'] = `'${chatStyle.value.fontFamily}', var(--sans)`
+  if (viewportH.value) s.height = viewportH.value + 'px'
+  s['--footer-h'] = footerH.value + 'px'
   return s
 })
 
-const aiBubbleStyle = computed(() => ({
-  backgroundColor: chatStyle.value.aiBubbleBg,
-  opacity: chatStyle.value.aiBubbleOpacity,
-  fontSize: chatStyle.value.fontSize + 'px',
-  fontFamily: chatStyle.value.fontFamily || 'inherit'
-}))
-
-const userBubbleStyle = computed(() => ({
-  backgroundColor: chatStyle.value.userBubbleBg,
-  opacity: chatStyle.value.userBubbleOpacity,
-  fontSize: chatStyle.value.fontSize + 'px',
-  fontFamily: chatStyle.value.fontFamily || 'inherit'
-}))
-
-onMounted(() => {
-  applyCustomCSS()
+const bgStyle = computed(() => {
+  const s: Record<string, string> = {}
+  if (chatStyle.value.bgColor) s.background = chatStyle.value.bgColor
+  if (chatStyle.value.bgImage) s.backgroundImage = `url(${chatStyle.value.bgImage})`
+  return s
 })
 
-watch(chatStyle, saveChatStyle, { deep: true })
+// ================= 消息 =================
+const messages = ref<ChatMessage[]>([])
+const loaded = ref(false)
 
-// ===== Message Persistence =====
-interface ChatMessage {
-  role: 'user' | 'assistant'
-  content: string
-  time: string
-  images?: string[]
+function curVersion(m: ChatMessage): MessageVersion | undefined {
+  return m.versions?.[m.activeVersion ?? 0]
+}
+function textOf(m: ChatMessage): string {
+  return m.role === 'assistant' ? (curVersion(m)?.content ?? m.content) : m.content
 }
 
-const HISTORY_KEY = 'eclipsis-chat-history'
+// 防抖保存：流式输出过程中每 2 秒落盘一次，崩溃或刷新也不会全丢
+const saveTimers = new Map<string, number>()
+function persist(m: ChatMessage, immediate = false) {
+  const t = saveTimers.get(m.id)
+  if (t) clearTimeout(t)
+  saveTimers.delete(m.id)
+  const run = () => putMessage(m).catch(err => toast('保存失败：' + (err?.message || err)))
+  if (immediate) return run()
+  saveTimers.set(m.id, window.setTimeout(() => { saveTimers.delete(m.id); run() }, 2000))
+}
 
-function saveHistory() {
-  try {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(messages.value))
-  } catch (e) {
-    // localStorage full — trim oldest messages
-    if (messages.value.length > 20) {
-      messages.value.splice(0, messages.value.length - 20)
-      try {
-        localStorage.setItem(HISTORY_KEY, JSON.stringify(messages.value))
-      } catch {}
+function nextSeq(): number {
+  const last = messages.value[messages.value.length - 1]
+  return Math.max(Date.now(), last ? last.seq + 1 : 0)
+}
+
+// ================= 显示分组 =================
+interface Row {
+  key: string
+  msg: ChatMessage
+  index: number
+  parts: string[]          // 拆分后的气泡
+  showAvatar: boolean      // 连续消息只有第一条显示头像
+  divider?: string         // 上方的居中时间
+  isLastOfGroup: boolean
+}
+
+const GAP_MS = 5 * 60 * 1000
+
+// 只渲染最近的若干条，记录很长时手机不卡；往上翻可以加载更早的
+const PAGE = 150
+const visibleCount = ref(PAGE)
+const hiddenCount = computed(() => Math.max(0, messages.value.length - visibleCount.value))
+function loadEarlier() {
+  const el = chatArea.value
+  const before = el ? el.scrollHeight - el.scrollTop : 0
+  visibleCount.value += PAGE
+  nextTick(() => { if (el) el.scrollTop = el.scrollHeight - before })
+}
+
+const rows = computed<Row[]>(() => {
+  const list = messages.value
+  const start = hiddenCount.value
+  return list.slice(start).map((m, j) => {
+    const i = start + j
+    const prev = list[i - 1]
+    const next = list[i + 1]
+    const gapBefore = !prev || m.createdAt - prev.createdAt > GAP_MS
+    const gapAfter = !next || next.createdAt - m.createdAt > GAP_MS
+    const text = textOf(m)
+    let parts: string[]
+    if (m.role === 'assistant') {
+      parts = text ? (settings.value.splitBubbles ? splitBubbles(text) : [text]) : []
+    } else {
+      parts = text ? [text] : []
     }
-  }
-}
+    return {
+      key: m.id,
+      msg: m,
+      index: i,
+      parts,
+      showAvatar: gapBefore || prev.role !== m.role,
+      divider: gapBefore ? dividerTime(m.createdAt) : undefined,
+      isLastOfGroup: gapAfter || next.role !== m.role
+    }
+  })
+})
 
-function loadHistory(): ChatMessage[] {
-  try {
-    const saved = localStorage.getItem(HISTORY_KEY)
-    if (saved) return JSON.parse(saved)
-  } catch {}
-  return []
-}
-
-function clearHistory() {
-  if (!confirm('确定清空所有聊天记录？此操作不可撤销。')) return
-  messages.value = []
-  localStorage.removeItem(HISTORY_KEY)
-}
-
-// Context window: only send last N messages to API
-const MAX_CONTEXT_MESSAGES = 200
-
-function deleteMessage(index: number) {
-  messages.value.splice(index, 1)
-  saveHistory()
-}
-
-function regenerateMessage(index: number) {
-  // Only works on assistant messages
-  const msg = messages.value[index]
-  if (msg.role !== 'assistant' || loading.value) return
-  // Remove this assistant message and re-send
-  messages.value.splice(index, 1)
-  saveHistory()
-  // Trigger a new generation from the last user message
-  regenerateFromHistory()
-}
-
-async function regenerateFromHistory() {
-  await doGenerate()
-}
-
-function nowTime(): string {
-  const d = new Date()
-  return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
-}
-
-const messages = ref<ChatMessage[]>(loadHistory())
+// ================= 输入 =================
 const inputText = ref('')
 const pendingImages = ref<string[]>([])
+const inputEl = ref<HTMLTextAreaElement | null>(null)
+const composing = ref(false)
 
-function handleImageSelect(e: Event) {
-  const files = (e.target as HTMLInputElement).files
-  if (!files) return
-  for (const file of files) {
-    if (!file.type.startsWith('image/')) continue
-    const reader = new FileReader()
-    reader.onload = (ev) => {
-      pendingImages.value.push(ev.target?.result as string)
-    }
-    reader.readAsDataURL(file)
+// 回车：把这一句先发出去（不触发回复）；发送按钮：让他回复
+function onInputKeydown(e: KeyboardEvent) {
+  if (e.key !== 'Enter' || e.shiftKey) return
+  // 中文输入法选字时的回车不算
+  if (composing.value || e.isComposing || e.keyCode === 229) return
+  e.preventDefault()
+  pushUserMessage()
+}
+
+function autoGrow() {
+  const el = inputEl.value
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = Math.min(el.scrollHeight, 120) + 'px'
+}
+
+async function pushUserMessage(): Promise<boolean> {
+  const text = inputText.value.trim()
+  if (!text && !pendingImages.value.length) return false
+  const now = Date.now()
+  const msg: ChatMessage = {
+    id: newId(), seq: nextSeq(), role: 'user', createdAt: now,
+    content: text,
+    images: pendingImages.value.length ? [...pendingImages.value] : undefined
   }
-  (e.target as HTMLInputElement).value = ''
+  messages.value.push(msg)
+  inputText.value = ''
+  pendingImages.value = []
+  nextTick(autoGrow)
+  stickToBottom = true
+  scrollToBottom()
+  await persist(msg, true)
+  return true
 }
 
-function removeImage(index: number) {
-  pendingImages.value.splice(index, 1)
+// 等待他回复的用户消息条数（最后一条 assistant 之后的）
+const unanswered = computed(() => {
+  let n = 0
+  for (let i = messages.value.length - 1; i >= 0; i--) {
+    if (messages.value[i].role === 'assistant') break
+    n++
+  }
+  return n
+})
+
+async function onSendButton() {
+  if (generating.value) { stopGenerating(); return }
+  await pushUserMessage()
+  if (unanswered.value === 0) { toast('先说点什么吧'); return }
+  await runGeneration()
 }
 
-const loading = ref(false)
-const chatArea = ref<HTMLElement | null>(null)
-let charQueue: string[] = []
-let typingTimer: number | null = null
-let currentAssistantIndex = -1
+async function handleImageSelect(e: Event) {
+  const input = e.target as HTMLInputElement
+  const files = Array.from(input.files || [])
+  input.value = ''
+  for (const f of files) {
+    if (!f.type.startsWith('image/')) continue
+    try { pendingImages.value.push(await compressImage(f)) }
+    catch { toast('有一张图片读不出来') }
+  }
+}
 
-function scrollToBottom() {
-  nextTick(() => {
-    if (chatArea.value) {
-      chatArea.value.scrollTop = chatArea.value.scrollHeight
+// ================= 生成 =================
+const generating = ref(false)
+let abortCtrl: AbortController | null = null
+const lastCtx = ref<BuiltContext | null>(null)
+
+// target: 要写入的 assistant 消息；不传则新建一条
+async function runGeneration(target?: ChatMessage) {
+  if (generating.value) return
+  settings.value = getSettings()
+  generating.value = true
+  abortCtrl = new AbortController()
+
+  let msg: ChatMessage
+  let history: ChatMessage[]
+  if (target) {
+    msg = target
+    const idx = messages.value.indexOf(target)
+    history = messages.value.slice(0, idx)
+  } else {
+    history = messages.value.slice()
+    msg = { id: newId(), seq: nextSeq(), role: 'assistant', createdAt: Date.now(), content: '', versions: [], activeVersion: 0 }
+    messages.value.push(msg)
+    // 拿到响应式代理，后续改动才会刷新界面
+    msg = messages.value[messages.value.length - 1]
+  }
+
+  const version: MessageVersion = { content: '', createdAt: Date.now() }
+  msg.versions = msg.versions || []
+  msg.versions.push(version)
+  msg.activeVersion = msg.versions.length - 1
+  msg.error = undefined
+  const live = msg.versions[msg.activeVersion]   // 响应式版本
+  stickToBottom = true
+  scrollToBottom()
+
+  try {
+    lastCtx.value = await generate(settings.value, history, loadMcpServers(), abortCtrl.signal, live, {
+      onUpdate: () => {
+        msg.content = live.content
+        persist(msg)
+        scrollToBottom()
+      }
+    })
+  } catch (err: any) {
+    if (err?.name !== 'AbortError') {
+      msg.error = err?.message || String(err)
     }
-  })
+  } finally {
+    finalizeVersion(live)
+    msg.content = live.content
+    // 什么都没生成出来又没报错（被立刻停止），去掉这个空版本
+    if (!live.content && !live.tools?.length && !msg.error) {
+      msg.versions.splice(msg.activeVersion!, 1)
+      msg.activeVersion = Math.max(0, msg.versions.length - 1)
+      if (!msg.versions.length) removeLocal(msg)
+    }
+    if (messages.value.includes(msg)) await persist(msg, true)
+    else saveTimers.delete(msg.id)
+    generating.value = false
+    abortCtrl = null
+    scrollToBottom()
+  }
 }
 
-// Scroll to bottom on mount if there's history
-onMounted(() => {
-  if (messages.value.length > 0) {
-    scrollToBottom()
+function stopGenerating() {
+  abortCtrl?.abort()
+}
+
+function removeLocal(m: ChatMessage) {
+  const t = saveTimers.get(m.id)
+  if (t) { clearTimeout(t); saveTimers.delete(m.id) }
+  const i = messages.value.indexOf(m)
+  if (i >= 0) messages.value.splice(i, 1)
+  dbDelete(m.id).catch(() => {})
+}
+
+function regenerate(m: ChatMessage) {
+  if (generating.value) return
+  closeSheet()
+  runGeneration(m)
+}
+
+function switchVersion(m: ChatMessage, delta: number) {
+  if (!m.versions?.length || generating.value) return
+  const n = m.versions.length
+  m.activeVersion = ((m.activeVersion ?? 0) + delta + n) % n
+  m.content = curVersion(m)?.content ?? ''
+  persist(m, true)
+}
+
+function retry(m: ChatMessage) {
+  // 出错的那个空版本去掉再重来
+  const v = curVersion(m)
+  if (v && !v.content && m.versions) m.versions.splice(m.activeVersion!, 1)
+  m.error = undefined
+  runGeneration(m)
+}
+
+// ================= 滚动 =================
+const chatArea = ref<HTMLElement | null>(null)
+let stickToBottom = true
+let scrollQueued = false
+
+function onScroll() {
+  const el = chatArea.value
+  if (!el) return
+  stickToBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+}
+
+function scrollToBottom(force = false) {
+  if (!force && !stickToBottom) return
+  if (scrollQueued) return
+  scrollQueued = true
+  nextTick(() => requestAnimationFrame(() => {
+    scrollQueued = false
+    const el = chatArea.value
+    if (el) el.scrollTop = el.scrollHeight
+  }))
+}
+
+// 输入栏高度变化时同步给内容区留白
+const footerEl = ref<HTMLElement | null>(null)
+const footerH = ref(90)
+let ro: ResizeObserver | null = null
+
+// ================= 折叠块 =================
+const expanded = ref<Record<string, boolean>>({})
+function toggle(key: string) {
+  expanded.value[key] = !expanded.value[key]
+  if (expanded.value[key]) stickToBottom = false
+}
+
+function prettyJson(s: string): string {
+  try { return JSON.stringify(JSON.parse(s), null, 2) } catch { return s }
+}
+
+// ================= 长按 / 操作面板 =================
+type SheetMode = 'menu' | 'select' | 'edit' | 'confirm-delete' | 'confirm-delete-version'
+const sheet = ref<{ msg: ChatMessage; mode: SheetMode } | null>(null)
+const editText = ref('')
+
+function openSheet(m: ChatMessage) {
+  if (navigator.vibrate) navigator.vibrate(10)
+  sheet.value = { msg: m, mode: 'menu' }
+}
+function closeSheet() { sheet.value = null }
+
+let pressTimer: number | null = null
+let pressStart = { x: 0, y: 0 }
+function onPressStart(e: PointerEvent, m: ChatMessage) {
+  if (e.pointerType === 'mouse') return
+  pressStart = { x: e.clientX, y: e.clientY }
+  pressTimer = window.setTimeout(() => { pressTimer = null; openSheet(m) }, 500)
+}
+function onPressMove(e: PointerEvent) {
+  if (!pressTimer) return
+  if (Math.abs(e.clientX - pressStart.x) > 8 || Math.abs(e.clientY - pressStart.y) > 8) cancelPress()
+}
+function cancelPress() {
+  if (pressTimer) { clearTimeout(pressTimer); pressTimer = null }
+}
+
+async function doCopy(m: ChatMessage) {
+  const ok = await copyText(textOf(m))
+  toast(ok ? '已复制' : '复制失败，可以用"选择复制"')
+  if (sheet.value) closeSheet()
+}
+
+function startEdit() {
+  if (!sheet.value) return
+  editText.value = textOf(sheet.value.msg)
+  sheet.value.mode = 'edit'
+}
+
+function saveEdit() {
+  if (!sheet.value) return
+  const m = sheet.value.msg
+  const text = editText.value
+  if (m.role === 'assistant') {
+    const v = curVersion(m)
+    if (v) {
+      v.content = text
+      // 手动改过的内容不再按原样回放工具调用轮次，以改后的文字为准
+      delete v.trail
+    }
+  }
+  m.content = text
+  persist(m, true)
+  closeSheet()
+  toast('已修改')
+}
+
+function confirmDelete() {
+  if (!sheet.value) return
+  removeLocal(sheet.value.msg)
+  closeSheet()
+  toast('已删除')
+}
+
+function confirmDeleteVersion() {
+  if (!sheet.value) return
+  const m = sheet.value.msg
+  if (!m.versions || m.versions.length <= 1) { confirmDelete(); return }
+  m.versions.splice(m.activeVersion ?? 0, 1)
+  m.activeVersion = Math.min(m.activeVersion ?? 0, m.versions.length - 1)
+  m.content = curVersion(m)?.content ?? ''
+  persist(m, true)
+  closeSheet()
+  toast('已删除这个版本')
+}
+
+async function shareMsg(m: ChatMessage) {
+  const text = textOf(m)
+  closeSheet()
+  if (navigator.share) {
+    try { await navigator.share({ text }) } catch {}
+  } else {
+    doCopy(m)
+  }
+}
+
+// ================= 顶部菜单 =================
+const showMenu = ref(false)
+const confirmClear = ref(0)    // 清空需要确认两次
+const importInput = ref<HTMLInputElement | null>(null)
+
+const ctxInfo = computed(() => {
+  const c = lastCtx.value || (loaded.value ? buildContext(messages.value, settings.value.contextTokens) : null)
+  if (!c) return ''
+  const total = c.historyTokens + c.systemTokens
+  let s = `约 ${(total / 1000).toFixed(1)}k tokens（提示词 ${(c.systemTokens / 1000).toFixed(1)}k + 聊天 ${(c.historyTokens / 1000).toFixed(1)}k）`
+  if (c.droppedCount > 0) s += `，最早的 ${c.droppedCount} 条没有发送`
+  return s
+})
+
+async function doExport() {
+  showMenu.value = false
+  const json = await exportJson()
+  const d = new Date()
+  const name = `eclipsis-${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}.json`
+  // iOS 主屏幕模式下下载链接不可靠，优先用系统分享面板（可以存到"文件"）
+  const file = new File([json], name, { type: 'application/json' })
+  if (navigator.canShare?.({ files: [file] })) {
+    try { await navigator.share({ files: [file] }); return } catch (e: any) { if (e?.name === 'AbortError') return }
+  }
+  downloadText(name, json)
+}
+
+async function doImport(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  try {
+    const n = await importJson(await file.text())
+    messages.value = await getAllMessages()
+    toast(`导入了 ${n} 条`)
+    scrollToBottom(true)
+  } catch (err: any) {
+    toast('导入失败：' + err.message)
+  }
+}
+
+async function doClear() {
+  if (confirmClear.value < 1) { confirmClear.value++; return }
+  await clearMessages()
+  messages.value = []
+  confirmClear.value = 0
+  showMenu.value = false
+  toast('已清空')
+}
+
+watch(showMenu, v => { if (!v) confirmClear.value = 0 })
+
+// ================= 代码块复制（v-html 内容用事件委托）=================
+async function onAreaClick(e: MouseEvent) {
+  const btn = (e.target as HTMLElement).closest('.code-copy') as HTMLButtonElement | null
+  if (!btn) return
+  const code = btn.closest('.code-block')?.querySelector('code')?.textContent || ''
+  const ok = await copyText(code)
+  btn.textContent = ok ? '已复制' : '失败'
+  setTimeout(() => { btn.textContent = '复制' }, 1500)
+}
+
+// ================= 图片预览 =================
+const previewImg = ref('')
+
+// ================= Toast =================
+const toastMsg = ref('')
+let toastTimer: number | null = null
+function toast(t: string) {
+  toastMsg.value = t
+  if (toastTimer) clearTimeout(toastTimer)
+  toastTimer = window.setTimeout(() => { toastMsg.value = '' }, 1800)
+}
+
+// ================= 生命周期 =================
+const viewportH = ref<number | null>(null)
+function onViewport() {
+  const vv = window.visualViewport
+  if (!vv) return
+  viewportH.value = vv.height
+  // iOS 键盘弹出时会把整页往上推，拉回来
+  if (window.scrollY !== 0) window.scrollTo(0, 0)
+  scrollToBottom()
+}
+
+onMounted(async () => {
+  window.visualViewport?.addEventListener('resize', onViewport)
+  window.visualViewport?.addEventListener('scroll', onViewport)
+  applyCustomCSS()
+  loadCustomFont()
+  try {
+    const migrated = await migrateFromLocalStorage()
+    messages.value = await getAllMessages()
+    if (migrated) toast(`已把 ${migrated} 条旧记录搬进新存储`)
+  } catch (err: any) {
+    toast('读取聊天记录失败：' + err.message)
+  }
+  loaded.value = true
+  requestPersist()
+  scrollToBottom(true)
+
+  if (footerEl.value && 'ResizeObserver' in window) {
+    ro = new ResizeObserver(() => {
+      footerH.value = footerEl.value?.offsetHeight || 90
+      scrollToBottom()
+    })
+    ro.observe(footerEl.value)
   }
 })
 
-function startTyping(index: number) {
-  currentAssistantIndex = index
-  if (typingTimer) return
-  typingTimer = window.setInterval(() => {
-    if (charQueue.length === 0) {
-      if (!loading.value) {
-        window.clearInterval(typingTimer!)
-        typingTimer = null
-        saveHistory()
-      }
-      return
-    }
-    const count = charQueue.length > 20 ? 3 : charQueue.length > 5 ? 2 : 1
-    const chars = charQueue.splice(0, count).join('')
-    messages.value[currentAssistantIndex].content += chars
-    scrollToBottom()
-  }, 30)
-}
-
-function getFullSystemPrompt(): string {
-  const saved = localStorage.getItem('worldbook')
-  let beforeEntries: { title: string; content: string; priority: number }[] = []
-  let afterEntries: { title: string; content: string; priority: number }[] = []
-
-  if (saved) {
-    try {
-      const entries = JSON.parse(saved) as {
-        title: string; content: string; enabled: boolean;
-        group: string; position: string; priority: number
-      }[]
-      const groupsRaw = localStorage.getItem('worldbook-groups')
-      const groupStates: Record<string, { enabled: boolean }> = groupsRaw ? JSON.parse(groupsRaw) : {}
-
-      for (const e of entries) {
-        if (!e.enabled) continue
-        const gs = groupStates[e.group]
-        if (gs && !gs.enabled) continue
-        const item = { title: e.title, content: e.content, priority: e.priority ?? 50 }
-        if (e.position === 'before') beforeEntries.push(item)
-        else afterEntries.push(item)
-      }
-      beforeEntries.sort((a, b) => b.priority - a.priority)
-      afterEntries.sort((a, b) => b.priority - a.priority)
-    } catch {}
+onBeforeUnmount(() => {
+  window.visualViewport?.removeEventListener('resize', onViewport)
+  window.visualViewport?.removeEventListener('scroll', onViewport)
+  ro?.disconnect()
+  // 离开页面前把待保存的写进去
+  for (const [id, t] of saveTimers) {
+    clearTimeout(t)
+    const m = messages.value.find(x => x.id === id)
+    if (m) putMessage(m)
   }
+  abortCtrl?.abort()
+})
 
-  let prompt = ''
-  if (beforeEntries.length > 0) {
-    for (const e of beforeEntries) prompt += e.content + '\n\n'
-  }
-  prompt += SYSTEM_PROMPT
-  if (afterEntries.length > 0) {
-    prompt += '\n\n'
-    for (const e of afterEntries) prompt += e.content + '\n\n'
-  }
-  return prompt.trim()
-}
-
-
-// Long press to copy
-function handleBubbleLongPress(msg: ChatMessage) {
-  if (navigator.clipboard) {
-    navigator.clipboard.writeText(msg.content).then(() => {
-      showToast('已复制')
-    })
-  }
-}
-
-const toastMsg = ref('')
-const toastVisible = ref(false)
-let toastTimer: number | null = null
-
-function showToast(text: string) {
-  toastMsg.value = text
-  toastVisible.value = true
-  if (toastTimer) clearTimeout(toastTimer)
-  toastTimer = window.setTimeout(() => { toastVisible.value = false }, 1500)
-}
-
-// Touch-based long press detection
-let pressTimer: number | null = null
-
-function onTouchStart(msg: ChatMessage) {
-  pressTimer = window.setTimeout(() => {
-    handleBubbleLongPress(msg)
-  }, 600)
-}
-
-function onTouchEnd() {
-  if (pressTimer) {
-    clearTimeout(pressTimer)
-    pressTimer = null
-  }
-}
-
-async function sendMessage() {
-  const text = inputText.value.trim()
-  if (!text || loading.value) return
-
-  messages.value.push({
-    role: 'user',
-    content: text,
-    time: nowTime(),
-    images: pendingImages.value.length > 0 ? [...pendingImages.value] : undefined
-  })
-  pendingImages.value = []
-  inputText.value = ''
-  saveHistory()
-  scrollToBottom()
-
-  await doGenerate()
-}
-
-async function doGenerate() {
-  // Reload MCP servers from localStorage (in case settings page updated them)
-  mcpServers.value = loadMcpServers()
-  loading.value = true
-  charQueue = []
-
-  const assistantIndex = messages.value.length
-  messages.value.push({ role: 'assistant', content: '', time: nowTime() })
-  startTyping(assistantIndex)
-
-  const { apiBase, apiKey, model } = settings.value
-  const url = apiBase ? `${apiBase}/chat/completions` : '/api/chat/completions'
-
-  // Build context with truncation
-  const contextMessages = messages.value.slice(0, assistantIndex)
-  const truncated = contextMessages.length > MAX_CONTEXT_MESSAGES
-    ? contextMessages.slice(-MAX_CONTEXT_MESSAGES)
-    : contextMessages
-
-  // Build tools from MCP servers
-  const tools = buildToolDefinitions(mcpServers.value)
-  // Build API messages (filter out internal tool messages for display)
-  const apiMessages: any[] = [
-    { role: 'system', content: getFullSystemPrompt() }
-  ]
-
-  for (const m of truncated) {
-    if (m.images && m.images.length > 0) {
-      apiMessages.push({
-        role: m.role,
-        content: [
-          ...m.images.map(img => ({
-            type: 'image_url' as const,
-            image_url: { url: img }
-          })),
-          { type: 'text' as const, text: m.content || '(图片)' }
-        ]
-      })
-    } else {
-      apiMessages.push({ role: m.role, content: m.content })
-    }
-  }
-
-  const body: any = {
-    model,
-    messages: apiMessages,
-    stream: true
-  }
-  if (tools.length > 0) {
-    body.tools = tools
-  }
-
-  try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
-      body: JSON.stringify(body)
-    })
-    if (!res.ok) {
-      messages.value[assistantIndex].content = `[错误 ${res.status}] ${await res.text()}`
-      loading.value = false
-      saveHistory()
-      return
-    }
-
-    const reader = res.body!.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-    let pendingToolCalls: ToolCall[] = []
-    let currentToolCall: { id: string; name: string; inputJson: string } | null = null
-
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() || ''
-      for (const line of lines) {
-        const trimmed = line.trim()
-        if (!trimmed || !trimmed.startsWith('data: ')) continue
-        const data = trimmed.slice(6)
-        if (data === '[DONE]') break
-        try {
-          const parsed = JSON.parse(data)
-          const choice = parsed.choices?.[0]
-          if (!choice) continue
-
-          // Handle text content
-          const textDelta = choice.delta?.content
-          if (textDelta) {
-            charQueue.push(...textDelta.split(''))
-          }
-
-          // Handle tool calls
-          if (choice.delta?.tool_calls) {
-            for (const tc of choice.delta.tool_calls) {
-              if (tc.id) {
-                // New tool call starting
-                if (currentToolCall && currentToolCall.id) {
-                  // Finalize previous
-                  try {
-                    pendingToolCalls.push({
-                      id: currentToolCall.id,
-                      name: currentToolCall.name,
-                      input: JSON.parse(currentToolCall.inputJson || '{}')
-                    })
-                  } catch {
-                    pendingToolCalls.push({
-                      id: currentToolCall.id,
-                      name: currentToolCall.name,
-                      input: {}
-                    })
-                  }
-                }
-                currentToolCall = { id: tc.id, name: tc.function?.name || '', inputJson: tc.function?.arguments || '' }
-              } else if (currentToolCall) {
-                // Continuing to stream arguments
-                if (tc.function?.name) currentToolCall.name += tc.function.name
-                if (tc.function?.arguments) currentToolCall.inputJson += tc.function.arguments
-              }
-            }
-          }
-
-          // Check for finish reason
-          if (choice.finish_reason === 'tool_calls' || choice.finish_reason === 'tool_use') {
-            // Finalize last tool call
-            if (currentToolCall && currentToolCall.id) {
-              try {
-                pendingToolCalls.push({
-                  id: currentToolCall.id,
-                  name: currentToolCall.name,
-                  input: JSON.parse(currentToolCall.inputJson || '{}')
-                })
-              } catch {
-                pendingToolCalls.push({
-                  id: currentToolCall.id,
-                  name: currentToolCall.name,
-                  input: {}
-                })
-              }
-            }
-          }
-        } catch {}
-      }
-    }
-
-    // Wait for typing to finish
-    await new Promise<void>(resolve => {
-      const check = () => {
-        if (charQueue.length === 0) resolve()
-        else setTimeout(check, 50)
-      }
-      check()
-    })
-
-    // If there are tool calls, execute them and continue
-    if (pendingToolCalls.length > 0) {
-      // Show tool call info in the message
-      const toolNames = pendingToolCalls.map(tc => tc.name).join(', ')
-      charQueue.push(...`\n\n⚙️ 调用工具: ${toolNames}...`.split(''))
-
-      // Wait for display
-      await new Promise(r => setTimeout(r, 300))
-
-      // Execute all tool calls
-      const results: ToolResult[] = []
-      for (const tc of pendingToolCalls) {
-        const result = await executeToolCall(mcpServers.value, tc)
-        results.push(result)
-      }
-
-      // Save current assistant message content
-      // Wait for typing queue to clear
-      await new Promise<void>(resolve => {
-        const check = () => {
-          if (charQueue.length === 0) resolve()
-          else setTimeout(check, 50)
-        }
-        check()
-      })
-
-      loading.value = false
-      saveHistory()
-
-      // Now do a follow-up request with tool results
-      // Add the assistant message with tool_calls and tool results
-      await doToolFollowUp(assistantIndex, pendingToolCalls, results, url, apiKey, model, apiMessages)
-      return
-    }
-
-  } catch (err: any) {
-    messages.value[assistantIndex].content = `[请求失败] ${(err as Error).message}`
-  } finally {
-    loading.value = false
-    saveHistory()
-    scrollToBottom()
-  }
-}
-
-async function doToolFollowUp(
-  prevAssistantIndex: number,
-  toolCalls: ToolCall[],
-  results: ToolResult[],
-  url: string,
-  apiKey: string,
-  model: string,
-  prevApiMessages: any[]
-) {
-  loading.value = true
-  charQueue = []
-
-  // Create new assistant message for the follow-up
-  const newAssistantIndex = messages.value.length
-  messages.value.push({ role: 'assistant', content: '', time: nowTime() })
-  startTyping(newAssistantIndex)
-
-  // Build messages: previous context + assistant tool_calls + tool results
-  const followUpMessages = [
-    ...prevApiMessages,
-    {
-      role: 'assistant',
-      content: messages.value[prevAssistantIndex].content.replace(/\n\n⚙️ 调用工具:.*$/, ''),
-      tool_calls: toolCalls.map(tc => ({
-        id: tc.id,
-        type: 'function',
-        function: { name: tc.name, arguments: JSON.stringify(tc.input) }
-      }))
-    },
-    ...results.map(r => ({
-      role: 'tool',
-      tool_call_id: r.tool_use_id,
-      content: r.content
-    }))
-  ]
-
-  const tools = buildToolDefinitions(mcpServers.value)
-  const body: any = { model, messages: followUpMessages, stream: true }
-  if (tools.length > 0) body.tools = tools
-
-  try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
-      body: JSON.stringify(body)
-    })
-    if (!res.ok) {
-      messages.value[newAssistantIndex].content = `[工具调用后错误 ${res.status}] ${await res.text()}`
-      return
-    }
-
-    const reader = res.body!.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() || ''
-      for (const line of lines) {
-        const trimmed = line.trim()
-        if (!trimmed || !trimmed.startsWith('data: ')) continue
-        const data = trimmed.slice(6)
-        if (data === '[DONE]') break
-        try {
-          const parsed = JSON.parse(data)
-          const delta = parsed.choices?.[0]?.delta?.content
-          if (delta) {
-            charQueue.push(...delta.split(''))
-          }
-        } catch {}
-      }
-    }
-  } catch (err: any) {
-    messages.value[newAssistantIndex].content = `[请求失败] ${(err as Error).message}`
-  } finally {
-    loading.value = false
-    saveHistory()
-    scrollToBottom()
-  }
-}
-
+const subtitle = computed(() =>
+  generating.value ? '正在输入…' : (settings.value.chatSubtitle || '')
+)
 </script>
 
 <template>
-  <div class="chat-page">
-    <div class="chat-bg" :style="bgStyle"></div>
+  <div class="chat-page" :style="pageStyle">
+    <div class="chat-bg" :style="bgStyle" aria-hidden="true"></div>
 
-    <!-- Header -->
+    <!-- ===== 顶栏 ===== -->
     <header class="chat-header">
-      <img :src="settings.avatarAI" class="header-avatar" />
-      <span class="header-name">小克^ ^</span>
-      <span class="header-spacer"></span>
-      <button class="header-btn" @click="showStylePanel = !showStylePanel">⚙</button>
+      <button class="glass-btn" aria-label="返回" @click="router.push('/living-room')">
+        <Icon name="back" />
+      </button>
+
+      <div class="header-card glass">
+        <div class="header-avatars">
+          <img :src="settings.avatarAI" class="h-avatar" :alt="settings.nameAI" />
+          <svg class="pulse" viewBox="0 0 64 20" aria-hidden="true" :class="{ beating: generating }">
+            <polyline points="0,10 18,10 23,4 28,16 33,2 38,14 42,10 64,10" />
+          </svg>
+          <img :src="settings.avatarUser" class="h-avatar" :alt="settings.nameUser" />
+        </div>
+        <div class="header-name">{{ settings.nameAI }}</div>
+        <div v-if="subtitle" class="header-sub">{{ subtitle }}</div>
+      </div>
+
+      <button class="glass-btn" aria-label="菜单" :aria-expanded="showMenu" @click="showMenu = !showMenu">
+        <Icon name="menu" />
+      </button>
     </header>
 
-    <!-- Style Panel -->
-    <transition name="panel-slide">
-      <div v-if="showStylePanel" class="style-panel">
-        <div class="panel-header">
-          <span>聊天样式</span>
-          <button class="panel-close" @click="showStylePanel = false">✕</button>
-        </div>
-        <div class="panel-body">
-          <div class="style-group">
-            <label>背景色</label>
-            <input type="color" v-model="chatStyle.bgColor" />
-          </div>
-          <div class="style-group">
-            <label>背景图</label>
-            <div class="row">
-              <label class="upload-btn">
-                上传
-                <input type="file" accept="image/*" hidden @change="handleBgUpload" />
-              </label>
-              <button v-if="chatStyle.bgImage" class="clear-btn" @click="clearBg">清除</button>
-            </div>
-          </div>
-          <div class="style-group">
-            <label>AI 气泡颜色</label>
-            <input type="color" v-model="chatStyle.aiBubbleBg" />
-          </div>
-          <div class="style-group">
-            <label>AI 气泡透明度 {{ Math.round(chatStyle.aiBubbleOpacity * 100) }}%</label>
-            <input type="range" min="0.1" max="1" step="0.05" v-model.number="chatStyle.aiBubbleOpacity" />
-          </div>
-          <div class="style-group">
-            <label>我的气泡颜色</label>
-            <input type="color" v-model="chatStyle.userBubbleBg" />
-          </div>
-          <div class="style-group">
-            <label>我的气泡透明度 {{ Math.round(chatStyle.userBubbleOpacity * 100) }}%</label>
-            <input type="range" min="0.1" max="1" step="0.05" v-model.number="chatStyle.userBubbleOpacity" />
-          </div>
-          <div class="style-group">
-            <label>字号 {{ chatStyle.fontSize }}px</label>
-            <input type="range" min="12" max="24" step="1" v-model.number="chatStyle.fontSize" />
-          </div>
-          <div class="style-group">
-            <label>自定义字体</label>
-            <div class="row">
-              <label class="upload-btn">
-                导入 TTF/OTF
-                <input type="file" accept=".ttf,.otf,.woff,.woff2" hidden @change="handleFontUpload" />
-              </label>
-              <span v-if="chatStyle.fontFamily" class="font-name">{{ chatStyle.fontFamily }}</span>
-              <button v-if="chatStyle.fontFamily" class="clear-btn" @click="chatStyle.fontFamily = ''; saveChatStyle()">重置</button>
-            </div>
-          </div>
-          <div class="style-group">
-            <label>自定义 CSS</label>
-            <textarea
-              v-model="chatStyle.customCSS"
-              placeholder=".bubble { border-radius: 8px; }"
-              rows="4"
-              spellcheck="false"
-            ></textarea>
-          </div>
-          <button class="reset-all-btn" @click="resetChatStyle">恢复默认</button>
-        </div>
+    <!-- 顶部菜单 -->
+    <transition name="pop">
+      <div v-if="showMenu" class="menu-pop glass-strong" role="menu">
+        <button role="menuitem" @click="showStylePanel = true; showMenu = false"><Icon name="palette" />聊天样式</button>
+        <button role="menuitem" @click="doExport"><Icon name="download" />导出聊天记录</button>
+        <button role="menuitem" @click="importInput?.click(); showMenu = false"><Icon name="upload" />导入聊天记录</button>
+        <button role="menuitem" @click="router.push('/settings')"><Icon name="settings" />设置</button>
+        <button role="menuitem" class="danger" @click="doClear">
+          <Icon name="trash" />{{ confirmClear ? '再点一次，真的全部清空' : '清空聊天记录' }}
+        </button>
+        <div class="menu-foot">{{ ctxInfo }}</div>
       </div>
     </transition>
+    <div v-if="showMenu" class="scrim-clear" @click="showMenu = false"></div>
+    <input ref="importInput" type="file" accept="application/json,.json" hidden @change="doImport" />
 
-    <!-- Messages -->
-    <main class="chat-area" ref="chatArea">
-      <div v-for="(msg, i) in messages" :key="i" :class="['msg-row', msg.role]">
-        <img v-if="msg.role === 'assistant'" :src="settings.avatarAI" class="msg-avatar" />
-        <div class="msg-body">
-          <div v-if="msg.images?.length" class="msg-images">
-            <img v-for="(img, j) in msg.images" :key="j" :src="img" class="msg-image" />
+    <!-- ===== 消息区 ===== -->
+    <main
+      ref="chatArea"
+      class="chat-area"
+      aria-live="polite"
+      @scroll.passive="onScroll"
+      @click="onAreaClick"
+    >
+      <button v-if="hiddenCount" class="load-earlier" @click="loadEarlier">
+        还有 {{ hiddenCount }} 条更早的消息
+      </button>
+      <div v-if="loaded && !messages.length" class="empty">说点什么吧</div>
+
+      <template v-for="row in rows" :key="row.key">
+        <div v-if="row.divider" class="time-divider"><span>{{ row.divider }}</span></div>
+
+        <div :class="['msg-row', row.msg.role, { first: row.showAvatar }]">
+          <div class="avatar-slot">
+            <img
+              v-if="row.showAvatar"
+              :src="row.msg.role === 'assistant' ? settings.avatarAI : settings.avatarUser"
+              class="msg-avatar"
+              alt=""
+            />
           </div>
-          <div
-            v-if="msg.role === 'assistant'"
-            class="bubble markdown-body"
-            :style="aiBubbleStyle"
-            v-html="renderMd(msg.content)"
-            @touchstart="onTouchStart(msg)"
-            @touchend="onTouchEnd"
-            @touchcancel="onTouchEnd"
-          ></div>
-          <div
-            v-else
-            class="bubble"
-            :style="userBubbleStyle"
-            @touchstart="onTouchStart(msg)"
-            @touchend="onTouchEnd"
-            @touchcancel="onTouchEnd"
-          >{{ msg.content }}</div>
-          <div class="msg-actions">
-            <span class="msg-time">{{ msg.time }}</span>
-            <button v-if="msg.role === 'assistant' && !loading" class="msg-action-btn" @click="regenerateMessage(i)" title="重新生成">🔄</button>
-            <button class="msg-action-btn" @click="deleteMessage(i)" title="删除">✕</button>
+
+          <div class="msg-col">
+            <!-- 思考过程 -->
+            <template v-if="row.msg.role === 'assistant' && curVersion(row.msg)?.thinking">
+              <button class="fold-chip" :aria-expanded="!!expanded[row.key + ':think']" @click="toggle(row.key + ':think')">
+                <Icon name="thought" :size="15" />
+                <span>思考过程</span>
+                <Icon name="chevron" :size="14" :class="['chev', { open: expanded[row.key + ':think'] }]" />
+              </button>
+              <div v-if="expanded[row.key + ':think']" class="fold-body glass">{{ curVersion(row.msg)?.thinking }}</div>
+            </template>
+
+            <!-- 工具调用 -->
+            <template v-if="row.msg.role === 'assistant' && curVersion(row.msg)?.tools?.length">
+              <button class="fold-chip" :aria-expanded="!!expanded[row.key + ':tools']" @click="toggle(row.key + ':tools')">
+                <Icon name="tool" :size="15" />
+                <span>
+                  {{ curVersion(row.msg)!.tools!.some(t => t.status === 'running') ? '正在使用' : '使用了' }}
+                  {{ [...new Set(curVersion(row.msg)!.tools!.map(t => t.name))].join('、') }}
+                </span>
+                <span v-if="curVersion(row.msg)!.tools!.some(t => t.status === 'error')" class="chip-err">有失败</span>
+                <Icon name="chevron" :size="14" :class="['chev', { open: expanded[row.key + ':tools'] }]" />
+              </button>
+              <div v-if="expanded[row.key + ':tools']" class="tool-list">
+                <div v-for="t in curVersion(row.msg)!.tools" :key="t.id" :class="['tool-item', 'glass', t.status]">
+                  <div class="tool-head">
+                    <span class="tool-dot" :aria-label="t.status"></span>
+                    <span class="tool-name">{{ t.name }}</span>
+                  </div>
+                  <div class="tool-label">参数</div>
+                  <pre class="tool-pre">{{ prettyJson(t.args) }}</pre>
+                  <template v-if="t.result !== undefined">
+                    <div class="tool-label">结果</div>
+                    <pre class="tool-pre">{{ t.result }}</pre>
+                  </template>
+                </div>
+              </div>
+            </template>
+
+            <div v-if="row.msg.images?.length" class="msg-images">
+              <button v-for="(img, j) in row.msg.images" :key="j" class="img-btn" @click="previewImg = img">
+                <img :src="img" class="msg-image" alt="图片" loading="lazy" />
+              </button>
+            </div>
+
+            <div
+              v-for="(part, j) in row.parts"
+              :key="j"
+              :class="['bubble', row.msg.role === 'assistant' ? 'ai markdown-body' : 'user']"
+              @pointerdown="onPressStart($event, row.msg)"
+              @pointermove="onPressMove"
+              @pointerup="cancelPress"
+              @pointercancel="cancelPress"
+              @pointerleave="cancelPress"
+              @contextmenu.prevent="openSheet(row.msg)"
+            >
+              <div v-if="row.msg.role === 'assistant'" v-html="renderMd(part)"></div>
+              <span v-else v-text="part"></span>
+            </div>
+
+            <!-- 正在输入 -->
+            <div
+              v-if="row.msg.role === 'assistant' && generating && row.index === messages.length - 1 && !row.parts.length && !curVersion(row.msg)?.tools?.some(t => t.status === 'running')"
+              class="bubble ai typing"
+              aria-label="正在输入"
+            ><i></i><i></i><i></i></div>
+
+            <div v-if="row.msg.error" class="msg-error glass" role="alert">
+              <Icon name="alert" :size="16" />
+              <span class="err-text">{{ row.msg.error }}</span>
+              <button class="err-retry" :disabled="generating" @click="retry(row.msg)">重试</button>
+            </div>
+
+            <!-- 他的消息下方的操作栏 -->
+            <div
+              v-if="row.msg.role === 'assistant' && !(generating && row.index === messages.length - 1)"
+              class="msg-actions"
+            >
+              <button aria-label="复制" @click="doCopy(row.msg)"><Icon name="copy" :size="17" /></button>
+              <button aria-label="重新生成" :disabled="generating" @click="regenerate(row.msg)"><Icon name="refresh" :size="17" /></button>
+              <span v-if="(row.msg.versions?.length || 0) > 1" class="ver-switch">
+                <button aria-label="上一个版本" @click="switchVersion(row.msg, -1)"><Icon name="left" :size="15" /></button>
+                <span>{{ (row.msg.activeVersion ?? 0) + 1 }}/{{ row.msg.versions!.length }}</span>
+                <button aria-label="下一个版本" @click="switchVersion(row.msg, 1)"><Icon name="right" :size="15" /></button>
+              </span>
+              <button aria-label="更多" @click="openSheet(row.msg)"><Icon name="more" :size="17" /></button>
+              <span class="msg-time">{{ hhmm(row.msg.createdAt) }}</span>
+            </div>
+            <div v-else-if="row.msg.role === 'user' && row.isLastOfGroup" class="msg-time user-time">
+              {{ hhmm(row.msg.createdAt) }}
+            </div>
           </div>
         </div>
-        <img v-if="msg.role === 'user'" :src="settings.avatarUser" class="msg-avatar" />
-      </div>
-      <div v-if="loading && messages[messages.length - 1]?.content === ''" class="msg-row assistant">
-        <img :src="settings.avatarAI" class="msg-avatar" />
-        <div class="msg-body">
-          <div class="bubble typing" :style="aiBubbleStyle">……</div>
-        </div>
-      </div>
+      </template>
     </main>
 
-    <!-- Toast -->
-    <transition name="fade">
-      <div v-if="toastVisible" class="toast">{{ toastMsg }}</div>
-    </transition>
-
-    <!-- Input -->
-    <footer class="input-footer">
-      <div v-if="pendingImages.length" class="image-preview-bar">
-        <div v-for="(img, i) in pendingImages" :key="i" class="preview-thumb">
-          <img :src="img" />
-          <button class="remove-img" @click="removeImage(i)">✕</button>
+    <!-- ===== 输入栏 ===== -->
+    <footer ref="footerEl" class="input-footer">
+      <div class="input-capsule glass-strong">
+        <div v-if="pendingImages.length" class="pending-images">
+          <div v-for="(img, i) in pendingImages" :key="i" class="pending-thumb">
+            <img :src="img" alt="待发送的图片" />
+            <button aria-label="移除这张图片" @click="pendingImages.splice(i, 1)"><Icon name="close" :size="12" /></button>
+          </div>
+        </div>
+        <textarea
+          ref="inputEl"
+          v-model="inputText"
+          class="input-text"
+          rows="1"
+          :placeholder="unanswered ? `已发 ${unanswered} 条，点右边让他回复` : '说点什么…'"
+          enterkeyhint="send"
+          aria-label="输入消息"
+          @input="autoGrow"
+          @keydown="onInputKeydown"
+          @compositionstart="composing = true"
+          @compositionend="composing = false"
+        ></textarea>
+        <div class="input-tools">
+          <label class="tool-btn" aria-label="发送图片">
+            <Icon name="attach" />
+            <input type="file" accept="image/*" multiple hidden @change="handleImageSelect" />
+          </label>
+          <span class="input-model">{{ settings.model }}</span>
+          <button
+            :class="['send-btn', { stop: generating, ready: inputText.trim() || unanswered || pendingImages.length }]"
+            :aria-label="generating ? '停止生成' : '让他回复'"
+            @click="onSendButton"
+          >
+            <Icon :name="generating ? 'stop' : 'send'" />
+          </button>
         </div>
       </div>
-      <div class="input-bar">
-        <label class="attach-btn">
-          📎
-          <input type="file" accept="image/*" multiple hidden @change="handleImageSelect" />
-        </label>
-        <input
-          v-model="inputText"
-          placeholder="说点什么…"
-          @keydown.enter="sendMessage"
-        />
-        <button class="send-btn" @click="sendMessage" :disabled="loading">
-          <span>↑</span>
-        </button>
-      </div>
     </footer>
+
+    <!-- ===== 消息操作面板 ===== -->
+    <transition name="fade">
+      <div v-if="sheet" class="scrim" @click="closeSheet"></div>
+    </transition>
+    <transition name="sheet">
+      <div v-if="sheet" class="sheet glass-strong" role="dialog" aria-modal="true" aria-label="消息操作">
+        <div class="sheet-grip" aria-hidden="true"></div>
+
+        <template v-if="sheet.mode === 'menu'">
+          <button class="sheet-item" @click="doCopy(sheet.msg)"><Icon name="copy" />复制全文</button>
+          <button class="sheet-item" @click="editText = textOf(sheet.msg); sheet.mode = 'select'"><Icon name="select" />选择复制</button>
+          <button class="sheet-item" @click="startEdit"><Icon name="edit" />编辑</button>
+          <button class="sheet-item" @click="shareMsg(sheet.msg)"><Icon name="share" />分享</button>
+          <button v-if="sheet.msg.role === 'assistant'" class="sheet-item" :disabled="generating" @click="regenerate(sheet.msg)"><Icon name="refresh" />重新生成</button>
+          <button
+            v-if="sheet.msg.role === 'assistant' && (sheet.msg.versions?.length || 0) > 1"
+            class="sheet-item danger"
+            @click="sheet.mode = 'confirm-delete-version'"
+          ><Icon name="trash" />删除这个版本</button>
+          <button class="sheet-item danger" @click="sheet.mode = 'confirm-delete'"><Icon name="trash" />删除这条消息</button>
+        </template>
+
+        <template v-else-if="sheet.mode === 'select'">
+          <div class="sheet-title">选择要复制的文字</div>
+          <textarea class="sheet-text" readonly :value="editText"></textarea>
+          <button class="sheet-btn" @click="closeSheet">完成</button>
+        </template>
+
+        <template v-else-if="sheet.mode === 'edit'">
+          <div class="sheet-title">编辑消息</div>
+          <textarea v-model="editText" class="sheet-text" aria-label="消息内容"></textarea>
+          <div class="sheet-row">
+            <button class="sheet-btn ghost" @click="closeSheet">取消</button>
+            <button class="sheet-btn" @click="saveEdit">保存</button>
+          </div>
+        </template>
+
+        <template v-else>
+          <div class="sheet-title">
+            {{ sheet.mode === 'confirm-delete'
+              ? (sheet.msg.versions && sheet.msg.versions.length > 1 ? `删除这条消息和它的全部 ${sheet.msg.versions.length} 个版本？` : '删除这条消息？')
+              : '只删除当前这个版本？' }}
+          </div>
+          <div class="sheet-preview">{{ textOf(sheet.msg).slice(0, 120) || '（图片）' }}</div>
+          <div class="sheet-hint">删除后找不回来</div>
+          <div class="sheet-row">
+            <button class="sheet-btn ghost" @click="closeSheet">取消</button>
+            <button class="sheet-btn danger" @click="sheet.mode === 'confirm-delete' ? confirmDelete() : confirmDeleteVersion()">删除</button>
+          </div>
+        </template>
+      </div>
+    </transition>
+
+    <!-- ===== 聊天样式面板 ===== -->
+    <transition name="fade">
+      <div v-if="showStylePanel" class="scrim" @click="showStylePanel = false"></div>
+    </transition>
+    <transition name="sheet">
+      <div v-if="showStylePanel" class="sheet style-sheet glass-strong" role="dialog" aria-modal="true" aria-label="聊天样式">
+        <div class="sheet-grip" aria-hidden="true"></div>
+        <div class="sheet-title">聊天样式</div>
+        <div class="style-grid">
+          <label>背景色
+            <span class="row"><input type="color" :value="chatStyle.bgColor || '#eef0f5'" @input="chatStyle.bgColor = ($event.target as HTMLInputElement).value" />
+              <button v-if="chatStyle.bgColor" class="mini" @click="chatStyle.bgColor = ''">默认</button></span>
+          </label>
+          <label>背景图
+            <span class="row">
+              <span class="mini upload">上传<input type="file" accept="image/*" hidden @change="handleBgUpload" /></span>
+              <button v-if="chatStyle.bgImage" class="mini" @click="chatStyle.bgImage = ''">清除</button>
+            </span>
+          </label>
+          <label>他的气泡 <input type="color" v-model="chatStyle.aiBubbleBg" /></label>
+          <label>透明度 {{ Math.round(chatStyle.aiBubbleOpacity * 100) }}%
+            <input type="range" min="0.1" max="1" step="0.05" v-model.number="chatStyle.aiBubbleOpacity" /></label>
+          <label>我的气泡 <input type="color" v-model="chatStyle.userBubbleBg" /></label>
+          <label>透明度 {{ Math.round(chatStyle.userBubbleOpacity * 100) }}%
+            <input type="range" min="0.1" max="1" step="0.05" v-model.number="chatStyle.userBubbleOpacity" /></label>
+          <label>字号 {{ chatStyle.fontSize }}px
+            <input type="range" min="12" max="22" step="1" v-model.number="chatStyle.fontSize" /></label>
+          <label>字体
+            <span class="row">
+              <span class="mini upload">导入 TTF/OTF<input type="file" accept=".ttf,.otf,.woff,.woff2" hidden @change="handleFontUpload" /></span>
+              <button v-if="chatStyle.fontFamily" class="mini" @click="chatStyle.fontFamily = ''; chatStyle.fontData = ''">恢复</button>
+            </span>
+          </label>
+          <label class="full">自定义 CSS
+            <textarea v-model="chatStyle.customCSS" rows="4" spellcheck="false" placeholder=".bubble.ai { border-radius: 8px; }"></textarea>
+          </label>
+        </div>
+        <div class="sheet-row">
+          <button class="sheet-btn ghost" @click="chatStyle = { ...DEFAULT_STYLE }">恢复默认</button>
+          <button class="sheet-btn" @click="showStylePanel = false">完成</button>
+        </div>
+      </div>
+    </transition>
+
+    <!-- 图片预览 -->
+    <transition name="fade">
+      <div v-if="previewImg" class="img-preview" role="dialog" aria-label="图片预览" @click="previewImg = ''">
+        <img :src="previewImg" alt="图片预览" />
+      </div>
+    </transition>
+
+    <transition name="fade">
+      <div v-if="toastMsg" class="toast glass-strong" role="status">{{ toastMsg }}</div>
+    </transition>
   </div>
 </template>
 
 <style scoped>
 .chat-page {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  width: 100%;
+  position: fixed;
+  inset: 0;
+  height: 100dvh;
   overflow: hidden;
+  color: var(--text);
 }
 
 .chat-bg {
   position: absolute;
   inset: 0;
+  background: var(--page-bg);
   background-size: cover;
   background-position: center;
   z-index: 0;
 }
 
-/* Header — light frosted */
+/* ===== 顶栏 ===== */
 .chat-header {
-  position: relative;
-  z-index: 10;
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  z-index: 20;
   display: flex;
-  align-items: center;
-  padding: 10px 14px;
+  align-items: flex-start;
+  justify-content: space-between;
   gap: 10px;
-  flex-shrink: 0;
-  background: rgba(255, 255, 255, 0.75);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  padding: calc(var(--safe-top) + 8px) 12px 0;
+  pointer-events: none;
 }
+.chat-header > * { pointer-events: auto; }
+.chat-header .glass-btn { margin-top: 14px; }
 
-.header-avatar {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  object-fit: cover;
-}
-
-.header-name {
-  font-size: 16px;
-  font-weight: 500;
-  color: rgba(0, 0, 0, 0.75);
-}
-
-.header-spacer { flex: 1; }
-
-.header-btn {
-  background: none;
-  border: none;
-  font-size: 18px;
-  cursor: pointer;
-  color: rgba(0, 0, 0, 0.35);
-  padding: 4px 8px;
-}
-.header-btn:hover { color: rgba(0, 0, 0, 0.6); }
-
-/* Chat area */
-.chat-area {
-  position: relative;
-  z-index: 1;
-  flex: 1;
-  overflow-y: auto;
-  padding: 16px 12px;
+.header-card {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 62%;
+  border-radius: 26px;
+  padding: 8px 22px 9px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  align-items: center;
+}
+.header-avatars { display: flex; align-items: center; gap: 6px; }
+.h-avatar {
+  width: 38px; height: 38px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid rgba(255, 255, 255, 0.9);
+  box-shadow: 0 2px 8px rgba(60, 72, 110, 0.15);
+}
+.pulse { width: 46px; height: 16px; }
+.pulse polyline {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.75;
+  stroke-dasharray: 90;
+  stroke-dashoffset: 0;
+}
+.pulse.beating polyline { animation: beat 1.2s linear infinite; }
+@keyframes beat { from { stroke-dashoffset: 180; } to { stroke-dashoffset: 0; } }
+
+.header-name {
+  margin-top: 3px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.header-sub {
+  font-size: 11px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.menu-pop {
+  position: absolute;
+  z-index: 31;
+  top: calc(var(--safe-top) + 64px);
+  right: 12px;
+  width: 240px;
+  border-radius: 20px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+}
+.menu-pop button {
+  display: flex; align-items: center; gap: 10px;
+  padding: 11px 12px;
+  border: none; background: none;
+  border-radius: 14px;
+  font-size: 15px;
+  text-align: left;
+}
+.menu-pop button:active { background: rgba(255, 255, 255, 0.6); }
+.menu-pop .danger { color: var(--danger); }
+.menu-foot {
+  padding: 8px 12px 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-3);
+  border-top: 1px solid rgba(0, 0, 0, 0.05);
+  margin-top: 4px;
+}
+.scrim-clear { position: absolute; inset: 0; z-index: 30; }
+
+/* ===== 消息区 ===== */
+.chat-area {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
+  padding: calc(var(--safe-top) + 108px) 12px calc(var(--footer-h, 90px) + 16px);
+  display: flex;
+  flex-direction: column;
+}
+
+.load-earlier, .empty {
+  align-self: center;
+  margin: 8px 0 16px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.load-earlier {
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  border-radius: 999px;
+  padding: 6px 14px;
+}
+.empty { margin-top: 30vh; font-size: 14px; color: var(--text-3); }
+
+.time-divider {
+  display: flex;
+  justify-content: center;
+  margin: 14px 0 8px;
+}
+.time-divider span {
+  font-size: 11px;
+  color: var(--text-2);
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.35);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
 }
 
 .msg-row {
   display: flex;
   align-items: flex-start;
   gap: 8px;
+  margin-top: 4px;
 }
-.msg-row.user {
-  flex-direction: row;
-  justify-content: flex-end;
-}
+.msg-row.first { margin-top: 10px; }
+.msg-row.user { flex-direction: row-reverse; }
 
+.avatar-slot { width: 36px; flex-shrink: 0; }
 .msg-avatar {
-  width: 34px;
-  height: 34px;
+  width: 36px; height: 36px;
   border-radius: 50%;
   object-fit: cover;
-  flex-shrink: 0;
-  margin-top: 2px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  border: 1.5px solid rgba(255, 255, 255, 0.85);
+  box-shadow: 0 2px 6px rgba(60, 72, 110, 0.12);
 }
 
-.msg-body {
+.msg-col {
   display: flex;
   flex-direction: column;
-  max-width: 72%;
+  align-items: flex-start;
+  gap: 4px;
+  max-width: calc(100% - 88px);
+  min-width: 0;
 }
+.msg-row.user .msg-col { align-items: flex-end; }
 
-/* Bubbles — light, clean */
+/* ===== 气泡 ===== */
 .bubble {
-  padding: 10px 14px;
-  border-radius: 18px;
+  max-width: 100%;
+  padding: 9px 14px;
+  border-radius: 20px;
+  font-size: var(--bubble-font-size, 15px);
+  font-family: var(--bubble-font, inherit);
   line-height: 1.6;
   word-break: break-word;
-  color: rgba(0, 0, 0, 0.8);
-  border: 1px solid rgba(0, 0, 0, 0.06);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  user-select: text;
-  -webkit-user-select: text;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+  overflow-wrap: anywhere;
+  border: 1px solid rgba(255, 255, 255, 0.65);
+  -webkit-backdrop-filter: blur(14px) saturate(170%);
+  backdrop-filter: blur(14px) saturate(170%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    0 3px 12px rgba(60, 72, 110, 0.08);
+  /* 长按用自己的菜单，关掉系统的选择/放大镜 */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
+.bubble.ai { background: var(--bubble-ai); }
+.bubble.user { background: var(--bubble-user); white-space: pre-wrap; }
 
-.msg-row.user .bubble { white-space: pre-wrap; }
+.bubble.typing { display: flex; gap: 4px; padding: 13px 16px; }
+.bubble.typing i {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--text-3);
+  animation: dot 1.2s infinite ease-in-out;
+}
+.bubble.typing i:nth-child(2) { animation-delay: 0.15s; }
+.bubble.typing i:nth-child(3) { animation-delay: 0.3s; }
+@keyframes dot { 0%, 80%, 100% { transform: translateY(0); opacity: 0.4; } 40% { transform: translateY(-4px); opacity: 1; } }
 
-/* Markdown — light theme */
-.bubble.markdown-body :deep(p) { margin: 0 0 0.5em 0; }
-.bubble.markdown-body :deep(p:last-child) { margin-bottom: 0; }
-.bubble.markdown-body :deep(strong) { color: rgba(0, 0, 0, 0.85); }
-.bubble.markdown-body :deep(em) { color: rgba(80, 70, 100, 0.85); }
-.bubble.markdown-body :deep(code) {
+/* Markdown */
+.markdown-body :deep(p) { margin: 0 0 0.45em; }
+.markdown-body :deep(p:last-child) { margin-bottom: 0; }
+.markdown-body :deep(strong) { font-weight: 600; }
+.markdown-body :deep(em) { color: rgba(70, 80, 120, 0.9); }
+.markdown-body :deep(ul), .markdown-body :deep(ol) { padding-left: 1.3em; margin: 2px 0; }
+.markdown-body :deep(li) { margin: 1px 0; }
+.markdown-body :deep(h1), .markdown-body :deep(h2), .markdown-body :deep(h3), .markdown-body :deep(h4) {
+  font-size: 1.02em; font-weight: 600; margin: 4px 0;
+}
+.markdown-body :deep(blockquote) {
+  border-left: 3px solid rgba(111, 134, 184, 0.45);
+  padding-left: 10px;
+  color: var(--text-2);
+}
+.markdown-body :deep(a) { color: var(--accent); text-decoration: underline; }
+.markdown-body :deep(:not(pre) > code) {
+  font-family: var(--mono);
+  font-size: 0.88em;
   background: rgba(0, 0, 0, 0.05);
   padding: 1px 5px;
-  border-radius: 4px;
-  font-size: 0.9em;
-  font-family: 'Menlo', 'Consolas', monospace;
-  color: rgba(0, 0, 0, 0.7);
+  border-radius: 5px;
 }
-.bubble.markdown-body :deep(pre) {
-  background: rgba(0, 0, 0, 0.04);
-  border-radius: 8px;
-  padding: 10px 12px;
-  overflow-x: auto;
-  margin: 6px 0;
-  border: 1px solid rgba(0,0,0,0.06);
-}
-.bubble.markdown-body :deep(pre code) {
-  background: none;
-  padding: 0;
-  font-size: 0.85em;
-  line-height: 1.5;
-}
-.bubble.markdown-body :deep(ul), .bubble.markdown-body :deep(ol) {
-  padding-left: 1.4em;
-  margin: 4px 0;
-}
-.bubble.markdown-body :deep(li) { margin: 2px 0; }
-.bubble.markdown-body :deep(blockquote) {
-  border-left: 3px solid rgba(0, 0, 0, 0.15);
-  padding-left: 10px;
-  margin: 6px 0;
-  color: rgba(0, 0, 0, 0.5);
-}
-.bubble.markdown-body :deep(a) {
-  color: rgba(80, 70, 120, 0.8);
-  text-decoration: underline;
-}
-.bubble.markdown-body :deep(h1),
-.bubble.markdown-body :deep(h2),
-.bubble.markdown-body :deep(h3) {
-  margin: 8px 0 4px 0;
-  font-size: 1em;
-  color: rgba(0, 0, 0, 0.85);
-}
+.markdown-body :deep(table) { border-collapse: collapse; font-size: 0.92em; display: block; overflow-x: auto; }
+.markdown-body :deep(th), .markdown-body :deep(td) { border: 1px solid rgba(0, 0, 0, 0.08); padding: 4px 8px; }
+.markdown-body :deep(img) { max-width: 100%; border-radius: 10px; }
+.markdown-body :deep(hr) { border: none; border-top: 1px solid rgba(0, 0, 0, 0.08); margin: 6px 0; }
 
-.msg-row.user .bubble { border-bottom-right-radius: 4px; }
-.msg-row.assistant .bubble { border-bottom-left-radius: 4px; }
-
-.bubble.typing { opacity: 0.4; }
-
-.msg-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 3px;
-  padding: 0 4px;
-}
-
-.msg-time {
-  font-size: 11px;
-  color: rgba(0, 0, 0, 0.3);
-}
-
-.msg-action-btn {
-  background: none;
-  border: none;
-  font-size: 11px;
-  color: rgba(0, 0, 0, 0.2);
-  cursor: pointer;
-  padding: 0 2px;
-  line-height: 1;
-  opacity: 0;
-  transition: opacity 0.15s;
-}
-
-.msg-row:hover .msg-action-btn,
-.msg-actions:active .msg-action-btn {
-  opacity: 1;
-}
-
-.msg-action-btn:hover { color: rgba(0, 0, 0, 0.5); }
-
-.msg-row.user .msg-actions { justify-content: flex-end; }
-.msg-row.user .msg-body { align-items: flex-end; }
-
-/* Input footer — light */
-.input-footer {
-  position: relative;
-  z-index: 2;
-  flex-shrink: 0;
-  background: rgba(255, 255, 255, 0.85);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border-top: 1px solid rgba(0, 0, 0, 0.06);
-}
-
-.input-bar {
-  display: flex;
-  gap: 8px;
-  padding: 10px 14px;
-  padding-bottom: max(10px, env(safe-area-inset-bottom));
-}
-
-.input-bar input {
-  flex: 1;
-  padding: 10px 16px;
-  border-radius: 20px;
-  font-size: 15px;
-  outline: none;
-  box-sizing: border-box;
-  background: rgba(0, 0, 0, 0.04);
-  border: 1px solid rgba(0, 0, 0, 0.08);
-  color: rgba(0, 0, 0, 0.8);
-}
-.input-bar input::placeholder { color: rgba(0, 0, 0, 0.3); }
-
-.send-btn {
-  width: 40px;
-  height: 40px;
-  border: none;
-  border-radius: 50%;
-  font-size: 18px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  transition: background 0.15s;
-  background: rgba(0, 0, 0, 0.08);
-  color: rgba(0, 0, 0, 0.6);
-}
-.send-btn:hover { background: rgba(0, 0, 0, 0.14); }
-.send-btn:disabled { opacity: 0.4; }
-
-.attach-btn {
-  font-size: 20px;
-  cursor: pointer;
-  padding: 4px;
-  user-select: none;
-}
-
-/* Images */
-.image-preview-bar {
-  display: flex;
-  gap: 8px;
-  padding: 8px 14px 0;
-  overflow-x: auto;
-}
-
-.preview-thumb { position: relative; flex-shrink: 0; }
-
-.preview-thumb img {
-  width: 60px;
-  height: 60px;
-  object-fit: cover;
-  border-radius: 8px;
-  border: 1px solid rgba(0, 0, 0, 0.08);
-}
-
-.remove-img {
-  position: absolute;
-  top: -4px;
-  right: -4px;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  border: none;
-  background: rgba(200, 60, 60, 0.8);
-  color: white;
-  font-size: 10px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.msg-images {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-bottom: 4px;
-}
-
-.msg-image {
-  max-width: 200px;
-  max-height: 200px;
+.markdown-body :deep(.code-block) {
+  margin: 4px -4px;
   border-radius: 12px;
-  object-fit: cover;
-  border: 1px solid rgba(0, 0, 0, 0.06);
-}
-
-/* Style Panel — light */
-.style-panel {
-  position: absolute;
-  top: 56px;
-  right: 0;
-  width: 280px;
-  max-height: 70vh;
-  z-index: 20;
-  background: rgba(255, 255, 255, 0.95);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid rgba(0, 0, 0, 0.08);
-  border-radius: 12px 0 0 12px;
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(0, 0, 0, 0.05);
   overflow: hidden;
-  display: flex;
-  flex-direction: column;
 }
-
-.panel-header {
+.markdown-body :deep(.code-head) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
-  color: rgba(0, 0, 0, 0.7);
-  font-size: 14px;
-  font-weight: 500;
-}
-
-.panel-close {
-  background: none;
-  border: none;
-  color: rgba(0, 0, 0, 0.35);
-  font-size: 16px;
-  cursor: pointer;
-}
-
-.panel-body {
-  overflow-y: auto;
-  padding: 12px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.style-group {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.style-group label {
-  font-size: 12px;
-  color: rgba(0, 0, 0, 0.45);
-}
-
-.style-group input[type="color"] {
-  width: 40px;
-  height: 28px;
-  border: 1px solid rgba(0, 0, 0, 0.1);
-  border-radius: 6px;
-  background: transparent;
-  cursor: pointer;
-  padding: 0;
-}
-
-.style-group input[type="range"] {
-  width: 100%;
-  accent-color: #999;
-}
-
-.style-group textarea {
-  width: 100%;
+  padding: 4px 6px 4px 12px;
   background: rgba(0, 0, 0, 0.03);
-  border: 1px solid rgba(0, 0, 0, 0.08);
-  border-radius: 8px;
-  color: rgba(0, 0, 0, 0.7);
-  font-family: monospace;
   font-size: 12px;
-  padding: 8px;
-  resize: vertical;
-  outline: none;
 }
-.style-group textarea::placeholder { color: rgba(0, 0, 0, 0.25); }
+.markdown-body :deep(.code-lang) { color: var(--text-2); font-family: var(--mono); }
+.markdown-body :deep(.code-copy) {
+  border: none;
+  background: rgba(255, 255, 255, 0.8);
+  border-radius: 8px;
+  padding: 3px 10px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.markdown-body :deep(pre) {
+  margin: 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.markdown-body :deep(pre code) {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre;
+}
 
-.row {
+/* ===== 折叠块 ===== */
+.fold-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: none;
+  background: none;
+  padding: 2px 4px;
+  font-size: 13px;
+  color: var(--text-2);
+  max-width: 100%;
+}
+.fold-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip-err { color: var(--danger); font-size: 12px; }
+.chev { transition: transform 0.2s; opacity: 0.7; }
+.chev.open { transform: rotate(90deg); }
+.fold-body {
+  border-radius: 14px;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-2);
+  white-space: pre-wrap;
+  max-height: 40vh;
+  overflow-y: auto;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.tool-list { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+.tool-item { border-radius: 14px; padding: 8px 10px; font-size: 12px; }
+.tool-head { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 13px; }
+.tool-dot { width: 7px; height: 7px; border-radius: 50%; background: #7fb08a; }
+.tool-item.running .tool-dot { background: #d9b45a; animation: dot 1.2s infinite; }
+.tool-item.error .tool-dot { background: var(--danger); }
+.tool-label { margin-top: 6px; color: var(--text-3); font-size: 11px; }
+.tool-pre {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 200px;
+  overflow-y: auto;
+  color: var(--text-2);
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* ===== 图片 ===== */
+.msg-images { display: flex; flex-wrap: wrap; gap: 6px; }
+.img-btn { border: none; background: none; padding: 0; border-radius: 14px; overflow: hidden; }
+.msg-image {
+  display: block;
+  max-width: 200px;
+  max-height: 260px;
+  border-radius: 14px;
+  object-fit: cover;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+}
+
+/* ===== 错误 ===== */
+.msg-error {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-.upload-btn {
-  padding: 4px 12px;
-  background: rgba(0, 0, 0, 0.05);
-  border: 1px solid rgba(0, 0, 0, 0.08);
-  border-radius: 6px;
-  color: rgba(0, 0, 0, 0.5);
-  font-size: 12px;
-  cursor: pointer;
-}
-.upload-btn:hover { background: rgba(0, 0, 0, 0.08); }
-
-.clear-btn {
-  padding: 4px 10px;
-  background: none;
-  border: 1px solid rgba(0, 0, 0, 0.08);
-  border-radius: 6px;
-  color: rgba(0, 0, 0, 0.35);
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.font-name {
-  font-size: 12px;
-  color: rgba(0, 0, 0, 0.45);
-}
-
-.reset-all-btn {
-  margin-top: 8px;
-  padding: 8px;
-  background: rgba(0, 0, 0, 0.03);
-  border: 1px solid rgba(0, 0, 0, 0.06);
-  border-radius: 8px;
-  color: rgba(0, 0, 0, 0.35);
-  font-size: 12px;
-  cursor: pointer;
-}
-.reset-all-btn:hover { color: rgba(0, 0, 0, 0.5); }
-
-.panel-slide-enter-active,
-.panel-slide-leave-active {
-  transition: transform 0.25s ease, opacity 0.25s ease;
-}
-.panel-slide-enter-from,
-.panel-slide-leave-to {
-  transform: translateX(100%);
-  opacity: 0;
-}
-
-/* Toast — light */
-.toast {
-  position: fixed;
-  bottom: 120px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: rgba(255, 255, 255, 0.92);
-  color: rgba(0, 0, 0, 0.7);
-  padding: 8px 20px;
-  border-radius: 20px;
+  border-radius: 14px;
+  padding: 8px 10px;
   font-size: 13px;
-  z-index: 100;
-  pointer-events: none;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-  border: 1px solid rgba(0,0,0,0.06);
+  color: var(--danger);
+  max-width: 100%;
+}
+.err-text { flex: 1; min-width: 0; word-break: break-all; max-height: 4.8em; overflow: hidden; }
+.err-retry {
+  border: none;
+  border-radius: 10px;
+  padding: 4px 10px;
+  background: rgba(255, 255, 255, 0.8);
+  color: var(--text);
+  flex-shrink: 0;
 }
 
-.fade-enter-active, .fade-leave-active {
-  transition: opacity 0.3s;
+/* ===== 操作栏 ===== */
+.msg-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-top: 1px;
+  color: var(--text-3);
 }
-.fade-enter-from, .fade-leave-to {
-  opacity: 0;
+.msg-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: none;
+  width: 32px; height: 30px;
+  border-radius: 10px;
+  color: inherit;
 }
+.msg-actions button:active { background: rgba(255, 255, 255, 0.5); }
+.msg-actions button:disabled { opacity: 0.35; }
+.ver-switch { display: inline-flex; align-items: center; font-size: 12px; }
+.ver-switch button { width: 24px; }
+.msg-time { font-size: 11px; color: var(--text-3); margin-left: 4px; }
+.user-time { margin-top: 1px; padding: 0 4px; }
+
+/* ===== 输入栏 ===== */
+.input-footer {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  z-index: 20;
+  padding: 0 12px calc(var(--safe-bottom) + 10px);
+}
+.input-capsule {
+  border-radius: 26px;
+  padding: 10px 10px 8px 16px;
+  display: flex;
+  flex-direction: column;
+}
+.pending-images { display: flex; gap: 8px; padding: 2px 0 8px; overflow-x: auto; }
+.pending-thumb { position: relative; flex-shrink: 0; }
+.pending-thumb img { width: 56px; height: 56px; object-fit: cover; border-radius: 12px; display: block; }
+.pending-thumb button {
+  position: absolute; top: -5px; right: -5px;
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(40, 44, 60, 0.7);
+  color: #fff;
+  display: flex; align-items: center; justify-content: center;
+}
+.input-text {
+  width: 100%;
+  border: none;
+  outline: none;
+  resize: none;
+  background: transparent;
+  line-height: 1.5;
+  max-height: 120px;
+  padding: 2px 0 6px;
+}
+.input-text::placeholder { color: var(--text-3); }
+.input-tools { display: flex; align-items: center; gap: 6px; }
+.tool-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px;
+  border-radius: 50%;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.input-model {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.send-btn {
+  width: 38px; height: 38px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  background: rgba(255, 255, 255, 0.55);
+  color: var(--text-3);
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.2s, color 0.2s, transform 0.15s;
+}
+.send-btn.ready { background: rgba(111, 134, 184, 0.85); color: #fff; }
+.send-btn.stop { background: rgba(40, 44, 60, 0.75); color: #fff; }
+.send-btn:active { transform: scale(0.92); }
+
+/* ===== 底部面板 ===== */
+.scrim {
+  position: absolute; inset: 0;
+  z-index: 40;
+  background: rgba(30, 36, 56, 0.18);
+}
+.sheet {
+  position: absolute;
+  left: 8px; right: 8px; bottom: 8px;
+  z-index: 41;
+  border-radius: 28px;
+  padding: 8px 10px calc(var(--safe-bottom) + 10px);
+  max-height: 80%;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+.sheet-grip {
+  width: 36px; height: 5px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.15);
+  align-self: center;
+  margin: 2px 0 8px;
+  flex-shrink: 0;
+}
+.sheet-item {
+  display: flex; align-items: center; gap: 14px;
+  padding: 14px 14px;
+  border: none; background: none;
+  border-radius: 16px;
+  font-size: 16px;
+  text-align: left;
+}
+.sheet-item:active { background: rgba(255, 255, 255, 0.6); }
+.sheet-item:disabled { opacity: 0.4; }
+.sheet-item.danger { color: var(--danger); }
+.sheet-title { font-size: 15px; font-weight: 600; padding: 6px 8px 10px; }
+.sheet-preview {
+  margin: 0 8px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.55);
+  font-size: 14px;
+  color: var(--text-2);
+  max-height: 120px;
+  overflow: hidden;
+}
+.sheet-hint { font-size: 12px; color: var(--text-3); padding: 8px 10px 4px; }
+.sheet-text {
+  margin: 0 4px;
+  min-height: 180px;
+  max-height: 50vh;
+  border-radius: 16px;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  background: rgba(255, 255, 255, 0.7);
+  padding: 12px;
+  line-height: 1.6;
+  resize: vertical;
+  outline: none;
+  -webkit-user-select: text;
+  user-select: text;
+}
+.sheet-row { display: flex; gap: 10px; padding: 12px 4px 2px; }
+.sheet-btn {
+  flex: 1;
+  padding: 12px;
+  border-radius: 16px;
+  border: none;
+  background: rgba(111, 134, 184, 0.9);
+  color: #fff;
+  font-size: 15px;
+  margin: 10px 4px 0;
+}
+.sheet-row .sheet-btn { margin: 0; }
+.sheet-btn.ghost { background: rgba(255, 255, 255, 0.75); color: var(--text); }
+.sheet-btn.danger { background: var(--danger); }
+
+.style-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 14px;
+  padding: 0 8px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+.style-grid label { display: flex; flex-direction: column; gap: 6px; }
+.style-grid .full { grid-column: 1 / -1; }
+.style-grid .row { display: flex; gap: 6px; align-items: center; }
+.style-grid input[type=color] { width: 44px; height: 30px; border: none; background: none; padding: 0; }
+.style-grid input[type=range] { width: 100%; accent-color: var(--accent); }
+.style-grid textarea {
+  border-radius: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  background: rgba(255, 255, 255, 0.7);
+  padding: 8px 10px;
+  font-family: var(--mono);
+  font-size: 13px;
+}
+.mini {
+  border: none;
+  border-radius: 10px;
+  padding: 5px 10px;
+  background: rgba(255, 255, 255, 0.75);
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+/* ===== 图片预览 / toast ===== */
+.img-preview {
+  position: absolute; inset: 0;
+  z-index: 50;
+  background: rgba(20, 24, 36, 0.85);
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+}
+.img-preview img { max-width: 100%; max-height: 100%; border-radius: 12px; }
+
+.toast {
+  position: absolute;
+  z-index: 60;
+  left: 50%;
+  top: 45%;
+  transform: translateX(-50%);
+  padding: 10px 18px;
+  border-radius: 999px;
+  font-size: 14px;
+  white-space: nowrap;
+  max-width: 85%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ===== 动画 ===== */
+.fade-enter-active, .fade-leave-active { transition: opacity 0.2s; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
+.sheet-enter-active, .sheet-leave-active { transition: transform 0.28s cubic-bezier(0.2, 0.9, 0.3, 1), opacity 0.2s; }
+.sheet-enter-from, .sheet-leave-to { transform: translateY(105%); opacity: 0.6; }
+.pop-enter-active, .pop-leave-active { transition: transform 0.18s, opacity 0.18s; transform-origin: top right; }
+.pop-enter-from, .pop-leave-to { transform: scale(0.9); opacity: 0; }
 </style>

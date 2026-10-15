@@ -46,54 +46,54 @@ const isHome = () => route.path !== '/chat' && route.path !== '/settings'
 
 <style scoped>
 .home-container {
-  height: 100vh;
+  position: fixed;
+  inset: 0;
   height: 100dvh;
-  display: flex;
-  flex-direction: column;
-  background: #f5f3f0;
+  overflow: hidden;
 }
 
 .room-area {
-  flex: 1;
+  position: absolute;
+  inset: 0;
   overflow: hidden;
-  position: relative;
 }
 
+/* 悬浮玻璃胶囊导航 */
 .bottom-bar {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--safe-bottom) + 12px);
+  transform: translateX(-50%);
+  z-index: 20;
   display: flex;
-  justify-content: space-around;
-  align-items: center;
-  height: 60px;
-  background: rgba(255, 255, 255, 0.85);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border-top: 1px solid rgba(0, 0, 0, 0.06);
-  padding-bottom: env(safe-area-inset-bottom);
+  gap: 4px;
+  padding: 6px;
+  border-radius: 999px;
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
 }
 
 .nav-btn {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 2px;
+  gap: 1px;
   background: none;
   border: none;
-  color: rgba(0, 0, 0, 0.3);
-  font-size: 12px;
-  cursor: pointer;
-  padding: 6px 16px;
-  transition: color 0.2s;
+  border-radius: 999px;
+  color: var(--text-2);
+  padding: 6px 20px;
+  transition: background 0.2s, color 0.2s;
 }
 
 .nav-btn.active {
-  color: rgba(0, 0, 0, 0.75);
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.75);
 }
 
-.nav-icon {
-  font-size: 22px;
-}
-
-.nav-label {
-  font-size: 11px;
-}
+.nav-icon { font-size: 20px; line-height: 1.1; }
+.nav-label { font-size: 11px; }
 </style>
