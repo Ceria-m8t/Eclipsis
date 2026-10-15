@@ -629,7 +629,7 @@ const subtitle = computed(() =>
 </script>
 
 <template>
-  <div class="chat-page" :style="pageStyle">
+  <div class="chat-page app-screen" :style="pageStyle">
     <div class="chat-bg" :style="bgStyle" aria-hidden="true"></div>
 
     <!-- ===== 顶栏 ===== -->
@@ -965,11 +965,6 @@ const subtitle = computed(() =>
 
 <style scoped>
 .chat-page {
-  position: fixed;
-  left: 0; right: 0;
-  top: var(--app-top);
-  height: var(--app-h);
-  overflow: hidden;
   color: var(--text);
 }
 

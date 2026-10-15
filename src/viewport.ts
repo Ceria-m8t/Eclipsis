@@ -19,7 +19,8 @@ export function setViewportDebug(on: boolean) {
 }
 
 const isStandalone = () =>
-  (navigator as any).standalone === true || window.matchMedia('(display-mode: standalone)').matches
+  (navigator as any).standalone === true || window.matchMedia('(display-mode: standalone)').matches ||
+  location.search.includes('force-standalone')   // 仅测试用
 
 // 用一个隐藏元素量 100lvh（"最大视口高度"）和安全区
 let probe: HTMLDivElement | null = null
@@ -67,11 +68,15 @@ function update() {
     if (standalone) h = Math.max(h, screen.height)
   }
   root.style.setProperty('--app-h', `${Math.round(h)}px`)
+  // 主屏幕模式且没键盘时，把文档撑到整屏高（见 style.css 里的说明）
+  root.classList.toggle('fill-screen', standalone && !kb)
+  // 键盘收起后，iOS 可能把文档滚动过的距离留着，归零
+  if (!kb && (window.scrollY || document.scrollingElement?.scrollTop)) window.scrollTo(0, 0)
   root.style.setProperty('--app-top', `${Math.round(top)}px`)
 
   vvDebug.value = isViewportDebug()
     ? `主屏幕 ${standalone ? '是' : '否'} · screen ${screen.height} · inner ${innerHeight} · lvh ${Math.round(lvh)} · vv ${Math.round(vh)} · top ${Math.round(vv?.offsetTop || 0)}\n` +
-      `安全区 上${Math.round(safeTop)} 下${Math.round(safeBottom)} · 页面高 ${Math.round(h)} · 键盘 ${kb ? '开' : '关'}`
+      `安全区 上${Math.round(safeTop)} 下${Math.round(safeBottom)} · 页面高 ${Math.round(h)} · 文档高 ${root.clientHeight}/${Math.round(document.body.getBoundingClientRect().height)} · 页面底 ${Math.round(document.querySelector('.app-screen')?.getBoundingClientRect().bottom || 0)} · 键盘 ${kb ? '开' : '关'}`
     : ''
 }
 
@@ -83,6 +88,8 @@ export function startViewportTracking() {
   // 首次进入时 iOS 的尺寸可能还没稳定，过一会儿再量一次
   setTimeout(update, 300)
   setTimeout(update, 1000)
+  // 诊断模式下每秒刷新一次显示的数据
+  setInterval(() => { if (isViewportDebug()) update() }, 1000)
   window.visualViewport?.addEventListener('resize', update)
   window.visualViewport?.addEventListener('scroll', update)
   window.addEventListener('resize', update)

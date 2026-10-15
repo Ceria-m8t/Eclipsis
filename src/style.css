@@ -42,6 +42,23 @@ html, body, #app {
   /* 主屏幕模式下禁止整页回弹，滚动只在内容区发生 */
   overscroll-behavior: none;
 }
+html, body { overflow: hidden; }
+#app { position: relative; }
+
+/* 主屏幕 + 透明状态栏时，iOS 给页面的高度比屏幕少一截（正好是状态栏高度），
+   position: fixed 的元素会被截在那里，底部露出白条。
+   解决：把文档本身撑到整块屏幕高，全屏页面改用 absolute 定位在文档里，就不会被截。 */
+html.fill-screen, html.fill-screen body, html.fill-screen #app { height: var(--app-h); }
+
+/* 全屏页面容器（聊天页、家）。键盘弹起时改回 fixed，跟着可视区域走 */
+.app-screen {
+  position: absolute;
+  left: 0; right: 0;
+  top: var(--app-top);
+  height: var(--app-h);
+  overflow: hidden;
+}
+html.kb-open .app-screen { position: fixed; }
 
 body {
   background: #eef0f5;

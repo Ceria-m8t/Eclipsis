@@ -8,7 +8,7 @@ const isHome = () => route.path !== '/chat' && route.path !== '/settings'
 </script>
 
 <template>
-  <div class="home-container">
+  <div class="home-container app-screen">
     <!-- 房间内容区 -->
     <div class="room-area">
       <RouterView />
@@ -45,14 +45,7 @@ const isHome = () => route.path !== '/chat' && route.path !== '/settings'
 </template>
 
 <style scoped>
-.home-container {
-  position: fixed;
-  inset: 0;
-  top: var(--app-top);
-  bottom: auto;
-  height: var(--app-h);
-  overflow: hidden;
-}
+.home-container {}
 
 .room-area {
   position: absolute;
