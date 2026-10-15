@@ -25,6 +25,8 @@ interface ChatStyle {
   aiBubbleOpacity: number
   userBubbleBg: string
   userBubbleOpacity: number
+  headerOpacity: number   // 顶栏玻璃不透明度
+  footerOpacity: number   // 输入栏玻璃不透明度
   fontSize: number
   fontFamily: string
   fontData: string     // 自定义字体的 dataURL，刷新后重新加载
@@ -39,6 +41,8 @@ const DEFAULT_STYLE: ChatStyle = {
   aiBubbleOpacity: 0.55,
   userBubbleBg: '#dfe7f5',
   userBubbleOpacity: 0.6,
+  headerOpacity: 0.42,
+  footerOpacity: 0.68,
   fontSize: 15,
   fontFamily: '',
   fontData: '',
@@ -121,9 +125,16 @@ const pageStyle = computed(() => {
     '--bubble-ai': hexToRgba(chatStyle.value.aiBubbleBg, chatStyle.value.aiBubbleOpacity),
     '--bubble-user': hexToRgba(chatStyle.value.userBubbleBg, chatStyle.value.userBubbleOpacity),
     '--bubble-font-size': chatStyle.value.fontSize + 'px',
+    '--header-bg': `rgba(255, 255, 255, ${chatStyle.value.headerOpacity})`,
+    '--footer-bg': `rgba(255, 255, 255, ${chatStyle.value.footerOpacity})`,
   }
   if (chatStyle.value.fontFamily) s['--bubble-font'] = `'${chatStyle.value.fontFamily}', var(--sans)`
-  if (viewportH.value) s.height = viewportH.value + 'px'
+  if (viewportH.value) {
+    // 跟着可视区域走：高度=键盘以上的部分，top=iOS 把页面推上去的距离
+    s.height = viewportH.value + 'px'
+    s.top = viewportTop.value + 'px'
+    s.bottom = 'auto'
+  }
   s['--footer-h'] = footerH.value + 'px'
   return s
 })
@@ -581,13 +592,24 @@ function toast(t: string) {
 
 // ================= 生命周期 =================
 const viewportH = ref<number | null>(null)
+const viewportTop = ref(0)
+const keyboardOpen = ref(false)
+// 地址后加 ?vv 可以在屏幕上看到视口数据，方便排查键盘位置
+const debugVv = new URLSearchParams(location.search).has('vv')
+const debugText = ref('')
 function onViewport() {
   const vv = window.visualViewport
   if (!vv) return
   viewportH.value = vv.height
-  // iOS 键盘弹出时会把整页往上推，拉回来
-  if (window.scrollY !== 0) window.scrollTo(0, 0)
+  viewportTop.value = vv.offsetTop
+  if (debugVv) debugText.value = `inner ${window.innerHeight} · vv ${Math.round(vv.height)} · top ${Math.round(vv.offsetTop)} · screen ${screen.height} · scrollY ${Math.round(window.scrollY)}`
+  // 可视高度比整屏矮一大截 = 键盘弹起
+  keyboardOpen.value = window.screen.height - vv.height > 200 && document.activeElement === inputEl.value
   scrollToBottom()
+}
+
+function onInputBlur() {
+  setTimeout(onViewport, 50)
 }
 
 onMounted(async () => {
@@ -634,7 +656,7 @@ const subtitle = computed(() =>
 </script>
 
 <template>
-  <div class="chat-page" :style="pageStyle">
+  <div :class="['chat-page', { 'kb-open': keyboardOpen }]" :style="pageStyle">
     <div class="chat-bg" :style="bgStyle" aria-hidden="true"></div>
 
     <!-- ===== 顶栏 ===== -->
@@ -643,7 +665,7 @@ const subtitle = computed(() =>
         <Icon name="back" />
       </button>
 
-      <div class="header-card glass">
+      <div class="header-card glass-bar">
         <div class="header-avatars">
           <img :src="settings.avatarAI" class="h-avatar" :alt="settings.nameAI" />
           <svg class="pulse" viewBox="0 0 64 20" aria-hidden="true" :class="{ beating: generating }">
@@ -799,7 +821,7 @@ const subtitle = computed(() =>
 
     <!-- ===== 输入栏 ===== -->
     <footer ref="footerEl" class="input-footer">
-      <div class="input-capsule glass-strong">
+      <div class="input-capsule glass-bar footer-glass">
         <div v-if="pendingImages.length" class="pending-images">
           <div v-for="(img, i) in pendingImages" :key="i" class="pending-thumb">
             <img :src="img" alt="待发送的图片" />
@@ -816,6 +838,8 @@ const subtitle = computed(() =>
           aria-label="输入消息"
           @input="autoGrow"
           @keydown="onInputKeydown"
+          @focus="onViewport"
+          @blur="onInputBlur"
           @compositionstart="composing = true"
           @compositionend="composing = false"
         ></textarea>
@@ -914,6 +938,12 @@ const subtitle = computed(() =>
           <label>我的气泡 <input type="color" v-model="chatStyle.userBubbleBg" /></label>
           <label>透明度 {{ Math.round(chatStyle.userBubbleOpacity * 100) }}%
             <input type="range" min="0.1" max="1" step="0.05" v-model.number="chatStyle.userBubbleOpacity" /></label>
+          <label>顶栏透明度 {{ Math.round((1 - chatStyle.headerOpacity) * 100) }}%
+            <input type="range" min="0.05" max="0.95" step="0.05" :value="1 - chatStyle.headerOpacity"
+              @input="chatStyle.headerOpacity = +(1 - +($event.target as HTMLInputElement).value).toFixed(2)" /></label>
+          <label>输入栏透明度 {{ Math.round((1 - chatStyle.footerOpacity) * 100) }}%
+            <input type="range" min="0.05" max="0.95" step="0.05" :value="1 - chatStyle.footerOpacity"
+              @input="chatStyle.footerOpacity = +(1 - +($event.target as HTMLInputElement).value).toFixed(2)" /></label>
           <label>字号 {{ chatStyle.fontSize }}px
             <input type="range" min="12" max="22" step="1" v-model.number="chatStyle.fontSize" /></label>
           <label>字体
@@ -939,6 +969,8 @@ const subtitle = computed(() =>
         <img :src="previewImg" alt="图片预览" />
       </div>
     </transition>
+
+    <div v-if="debugVv" class="vv-debug">{{ debugText || '点一下输入框' }}</div>
 
     <transition name="fade">
       <div v-if="toastMsg" class="toast glass-strong" role="status">{{ toastMsg }}</div>
@@ -977,27 +1009,36 @@ const subtitle = computed(() =>
   pointer-events: none;
 }
 .chat-header > * { pointer-events: auto; }
-.chat-header .glass-btn { margin-top: 14px; }
+.chat-header .glass-btn { margin-top: 22px; }
+
+.glass-bar {
+  background: var(--header-bg);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+}
+.glass-bar.footer-glass { background: var(--footer-bg); }
 
 .header-card {
-  flex: 0 1 auto;
+  flex: 1 1 auto;
   min-width: 0;
-  max-width: 62%;
-  border-radius: 26px;
-  padding: 8px 22px 9px;
+  max-width: 70%;
+  border-radius: 30px;
+  padding: 10px 24px 11px;
   display: flex;
   flex-direction: column;
   align-items: center;
 }
 .header-avatars { display: flex; align-items: center; gap: 6px; }
 .h-avatar {
-  width: 38px; height: 38px;
+  width: 46px; height: 46px;
   border-radius: 50%;
   object-fit: cover;
   border: 2px solid rgba(255, 255, 255, 0.9);
   box-shadow: 0 2px 8px rgba(60, 72, 110, 0.15);
 }
-.pulse { width: 46px; height: 16px; }
+.pulse { width: 60px; height: 20px; }
 .pulse polyline {
   fill: none;
   stroke: var(--accent);
@@ -1012,8 +1053,8 @@ const subtitle = computed(() =>
 @keyframes beat { from { stroke-dashoffset: 180; } to { stroke-dashoffset: 0; } }
 
 .header-name {
-  margin-top: 3px;
-  font-size: 15px;
+  margin-top: 4px;
+  font-size: 16px;
   font-weight: 600;
   letter-spacing: 0.5px;
   white-space: nowrap;
@@ -1022,7 +1063,7 @@ const subtitle = computed(() =>
   max-width: 100%;
 }
 .header-sub {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-2);
   white-space: nowrap;
   overflow: hidden;
@@ -1033,7 +1074,7 @@ const subtitle = computed(() =>
 .menu-pop {
   position: absolute;
   z-index: 31;
-  top: calc(var(--safe-top) + 64px);
+  top: calc(var(--safe-top) + 72px);
   right: 12px;
   width: 240px;
   border-radius: 20px;
@@ -1069,7 +1110,7 @@ const subtitle = computed(() =>
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
-  padding: calc(var(--safe-top) + 108px) 12px calc(var(--footer-h, 90px) + 16px);
+  padding: calc(var(--safe-top) + 124px) 12px calc(var(--footer-h, 90px) + 16px);
   display: flex;
   flex-direction: column;
 }
@@ -1341,7 +1382,10 @@ const subtitle = computed(() =>
   left: 0; right: 0; bottom: 0;
   z-index: 20;
   padding: 0 12px calc(var(--safe-bottom) + 10px);
+  transition: padding 0.15s;
 }
+/* 键盘弹起时底部横条区域被键盘盖住，不需要再留安全区 */
+.kb-open .input-footer { padding-bottom: 6px; }
 .input-capsule {
   border-radius: 26px;
   padding: 10px 10px 8px 16px;
@@ -1533,6 +1577,11 @@ const subtitle = computed(() =>
   max-width: 85%;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.vv-debug {
+  position: absolute; z-index: 70; left: 8px; top: calc(var(--safe-top) + 2px);
+  font: 11px var(--mono); background: rgba(0,0,0,0.6); color: #fff; padding: 2px 6px; border-radius: 6px;
 }
 
 /* ===== 动画 ===== */

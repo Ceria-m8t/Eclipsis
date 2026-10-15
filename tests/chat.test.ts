@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { splitBubbles, renderMd } from '../src/markdown'
 import { buildContext, generate, estimateTokens, timeLabel } from '../src/chat-engine'
-import { buildToolDefinitions, type McpServer } from '../src/mcp'
+import { buildToolDefinitions, resolveMcpUrl, type McpServer } from '../src/mcp'
 import type { ChatMessage, MessageVersion } from '../src/db'
 import { getSettings } from '../src/settings'
 
@@ -132,6 +132,15 @@ describe('buildToolDefinitions', () => {
     expect(defs.map(d => d.function.name)).toEqual(['search', 'noschema'])
     expect(defs[0]).toMatchObject({ type: 'function', function: { parameters: { type: 'object' } } })
     expect(defs[1].function.parameters).toEqual({ type: 'object', properties: {} })
+  })
+})
+
+describe('resolveMcpUrl', () => {
+  it('本机白名单端口走同源中转，其他保持原样', () => {
+    expect(resolveMcpUrl('http://150.158.175.90:18001/mcp')).toBe('/mcp-relay/18001/mcp')
+    expect(resolveMcpUrl('http://150.158.175.90:3456/mcp?x=1')).toBe('/mcp-relay/3456/mcp?x=1')
+    expect(resolveMcpUrl('http://150.158.175.90:3457/v1')).toBe('http://150.158.175.90:3457/v1')
+    expect(resolveMcpUrl('https://mcp.ericaxk.site/mcp')).toBe('https://mcp.ericaxk.site/mcp')
   })
 })
 

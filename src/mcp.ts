@@ -49,6 +49,22 @@ export function saveMcpServers(servers: McpServer[]): void {
 const sessions = new Map<string, string>()   // serverId -> Mcp-Session-Id
 let rpcId = 1
 
+// 本服务器上的 MCP 走同源中转（nginx /mcp-relay/端口/路径）：
+// 不跨域、不受 Safari 跨域限制影响，以后换成 HTTPS 也不会被浏览器拦截。
+// 这里的端口要和 nginx 白名单保持一致。
+const RELAY_HOSTS = ['150.158.175.90', '127.0.0.1', 'localhost']
+const RELAY_PORTS = ['18001', '18110', '3456']
+
+export function resolveMcpUrl(raw: string): string {
+  try {
+    const u = new URL(raw)
+    if (u.protocol === 'http:' && RELAY_PORTS.includes(u.port) && RELAY_HOSTS.includes(u.hostname)) {
+      return `/mcp-relay/${u.port}${u.pathname}${u.search}`
+    }
+  } catch {}
+  return raw
+}
+
 function headersFor(server: McpServer): Record<string, string> {
   const h: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -85,7 +101,14 @@ async function rpc(server: McpServer, method: string, params: any, notify = fals
   const body = notify
     ? { jsonrpc: '2.0', method, params }
     : { jsonrpc: '2.0', id, method, params }
-  const res = await fetch(server.url, { method: 'POST', headers: headersFor(server), body: JSON.stringify(body) })
+  const url = resolveMcpUrl(server.url)
+  let res: Response
+  try {
+    res = await fetch(url, { method: 'POST', headers: headersFor(server), body: JSON.stringify(body) })
+  } catch (e: any) {
+    // 浏览器层面的失败（Load failed / Failed to fetch）：请求没拿到任何响应
+    throw new Error(`连不上 ${server.name}（${url}）：${e?.message || e}`)
+  }
   const sid = res.headers.get('mcp-session-id')
   if (sid) sessions.set(server.id, sid)
   if (notify) {
