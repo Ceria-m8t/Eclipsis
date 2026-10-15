@@ -11,7 +11,8 @@ map $http_x_forwarded_proto $eclipsis_proto {
 }
 
 server {
-    listen 8090;
+    # 只给本机的 Cloudflare 隧道用，公网访问走 https://home.ericaxk.site
+    listen 127.0.0.1:8090;
     server_name _;
     root /opt/eclipsis/dist;
     index index.html;
