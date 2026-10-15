@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { getSettings, saveSettings } from '../settings'
+import { loadMcpServers, saveMcpServers, discoverTools, type McpServer } from '../mcp'
 
 const settings = ref(getSettings())
 
@@ -24,7 +25,257 @@ function clearImage(field: 'avatarUser' | 'avatarAI') {
 
 function save() {
   saveSettings(settings.value)
+  showToast('已保存')
 }
+
+// ===== Toast =====
+const toastMsg = ref('')
+const toastVisible = ref(false)
+let toastTimer: number | null = null
+
+function showToast(text: string) {
+  toastMsg.value = text
+  toastVisible.value = true
+  if (toastTimer) clearTimeout(toastTimer)
+  toastTimer = window.setTimeout(() => { toastVisible.value = false }, 1500)
+}
+
+// ===== Worldbook =====
+interface WorldbookEntry {
+  title: string
+  content: string
+  enabled: boolean
+  group: string
+  position: 'before' | 'after'
+  priority: number
+}
+
+interface GroupState {
+  collapsed: boolean
+  enabled: boolean
+}
+
+const WORLDBOOK_KEY = 'worldbook'
+const GROUPS_KEY = 'worldbook-groups'
+const worldbook = ref<WorldbookEntry[]>([])
+const groupStates = ref<Record<string, GroupState>>({})
+const expandedEntry = ref<number | null>(null)
+const newGroupName = ref('')
+const showAddGroup = ref(false)
+
+function loadWorldbook() {
+  try {
+    const saved = localStorage.getItem(WORLDBOOK_KEY)
+    if (saved) {
+      const parsed = JSON.parse(saved)
+      // Migrate old format entries
+      worldbook.value = parsed.map((e: any) => ({
+        title: e.title || '',
+        content: e.content || '',
+        enabled: e.enabled ?? true,
+        group: e.group || '默认',
+        position: e.position || 'after',
+        priority: e.priority ?? 50
+      }))
+    }
+  } catch {}
+  try {
+    const saved = localStorage.getItem(GROUPS_KEY)
+    if (saved) groupStates.value = JSON.parse(saved)
+  } catch {}
+}
+
+function saveWorldbook() {
+  localStorage.setItem(WORLDBOOK_KEY, JSON.stringify(worldbook.value))
+  localStorage.setItem(GROUPS_KEY, JSON.stringify(groupStates.value))
+}
+
+// Groups
+const groups = computed(() => {
+  const set = new Set<string>()
+  for (const e of worldbook.value) set.add(e.group)
+  return Array.from(set)
+})
+
+function getGroupState(name: string): GroupState {
+  if (!groupStates.value[name]) {
+    groupStates.value[name] = { collapsed: false, enabled: true }
+  }
+  return groupStates.value[name]
+}
+
+function toggleGroupCollapse(name: string) {
+  getGroupState(name).collapsed = !getGroupState(name).collapsed
+  saveWorldbook()
+}
+
+function toggleGroupEnabled(name: string) {
+  const state = getGroupState(name)
+  state.enabled = !state.enabled
+  // Sync entries
+  for (const e of worldbook.value) {
+    if (e.group === name) e.enabled = state.enabled
+  }
+  saveWorldbook()
+}
+
+function groupEntryCount(name: string): { enabled: number; total: number } {
+  let enabled = 0, total = 0
+  for (const e of worldbook.value) {
+    if (e.group === name) {
+      total++
+      if (e.enabled) enabled++
+    }
+  }
+  return { enabled, total }
+}
+
+function entriesInGroup(name: string): { entry: WorldbookEntry; index: number }[] {
+  const result: { entry: WorldbookEntry; index: number }[] = []
+  for (let i = 0; i < worldbook.value.length; i++) {
+    if (worldbook.value[i].group === name) {
+      result.push({ entry: worldbook.value[i], index: i })
+    }
+  }
+  // Sort by priority descending (higher = more important)
+  result.sort((a, b) => b.entry.priority - a.entry.priority)
+  return result
+}
+
+function addEntry(group: string) {
+  worldbook.value.push({
+    title: '新条目',
+    content: '',
+    enabled: getGroupState(group).enabled,
+    group,
+    position: 'after',
+    priority: 50
+  })
+  expandedEntry.value = worldbook.value.length - 1
+  saveWorldbook()
+}
+
+function addGroup() {
+  const name = newGroupName.value.trim()
+  if (!name) return
+  if (groups.value.includes(name)) {
+    showToast('分组已存在')
+    return
+  }
+  groupStates.value[name] = { collapsed: false, enabled: true }
+  // Add a default entry so the group shows up
+  worldbook.value.push({
+    title: '新条目',
+    content: '',
+    enabled: true,
+    group: name,
+    position: 'after',
+    priority: 50
+  })
+  expandedEntry.value = worldbook.value.length - 1
+  newGroupName.value = ''
+  showAddGroup.value = false
+  saveWorldbook()
+}
+
+function removeEntry(index: number) {
+  worldbook.value.splice(index, 1)
+  if (expandedEntry.value === index) expandedEntry.value = null
+  else if (expandedEntry.value !== null && expandedEntry.value > index) expandedEntry.value--
+  saveWorldbook()
+}
+
+function deleteGroup(name: string) {
+  worldbook.value = worldbook.value.filter(e => e.group !== name)
+  delete groupStates.value[name]
+  expandedEntry.value = null
+  saveWorldbook()
+}
+
+function toggleEntry(index: number) {
+  worldbook.value[index].enabled = !worldbook.value[index].enabled
+  saveWorldbook()
+}
+
+function toggleExpand(index: number) {
+  expandedEntry.value = expandedEntry.value === index ? null : index
+}
+
+function onEntryChange() {
+  saveWorldbook()
+}
+
+function moveEntryUp(index: number) {
+  const entry = worldbook.value[index]
+  entry.priority = Math.min(100, entry.priority + 10)
+  saveWorldbook()
+}
+
+function moveEntryDown(index: number) {
+  const entry = worldbook.value[index]
+  entry.priority = Math.max(0, entry.priority - 10)
+  saveWorldbook()
+}
+
+function positionLabel(pos: string): string {
+  return pos === 'before' ? '系统提示前' : '系统提示后'
+}
+
+function togglePosition(index: number) {
+  const entry = worldbook.value[index]
+  entry.position = entry.position === 'before' ? 'after' : 'before'
+  saveWorldbook()
+}
+
+// ===== MCP Servers =====
+const mcpList = ref<McpServer[]>(loadMcpServers())
+const mcpDiscovering = ref<string | null>(null)
+
+function addMcpServer() {
+  const id = 'mcp-' + Date.now()
+  mcpList.value.push({
+    id,
+    name: '新服务器',
+    url: '',
+    token: '',
+    enabled: true,
+    tools: []
+  })
+  saveMcpServers(mcpList.value)
+}
+
+function removeMcpServer(index: number) {
+  mcpList.value.splice(index, 1)
+  saveMcpServers(mcpList.value)
+}
+
+function toggleMcpServer(index: number) {
+  mcpList.value[index].enabled = !mcpList.value[index].enabled
+  saveMcpServers(mcpList.value)
+}
+
+function saveMcpList() {
+  saveMcpServers(mcpList.value)
+}
+
+async function refreshTools(index: number) {
+  const server = mcpList.value[index]
+  mcpDiscovering.value = server.id
+  try {
+    const tools = await discoverTools(server)
+    server.tools = tools
+    saveMcpServers(mcpList.value)
+    showToast(tools.length > 0 ? tools.length + ' 个工具已发现' : '未发现工具')
+  } catch (e: any) {
+    showToast('发现工具失败: ' + e.message)
+  } finally {
+    mcpDiscovering.value = null
+  }
+}
+
+onMounted(() => {
+  loadWorldbook()
+})
 </script>
 
 <template>
@@ -54,7 +305,7 @@ function save() {
         <div class="image-setting">
           <span class="image-label">我的头像</span>
           <div class="image-row">
-            < img :src="settings.avatarUser" class="avatar-preview" />
+            <img :src="settings.avatarUser" class="avatar-preview" />
             <label class="upload-btn">
               更换
               <input type="file" accept="image/*" hidden @change="handleImageUpload($event, 'avatarUser')" />
@@ -66,7 +317,7 @@ function save() {
         <div class="image-setting">
           <span class="image-label">小克头像</span>
           <div class="image-row">
-            < img :src="settings.avatarAI" class="avatar-preview" />
+            <img :src="settings.avatarAI" class="avatar-preview" />
             <label class="upload-btn">
               更换
               <input type="file" accept="image/*" hidden @change="handleImageUpload($event, 'avatarAI')" />
@@ -76,10 +327,163 @@ function save() {
         </div>
 
         <div class="actions">
-          <button class="primary" @click="save">保存</button>
+          <button class="primary" @click="save">保存连接 & 头像</button>
         </div>
+
+        <!-- MCP Servers -->
+        <div class="section-title">MCP 工具服务器</div>
+        <p class="worldbook-hint">连接 MCP 服务器后，聊天时可以调用外部工具（OB记忆、心潮、网易云等）。</p>
+
+        <div class="mcp-list">
+          <div v-for="(srv, i) in mcpList" :key="srv.id" class="mcp-item">
+            <div class="mcp-header">
+              <button
+                class="wb-group-toggle"
+                :class="{ enabled: srv.enabled }"
+                @click="toggleMcpServer(i)"
+              >{{ srv.enabled ? '●' : '○' }}</button>
+              <input
+                v-model="srv.name"
+                class="mcp-name-input"
+                placeholder="服务器名称"
+                @input="saveMcpList"
+              />
+              <button class="mcp-refresh" @click="refreshTools(i)" :disabled="mcpDiscovering === srv.id">
+                {{ mcpDiscovering === srv.id ? '...' : '🔄' }}
+              </button>
+              <button class="wb-group-del" @click="removeMcpServer(i)">🗑</button>
+            </div>
+            <div class="mcp-body">
+              <input
+                v-model="srv.url"
+                class="wb-title-input"
+                placeholder="MCP 端点 URL"
+                @input="saveMcpList"
+              />
+              <input
+                v-model="srv.token"
+                type="password"
+                class="wb-title-input"
+                placeholder="Bearer Token（可选）"
+                @input="saveMcpList"
+              />
+              <div v-if="srv.tools.length > 0" class="mcp-tools">
+                <span class="mcp-tools-label">{{ srv.tools.length }} 个工具:</span>
+                <span class="mcp-tool-tag" v-for="t in srv.tools" :key="t.name" :title="t.description">{{ t.name }}</span>
+              </div>
+              <div v-else class="mcp-tools-empty">未发现工具 — 填好 URL 后点 🔄</div>
+            </div>
+          </div>
+        </div>
+        <button class="wb-add" @click="addMcpServer">+ 添加 MCP 服务器</button>
+
+        <!-- Worldbook -->
+        <div class="section-title">世界书</div>
+        <p class="worldbook-hint">启用的条目按优先级排序后拼接到系统提示词前/后。数字越大越优先（token不够时先保高优先级）。</p>
+
+        <div class="worldbook-list">
+          <div v-for="groupName in groups" :key="groupName" class="wb-group">
+            <!-- Group header -->
+            <div class="wb-group-header">
+              <button
+                class="wb-group-toggle"
+                :class="{ enabled: getGroupState(groupName).enabled }"
+                @click.stop="toggleGroupEnabled(groupName)"
+                :title="getGroupState(groupName).enabled ? '禁用整组' : '启用整组'"
+              >{{ getGroupState(groupName).enabled ? '●' : '○' }}</button>
+              <span class="wb-group-name" @click="toggleGroupCollapse(groupName)">
+                {{ getGroupState(groupName).collapsed ? '▶' : '▼' }}
+                {{ groupName }}
+              </span>
+              <span class="wb-group-count">{{ groupEntryCount(groupName).enabled }}/{{ groupEntryCount(groupName).total }}</span>
+              <button class="wb-group-add" @click="addEntry(groupName)" title="添加条目">+</button>
+              <button class="wb-group-del" @click="deleteGroup(groupName)" title="删除整组">🗑</button>
+            </div>
+
+            <!-- Entries -->
+            <div v-if="!getGroupState(groupName).collapsed" class="wb-group-body">
+              <div v-for="{ entry, index } in entriesInGroup(groupName)" :key="index" class="wb-entry">
+                <div class="wb-header" @click="toggleExpand(index)">
+                  <button
+                    class="wb-toggle"
+                    :class="{ enabled: entry.enabled }"
+                    @click.stop="toggleEntry(index)"
+                  >{{ entry.enabled ? '●' : '○' }}</button>
+                  <span class="wb-title-text">{{ entry.title || '(无标题)' }}</span>
+                  <span class="wb-position-tag" :class="entry.position">{{ positionLabel(entry.position) }}</span>
+                  <span class="wb-priority">P{{ entry.priority }}</span>
+                  <span class="wb-expand">{{ expandedEntry === index ? '▼' : '▶' }}</span>
+                </div>
+
+                <div v-if="expandedEntry === index" class="wb-body">
+                  <input
+                    v-model="entry.title"
+                    class="wb-title-input"
+                    placeholder="条目标题"
+                    @input="onEntryChange"
+                  />
+
+                  <div class="wb-meta-row">
+                    <div class="wb-meta-item">
+                      <span class="wb-meta-label">注入位置</span>
+                      <button class="wb-meta-btn" @click="togglePosition(index)">
+                        {{ positionLabel(entry.position) }}
+                      </button>
+                    </div>
+                    <div class="wb-meta-item">
+                      <span class="wb-meta-label">优先级</span>
+                      <div class="wb-priority-ctrl">
+                        <button @click="moveEntryDown(index)">−</button>
+                        <input
+                          type="number"
+                          v-model.number="entry.priority"
+                          min="0"
+                          max="100"
+                          @input="onEntryChange"
+                          class="wb-priority-input"
+                        />
+                        <button @click="moveEntryUp(index)">+</button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <textarea
+                    v-model="entry.content"
+                    class="wb-content-input"
+                    placeholder="条目内容"
+                    rows="8"
+                    @input="onEntryChange"
+                  ></textarea>
+                  <div class="wb-actions">
+                    <span class="wb-char-count">{{ entry.content.length }} 字</span>
+                    <button class="wb-delete" @click="removeEntry(index)">删除</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Add group -->
+        <div v-if="showAddGroup" class="wb-add-group-form">
+          <input
+            v-model="newGroupName"
+            class="wb-title-input"
+            placeholder="新分组名称"
+            @keydown.enter="addGroup"
+          />
+          <div class="wb-add-group-btns">
+            <button class="wb-add-group-confirm" @click="addGroup">确定</button>
+            <button class="wb-add-group-cancel" @click="showAddGroup = false">取消</button>
+          </div>
+        </div>
+        <button v-else class="wb-add" @click="showAddGroup = true">+ 新建分组</button>
       </div>
     </main>
+
+    <transition name="fade">
+      <div v-if="toastVisible" class="toast">{{ toastMsg }}</div>
+    </transition>
   </div>
 </template>
 
@@ -89,127 +493,284 @@ function save() {
   flex-direction: column;
   height: 100%;
   width: 100%;
-  background: #0a0a0f;
-  color: #e0e0e0;
+  background: #f5f3f0;
+  color: rgba(0, 0, 0, 0.75);
   overflow-y: auto;
 }
 
-.content {
-  flex: 1;
-  padding: 24px;
-}
-
-.form {
-  max-width: 400px;
-  margin: 0 auto;
-}
+.content { flex: 1; padding: 24px; padding-bottom: 60px; }
+.form { max-width: 500px; margin: 0 auto; }
 
 .section-title {
-  font-size: 13px;
-  color: #888;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  margin-top: 24px;
-  margin-bottom: 16px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid #1a1a2e;
+  font-size: 13px; color: rgba(0, 0, 0, 0.4); text-transform: uppercase;
+  letter-spacing: 1px; margin-top: 24px; margin-bottom: 16px;
+  padding-bottom: 8px; border-bottom: 1px solid rgba(0, 0, 0, 0.08);
 }
-
 .section-title:first-child { margin-top: 0; }
 
-label {
-  display: block;
-  margin-bottom: 20px;
-  font-size: 14px;
-  color: #c8c8d0;
-}
+label { display: block; margin-bottom: 20px; font-size: 14px; color: rgba(0, 0, 0, 0.6); }
 
 label input[type="text"],
 label input[type="password"],
 label input:not([type]) {
-  display: block;
-  width: 100%;
-  margin-top: 8px;
-  padding: 10px 14px;
-  border: 1px solid #2a2a4a;
-  border-radius: 8px;
-  background: #12121e;
-  color: #e0e0e0;
-  font-size: 15px;
-  outline: none;
-  box-sizing: border-box;
+  display: block; width: 100%; margin-top: 8px; padding: 10px 14px;
+  border: 1px solid rgba(0, 0, 0, 0.1); border-radius: 8px; background: rgba(255, 255, 255, 0.7);
+  color: rgba(0, 0, 0, 0.8); font-size: 15px; outline: none; box-sizing: border-box;
 }
+label input:focus { border-color: rgba(0, 0, 0, 0.25); }
 
-label input:focus { border-color: #4a4a8a; }
-
-.hint {
-  display: block;
-  margin-top: 4px;
-  font-size: 12px;
-  color: #666;
-}
+.hint { display: block; margin-top: 4px; font-size: 12px; color: rgba(0, 0, 0, 0.35); }
 
 .image-setting { margin-bottom: 20px; }
-
-.image-label {
-  display: block;
-  font-size: 14px;
-  color: #c8c8d0;
-  margin-bottom: 8px;
-}
-
-.image-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
+.image-label { display: block; font-size: 14px; color: rgba(0, 0, 0, 0.6); margin-bottom: 8px; }
+.image-row { display: flex; align-items: center; gap: 10px; }
 
 .avatar-preview {
-  width: 48px;
-  height: 48px;
-  border-radius: 50%;
-  object-fit: cover;
-  border: 2px solid #2a2a4a;
+  width: 48px; height: 48px; border-radius: 50%;
+  object-fit: cover; border: 2px solid rgba(0, 0, 0, 0.08);
 }
 
 .upload-btn {
-  padding: 6px 14px;
-  background: #2a2a4a;
-  border-radius: 6px;
-  font-size: 12px;
-  color: #c8c8d0;
-  cursor: pointer;
+  padding: 6px 14px; background: rgba(0, 0, 0, 0.05); border-radius: 6px;
+  font-size: 12px; color: rgba(0, 0, 0, 0.5); cursor: pointer;
+  border: 1px solid rgba(0, 0, 0, 0.08);
 }
-
-.upload-btn:hover { background: #3a3a6a; }
+.upload-btn:hover { background: rgba(0, 0, 0, 0.08); }
 
 .reset-btn {
-  padding: 6px 10px;
-  background: none;
-  border: 1px solid #2a2a4a;
-  border-radius: 6px;
-  font-size: 12px;
-  color: #888;
-  cursor: pointer;
+  padding: 6px 10px; background: none; border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 6px; font-size: 12px; color: rgba(0, 0, 0, 0.35); cursor: pointer;
 }
+.reset-btn:hover { color: rgba(0, 0, 0, 0.6); }
 
-.reset-btn:hover { color: #c8c8d0; }
-
-.actions {
-  margin-top: 32px;
-  padding-bottom: 24px;
-}
+.actions { margin-top: 32px; }
 
 .primary {
-  width: 100%;
-  padding: 12px;
-  border: none;
-  border-radius: 8px;
-  font-size: 15px;
-  cursor: pointer;
-  background: #3a3a6a;
-  color: #e0e0e0;
+  width: 100%; padding: 12px; border: none; border-radius: 8px;
+  font-size: 15px; cursor: pointer; background: rgba(0, 0, 0, 0.08); color: rgba(0, 0, 0, 0.7);
+}
+.primary:hover { background: rgba(0, 0, 0, 0.12); }
+
+/* ===== Worldbook ===== */
+.worldbook-hint { font-size: 12px; color: rgba(0, 0, 0, 0.35); margin-bottom: 16px; }
+.worldbook-list { display: flex; flex-direction: column; gap: 12px; margin-bottom: 12px; }
+
+/* Group */
+.wb-group {
+  border: 1px solid rgba(0, 0, 0, 0.08); border-radius: 10px;
+  overflow: hidden; background: rgba(255, 255, 255, 0.5);
 }
 
-.primary:hover { background: #4a4a8a; }
+.wb-group-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px; background: rgba(255, 255, 255, 0.6);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.wb-group-toggle {
+  background: none; border: none; font-size: 14px;
+  cursor: pointer; padding: 0 4px; color: rgba(0, 0, 0, 0.25); flex-shrink: 0;
+}
+.wb-group-toggle.enabled { color: rgba(0, 0, 0, 0.5); }
+
+.wb-group-name {
+  flex: 1; font-size: 14px; font-weight: 500;
+  color: rgba(0, 0, 0, 0.7); cursor: pointer; user-select: none;
+}
+
+.wb-group-count { font-size: 11px; color: rgba(0, 0, 0, 0.35); }
+
+.wb-group-add {
+  background: none; border: 1px solid rgba(0, 0, 0, 0.1); border-radius: 4px;
+  color: rgba(0, 0, 0, 0.35); font-size: 14px; width: 24px; height: 24px;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+}
+.wb-group-add:hover { color: rgba(0, 0, 0, 0.6); border-color: rgba(0, 0, 0, 0.2); }
+
+.wb-group-del {
+  background: none; border: none; font-size: 14px;
+  cursor: pointer; color: rgba(0, 0, 0, 0.25); padding: 0 4px;
+}
+.wb-group-del:hover { color: rgba(200, 60, 60, 0.7); }
+
+.wb-group-body { padding: 4px; }
+
+/* Entry */
+.wb-entry {
+  border: 1px solid rgba(0, 0, 0, 0.04); border-radius: 6px;
+  margin: 2px 0; background: rgba(255, 255, 255, 0.4);
+}
+
+.wb-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px; cursor: pointer; user-select: none;
+}
+.wb-header:hover { background: rgba(0, 0, 0, 0.02); }
+
+.wb-toggle {
+  background: none; border: none; font-size: 12px;
+  cursor: pointer; padding: 0 2px; color: rgba(0, 0, 0, 0.2); flex-shrink: 0;
+}
+.wb-toggle.enabled { color: rgba(0, 0, 0, 0.5); }
+
+.wb-title-text {
+  flex: 1; font-size: 13px; color: rgba(0, 0, 0, 0.6);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.wb-position-tag {
+  font-size: 10px; padding: 1px 6px; border-radius: 3px;
+  flex-shrink: 0; letter-spacing: 0.5px;
+}
+.wb-position-tag.before {
+  background: rgba(180, 120, 60, 0.1); color: rgba(160, 110, 50, 0.8);
+  border: 1px solid rgba(180, 120, 60, 0.2);
+}
+.wb-position-tag.after {
+  background: rgba(80, 100, 180, 0.08); color: rgba(70, 90, 160, 0.7);
+  border: 1px solid rgba(80, 100, 180, 0.15);
+}
+
+.wb-priority { font-size: 10px; color: rgba(0, 0, 0, 0.3); flex-shrink: 0; font-family: monospace; }
+.wb-expand { font-size: 9px; color: rgba(0, 0, 0, 0.25); flex-shrink: 0; }
+
+.wb-body {
+  padding: 4px 10px 10px; display: flex; flex-direction: column; gap: 8px;
+}
+
+.wb-title-input {
+  width: 100%; padding: 8px 10px; border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 6px; background: rgba(255, 255, 255, 0.8); color: rgba(0, 0, 0, 0.8);
+  font-size: 14px; outline: none; box-sizing: border-box;
+}
+.wb-title-input:focus { border-color: rgba(0, 0, 0, 0.25); }
+
+.wb-meta-row { display: flex; gap: 12px; flex-wrap: wrap; }
+
+.wb-meta-item { display: flex; flex-direction: column; gap: 4px; }
+.wb-meta-label { font-size: 11px; color: rgba(0, 0, 0, 0.35); }
+
+.wb-meta-btn {
+  padding: 4px 10px; background: rgba(0, 0, 0, 0.03);
+  border: 1px solid rgba(0, 0, 0, 0.1); border-radius: 4px;
+  color: rgba(0, 0, 0, 0.6); font-size: 12px; cursor: pointer;
+}
+.wb-meta-btn:hover { border-color: rgba(0, 0, 0, 0.2); }
+
+.wb-priority-ctrl {
+  display: flex; align-items: center; gap: 2px;
+}
+.wb-priority-ctrl button {
+  width: 26px; height: 26px; background: rgba(0, 0, 0, 0.03);
+  border: 1px solid rgba(0, 0, 0, 0.1); border-radius: 4px;
+  color: rgba(0, 0, 0, 0.5); font-size: 14px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+.wb-priority-ctrl button:hover { border-color: rgba(0, 0, 0, 0.2); }
+
+.wb-priority-input {
+  width: 44px; text-align: center; padding: 4px;
+  background: rgba(255, 255, 255, 0.8); border: 1px solid rgba(0, 0, 0, 0.1); border-radius: 4px;
+  color: rgba(0, 0, 0, 0.7); font-size: 13px; font-family: monospace;
+  outline: none; box-sizing: border-box;
+  -moz-appearance: textfield;
+}
+.wb-priority-input::-webkit-inner-spin-button,
+.wb-priority-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+
+.wb-content-input {
+  width: 100%; padding: 8px 10px; border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 6px; background: rgba(255, 255, 255, 0.8); color: rgba(0, 0, 0, 0.75);
+  font-size: 13px; font-family: 'Menlo', 'Consolas', monospace;
+  line-height: 1.5; outline: none; resize: vertical;
+  box-sizing: border-box; min-height: 120px;
+}
+.wb-content-input:focus { border-color: rgba(0, 0, 0, 0.25); }
+
+.wb-actions { display: flex; align-items: center; justify-content: space-between; }
+.wb-char-count { font-size: 11px; color: rgba(0, 0, 0, 0.3); }
+
+.wb-delete {
+  padding: 4px 12px; background: none;
+  border: 1px solid rgba(200, 60, 60, 0.2); border-radius: 6px;
+  color: rgba(200, 60, 60, 0.6); font-size: 12px; cursor: pointer;
+}
+.wb-delete:hover { background: rgba(200, 60, 60, 0.05); color: rgba(200, 60, 60, 0.8); }
+
+/* Add group */
+.wb-add {
+  width: 100%; padding: 10px; background: rgba(0, 0, 0, 0.02);
+  border: 1px dashed rgba(0, 0, 0, 0.12); border-radius: 8px;
+  color: rgba(0, 0, 0, 0.3); font-size: 13px; cursor: pointer; margin-bottom: 32px;
+}
+.wb-add:hover { background: rgba(0, 0, 0, 0.04); color: rgba(0, 0, 0, 0.5); }
+
+.wb-add-group-form {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 12px; border: 1px dashed rgba(0, 0, 0, 0.12);
+  border-radius: 8px; margin-bottom: 32px;
+}
+.wb-add-group-btns { display: flex; gap: 8px; }
+.wb-add-group-confirm {
+  flex: 1; padding: 8px; background: rgba(0, 0, 0, 0.08); border: none;
+  border-radius: 6px; color: rgba(0, 0, 0, 0.6); font-size: 13px; cursor: pointer;
+}
+.wb-add-group-cancel {
+  flex: 1; padding: 8px; background: none; border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 6px; color: rgba(0, 0, 0, 0.4); font-size: 13px; cursor: pointer;
+}
+
+/* MCP */
+.mcp-list { display: flex; flex-direction: column; gap: 12px; margin-bottom: 12px; }
+
+.mcp-item {
+  border: 1px solid rgba(0, 0, 0, 0.08); border-radius: 10px;
+  overflow: hidden; background: rgba(255, 255, 255, 0.5);
+}
+
+.mcp-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px; background: rgba(255, 255, 255, 0.6);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.mcp-name-input {
+  flex: 1; padding: 4px 8px; border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 4px; background: rgba(255, 255, 255, 0.7); color: rgba(0, 0, 0, 0.7);
+  font-size: 14px; font-weight: 500; outline: none;
+}
+.mcp-name-input:focus { border-color: rgba(0, 0, 0, 0.2); }
+
+.mcp-refresh {
+  background: none; border: 1px solid rgba(0, 0, 0, 0.1); border-radius: 4px;
+  color: rgba(0, 0, 0, 0.4); font-size: 14px; width: 28px; height: 28px;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+}
+.mcp-refresh:hover { color: rgba(0, 0, 0, 0.6); border-color: rgba(0, 0, 0, 0.2); }
+.mcp-refresh:disabled { opacity: 0.4; cursor: wait; }
+
+.mcp-body { padding: 8px 12px 12px; display: flex; flex-direction: column; gap: 8px; }
+
+.mcp-tools { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.mcp-tools-label { font-size: 11px; color: rgba(0, 0, 0, 0.4); margin-right: 4px; }
+
+.mcp-tool-tag {
+  font-size: 10px; padding: 2px 6px; border-radius: 3px;
+  background: rgba(0, 0, 0, 0.04); color: rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.mcp-tools-empty { font-size: 12px; color: rgba(0, 0, 0, 0.3); }
+
+/* Toast */
+.toast {
+  position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
+  background: rgba(255, 255, 255, 0.92); color: rgba(0, 0, 0, 0.7);
+  padding: 8px 20px; border-radius: 20px; font-size: 13px;
+  z-index: 100; pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1); border: 1px solid rgba(0,0,0,0.06);
+}
+.fade-enter-active, .fade-leave-active { transition: opacity 0.3s; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
 </style>

@@ -50,7 +50,7 @@ const isHome = () => route.path !== '/chat' && route.path !== '/settings'
   height: 100dvh;
   display: flex;
   flex-direction: column;
-  background: #1a1a2e;
+  background: #f5f3f0;
 }
 
 .room-area {
@@ -64,8 +64,10 @@ const isHome = () => route.path !== '/chat' && route.path !== '/settings'
   justify-content: space-around;
   align-items: center;
   height: 60px;
-  background: rgba(10, 10, 20, 0.95);
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
   padding-bottom: env(safe-area-inset-bottom);
 }
 
@@ -76,7 +78,7 @@ const isHome = () => route.path !== '/chat' && route.path !== '/settings'
   gap: 2px;
   background: none;
   border: none;
-  color: rgba(255, 255, 255, 0.4);
+  color: rgba(0, 0, 0, 0.3);
   font-size: 12px;
   cursor: pointer;
   padding: 6px 16px;
@@ -84,7 +86,7 @@ const isHome = () => route.path !== '/chat' && route.path !== '/settings'
 }
 
 .nav-btn.active {
-  color: rgba(255, 255, 255, 0.9);
+  color: rgba(0, 0, 0, 0.75);
 }
 
 .nav-icon {
