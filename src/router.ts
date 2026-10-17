@@ -3,9 +3,6 @@ import { createRouter, createWebHistory } from 'vue-router'
 const router = createRouter({
   history: createWebHistory(),
   routes: [
-    // 聊天页全屏，不带底部导航（输入栏是悬浮的，和底栏会打架）
-    { path: '/chat', component: () => import('./views/Chat.vue') },
-    { path: '/settings/prompt', component: () => import('./views/PromptEditor.vue') },
     {
       path: '/',
       component: () => import('./views/Home.vue'),
@@ -19,6 +16,9 @@ const router = createRouter({
         { path: 'rooftop', component: () => import('./views/rooms/Rooftop.vue') },
         { path: 'basement', component: () => import('./views/rooms/Basement.vue') },
         { path: 'settings', component: () => import('./views/Settings.vue') },
+        // 聊天、提示词编辑也在外壳里，底栏常驻
+        { path: 'chat', component: () => import('./views/Chat.vue') },
+        { path: 'settings/prompt', component: () => import('./views/PromptEditor.vue') },
       ]
     }
   ]

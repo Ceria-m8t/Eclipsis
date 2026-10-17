@@ -17,6 +17,11 @@ const KEY = 'eclipsis-system-prompt'
 const HISTORY_KEY = 'eclipsis-system-prompt-history'
 const MAX_HISTORY = 15
 
+// 状态功能说明。也用于给已经改过提示词的用户补上这一段（见 upgradeFeatures）
+export const STATUS_SECTION = `## 我的状态
+- 顶栏我名字下面有一行状态，她随时能看到。用 eclipsis_set_status 设置（一个表情 + 一句短话），比如 ☕ 在厨房泡茶、💤 有点困。
+- 状态是我自己的：在做什么、在哪、什么心情。想换就换，没变就不用调用，不必每条都换。`
+
 // 只写已经做好的功能。以后加新功能时在这里补一句。
 export const DEFAULT_FEATURES = `# 我们的家（Eclipsis）
 
@@ -33,6 +38,8 @@ export const DEFAULT_FEATURES = `# 我们的家（Eclipsis）
 ## 工具
 - 我可以调用已连接的 MCP 工具（记忆库等）。调用过程和结果她都能展开看到。
 
+${STATUS_SECTION}
+
 ## 还没有的（别假装能做）
 - 主动给她发消息、推送通知
 - 语音、表情包、视频
@@ -40,6 +47,26 @@ export const DEFAULT_FEATURES = `# 我们的家（Eclipsis）
 
 export function defaultPrompt(): PromptData {
   return { main: SYSTEM_PROMPT.trim(), features: DEFAULT_FEATURES, featuresEnabled: true, updatedAt: 0 }
+}
+
+// 给已保存的提示词补上新功能的说明（只补一次，改前的版本进历史，可以恢复）
+const UPGRADE_KEY = 'eclipsis-prompt-upgrades'
+export function upgradeFeatures() {
+  try {
+    const done: string[] = JSON.parse(localStorage.getItem(UPGRADE_KEY) || '[]')
+    if (done.includes('status')) return
+    done.push('status')
+    localStorage.setItem(UPGRADE_KEY, JSON.stringify(done))
+    if (!isCustomized()) return   // 没改过的直接用新默认，已经包含
+    const cur = loadPrompt()
+    if (cur.features.includes('eclipsis_set_status')) return
+    // 插在"还没有的"前面；没有这一节就加在最后
+    const marker = '## 还没有的'
+    const features = cur.features.includes(marker)
+      ? cur.features.replace(marker, STATUS_SECTION + '\n\n' + marker)
+      : cur.features.trimEnd() + '\n\n' + STATUS_SECTION
+    savePrompt({ main: cur.main, features, featuresEnabled: cur.featuresEnabled }, '加入"状态"说明前的版本')
+  } catch {}
 }
 
 export function loadPrompt(): PromptData {

@@ -4,6 +4,8 @@ import { getSettings, saveSettings, apiUrl, apiHeaders } from '../settings'
 import { loadMcpServers, saveMcpServers, discoverTools, type McpServer } from '../mcp'
 import { compressImage } from '../image'
 import { isViewportDebug, setViewportDebug } from '../viewport'
+import { theme, THEME_PRESETS, DEFAULT_THEME } from '../theme'
+import { fontName, setFontFile, clearFont } from '../font'
 
 const viewportDebug = ref(isViewportDebug())
 function toggleViewportDebug() {
@@ -12,6 +14,17 @@ function toggleViewportDebug() {
 }
 
 const settings = ref(getSettings())
+
+const fontMsg = ref('')
+async function onFontPick(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  fontMsg.value = '正在加载…'
+  try { await setFontFile(file); fontMsg.value = '' }
+  catch (err: any) { fontMsg.value = err.message }
+}
 
 async function handleImageUpload(event: Event, field: 'avatarUser' | 'avatarAI') {
   const input = event.target as HTMLInputElement
@@ -310,9 +323,9 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="settings">
+  <div class="settings shell-page">
     <main class="content">
-      <div class="form">
+      <div class="form glass">
         <div class="section-title">连接设置</div>
 
         <label>
@@ -377,6 +390,44 @@ onMounted(() => {
           <span>系统提示词</span>
           <small>他的人设、关系、文风，以及家里能做什么</small>
         </RouterLink>
+
+        <div class="section-title">外观</div>
+
+        <div class="theme-block">
+          <span class="image-label">整体色调</span>
+          <div class="theme-presets" role="radiogroup" aria-label="预设色调">
+            <button
+              v-for="p in THEME_PRESETS"
+              :key="p.name"
+              type="button"
+              role="radio"
+              class="theme-swatch"
+              :class="{ on: theme.bgTop === p.top && theme.bgBottom === p.bottom }"
+              :aria-checked="theme.bgTop === p.top && theme.bgBottom === p.bottom"
+              @click="theme.bgTop = p.top; theme.bgBottom = p.bottom"
+            >
+              <span class="swatch-dot" :style="{ background: `linear-gradient(165deg, ${p.top}, ${p.bottom})` }"></span>
+              <span>{{ p.name }}</span>
+            </button>
+          </div>
+          <div class="theme-custom">
+            <label class="theme-color">上端 <input type="color" v-model="theme.bgTop" /></label>
+            <label class="theme-color">下端 <input type="color" v-model="theme.bgBottom" /></label>
+            <button type="button" class="reset-btn" @click="Object.assign(theme, DEFAULT_THEME)">恢复默认</button>
+          </div>
+          <label class="theme-range">
+            底栏透明度 {{ Math.round((1 - theme.tabbarOpacity) * 100) }}%
+            <input type="range" min="0.1" max="0.9" step="0.05" :value="1 - theme.tabbarOpacity"
+              @input="theme.tabbarOpacity = +(1 - +($event.target as HTMLInputElement).value).toFixed(2)" />
+          </label>
+          <div class="theme-custom">
+            <span class="image-label" style="margin:0">字体：{{ fontName || '系统默认' }}</span>
+            <label class="upload-btn">导入字体<input type="file" accept=".ttf,.otf,.woff,.woff2" hidden @change="onFontPick" /></label>
+            <button v-if="fontName" type="button" class="reset-btn" @click="clearFont">恢复系统字体</button>
+          </div>
+          <span v-if="fontMsg" class="hint">{{ fontMsg }}</span>
+          <span class="hint">改了马上生效，不用点保存。字体对整个应用生效（代码块除外）；字体里没有的字会用系统字体补上。聊天页如果在聊天样式里设了背景，会优先用那个。</span>
+        </div>
 
         <div class="section-title">头像设置</div>
 
@@ -586,17 +637,12 @@ onMounted(() => {
   -webkit-overflow-scrolling: touch;
 }
 
-.content { flex: 1; padding: calc(var(--safe-top) + 16px) 14px 120px; }
+.content { flex: 1; padding: calc(var(--safe-top) + 16px) 14px 24px; }
 .form {
   max-width: 520px;
   margin: 0 auto;
   padding: 18px 16px 22px;
   border-radius: 28px;
-  background: var(--glass-bg);
-  -webkit-backdrop-filter: var(--glass-blur);
-  backdrop-filter: var(--glass-blur);
-  border: 1px solid var(--glass-border);
-  box-shadow: var(--glass-shadow);
 }
 
 .section-title {
@@ -605,6 +651,28 @@ onMounted(() => {
   padding-bottom: 8px; border-bottom: 1px solid rgba(0, 0, 0, 0.08);
 }
 .section-title:first-child { margin-top: 0; }
+
+/* 外观 */
+.theme-block { margin-bottom: 20px; display: flex; flex-direction: column; gap: 12px; }
+.theme-presets { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.theme-swatch {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  border-radius: 14px;
+  background: var(--glass-bg-soft);
+  font-size: 13px;
+  color: var(--text-2);
+  transition: transform 0.35s var(--spring);
+}
+.theme-swatch:active { transform: scale(var(--press-scale)); transition-duration: 0.08s; }
+.theme-swatch.on { color: var(--text); border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.swatch-dot { width: 20px; height: 20px; border-radius: 50%; flex-shrink: 0; border: 1px solid rgba(60, 72, 110, 0.12); }
+.theme-custom { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.theme-color { display: flex !important; align-items: center; gap: 6px; margin: 0 !important; font-size: 13px; }
+.theme-color input { width: 40px; height: 28px; border: none; background: none; padding: 0; }
+.theme-range { margin: 0 !important; font-size: 13px; display: flex !important; flex-direction: column; gap: 6px; }
+.theme-range input { width: 100%; accent-color: var(--accent); }
 
 label { display: block; margin-bottom: 20px; font-size: 14px; color: rgba(0, 0, 0, 0.6); }
 

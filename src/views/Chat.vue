@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
-import { useRouter } from 'vue-router'
 import Icon from '../components/Icon.vue'
 import { getSettings } from '../settings'
 import { loadMcpServers } from '../mcp'
@@ -9,13 +8,15 @@ import { generate, finalizeVersion, buildContext, type BuiltContext } from '../c
 import { compressImage } from '../image'
 import { copyText, hexToRgba, hhmm, dividerTime, downloadText } from '../utils'
 import { keyboardOpen } from '../viewport'
+import { pageBackdrop } from '../theme'
+import { aiStatus } from '../status'
+import { fontName, setFontFile, clearFont } from '../font'
 import {
   type ChatMessage, type MessageVersion,
   getAllMessages, putMessage, deleteMessage as dbDelete, clearMessages,
   migrateFromLocalStorage, requestPersist, exportJson, importJson, newId
 } from '../db'
 
-const router = useRouter()
 const settings = ref(getSettings())
 
 // ================= 聊天样式 =================
@@ -29,8 +30,6 @@ interface ChatStyle {
   headerOpacity: number   // 顶栏玻璃不透明度
   footerOpacity: number   // 输入栏玻璃不透明度
   fontSize: number
-  fontFamily: string
-  fontData: string     // 自定义字体的 dataURL，刷新后重新加载
   customCSS: string
 }
 
@@ -45,15 +44,18 @@ const DEFAULT_STYLE: ChatStyle = {
   headerOpacity: 0.42,
   footerOpacity: 0.68,
   fontSize: 15,
-  fontFamily: '',
-  fontData: '',
   customCSS: ''
 }
 
 function loadStyle(): ChatStyle {
   try {
     const v2 = localStorage.getItem(STYLE_KEY)
-    if (v2) return { ...DEFAULT_STYLE, ...JSON.parse(v2) }
+    if (v2) {
+      // 字体已经改成全局的（font.ts），这里不再带着
+      const o = JSON.parse(v2)
+      delete o.fontFamily; delete o.fontData
+      return { ...DEFAULT_STYLE, ...o }
+    }
     // 旧版：只沿用背景图、字体、自定义 CSS，气泡配色换成新的玻璃默认值
     const v1 = localStorage.getItem('eclipsis-chat-style')
     if (v1) {
@@ -65,7 +67,6 @@ function loadStyle(): ChatStyle {
 }
 
 const chatStyle = ref<ChatStyle>(loadStyle())
-const showStylePanel = ref(false)
 let customStyleEl: HTMLStyleElement | null = null
 
 function saveStyle() {
@@ -87,29 +88,15 @@ function applyCustomCSS() {
   customStyleEl.textContent = chatStyle.value.customCSS
 }
 
-async function loadCustomFont() {
-  const { fontFamily, fontData } = chatStyle.value
-  if (!fontFamily || !fontData) return
-  try {
-    const face = new FontFace(fontFamily, `url(${fontData})`)
-    document.fonts.add(await face.load())
-  } catch {}
-}
-
-function handleFontUpload(e: Event) {
+// 字体是全局的：这里导入后，顶栏、底栏、设置页也一起换
+async function handleFontUpload(e: Event) {
   const input = e.target as HTMLInputElement
   const file = input.files?.[0]
   input.value = ''
   if (!file) return
-  if (file.size > 3 * 1024 * 1024) { toast('字体文件超过 3MB，存不下'); return }
-  const name = 'custom-' + file.name.replace(/\.[^.]+$/, '').replace(/[^\w-]/g, '')
-  const reader = new FileReader()
-  reader.onload = async () => {
-    chatStyle.value.fontFamily = name
-    chatStyle.value.fontData = reader.result as string
-    await loadCustomFont()
-  }
-  reader.readAsDataURL(file)
+  toast('正在加载字体…')
+  try { await setFontFile(file); toast('字体已换好，全局生效') }
+  catch (err: any) { toast(err.message) }
 }
 
 async function handleBgUpload(e: Event) {
@@ -129,17 +116,23 @@ const pageStyle = computed(() => {
     '--header-bg': `rgba(255, 255, 255, ${chatStyle.value.headerOpacity})`,
     '--footer-bg': `rgba(255, 255, 255, ${chatStyle.value.footerOpacity})`,
   }
-  if (chatStyle.value.fontFamily) s['--bubble-font'] = `'${chatStyle.value.fontFamily}', var(--sans)`
   s['--footer-h'] = footerH.value + 'px'
   return s
 })
 
-const bgStyle = computed(() => {
-  const s: Record<string, string> = {}
-  if (chatStyle.value.bgColor) s.background = chatStyle.value.bgColor
-  if (chatStyle.value.bgImage) s.backgroundImage = `url(${chatStyle.value.bgImage})`
+// 聊天背景画在外壳的背景层（铺到底栏下面），没设置时用全局色调
+const bgStyle = computed<Record<string, string> | null>(() => {
+  const { bgColor, bgImage } = chatStyle.value
+  if (!bgColor && !bgImage) return null
+  const s: Record<string, string> = { background: bgColor || 'var(--page-bg)' }
+  if (bgImage) {
+    s.backgroundImage = `url(${bgImage})`
+    s.backgroundSize = 'cover'
+    s.backgroundPosition = 'center'
+  }
   return s
 })
+watch(bgStyle, v => { pageBackdrop.value = v }, { immediate: true })
 
 // ================= 消息 =================
 const messages = ref<ChatMessage[]>([])
@@ -279,6 +272,7 @@ async function onSendButton() {
 }
 
 async function handleImageSelect(e: Event) {
+  showPlus.value = false
   const input = e.target as HTMLInputElement
   const files = Array.from(input.files || [])
   input.value = ''
@@ -363,6 +357,58 @@ function removeLocal(m: ChatMessage) {
   const i = messages.value.indexOf(m)
   if (i >= 0) messages.value.splice(i, 1)
   dbDelete(m.id).catch(() => {})
+}
+
+// ================= 输入栏 + 功能面板 =================
+// 以后加功能只改这个列表：ready=false 的先灰着显示"开发中"
+interface PlusItem { key: string; label: string; icon: string; ready: boolean; run?: () => void }
+const showPlus = ref(false)
+const plusPage = ref(0)
+const imageInput = ref<HTMLInputElement | null>(null)
+const cameraInput = ref<HTMLInputElement | null>(null)
+const plusItems = computed<PlusItem[]>(() => [
+  // 第一页：聊天里常用
+  { key: 'image', label: '图片', icon: 'image', ready: true, run: () => imageInput.value?.click() },
+  { key: 'camera', label: '拍照', icon: 'camera', ready: true, run: () => cameraInput.value?.click() },
+  { key: 'sticker', label: '表情包', icon: 'smile', ready: false },
+  { key: 'voice', label: '语音', icon: 'mic', ready: false },
+  { key: 'video', label: '视频', icon: 'video', ready: false },
+  { key: 'file', label: '文件', icon: 'file', ready: false },
+  { key: 'call', label: '通话', icon: 'phone', ready: false },
+  { key: 'regen', label: '重新生成', icon: 'refresh', ready: !generating.value && !!lastAssistant.value, run: regenerateLast },
+  // 第二页：管理（原来侧栏里的）
+  { key: 'style', label: '聊天样式', icon: 'palette', ready: true, run: () => { showPlus.value = false; showStylePanel.value = true } },
+  { key: 'export', label: '导出记录', icon: 'download', ready: true, run: doExport },
+  { key: 'import', label: '导入记录', icon: 'upload', ready: true, run: () => { showPlus.value = false; importInput.value?.click() } },
+  { key: 'clear', label: '清空记录', icon: 'trash', ready: !!messages.value.length, run: () => { showPlus.value = false; showClearConfirm.value = true } },
+])
+const PLUS_PER_PAGE = 8
+const plusPages = computed(() => {
+  const out: PlusItem[][] = []
+  for (let i = 0; i < plusItems.value.length; i += PLUS_PER_PAGE) out.push(plusItems.value.slice(i, i + PLUS_PER_PAGE))
+  return out
+})
+const lastAssistant = computed(() => [...messages.value].reverse().find(m => m.role === 'assistant'))
+
+function togglePlus() {
+  if (showPlus.value) { showPlus.value = false; return }
+  // 键盘开着就先收起，面板占键盘的位置
+  inputEl.value?.blur()
+  showPlus.value = true
+}
+function onPlusItem(it: PlusItem) {
+  if (!it.ready) { toast(`${it.label}还在做`); return }
+  it.run?.()
+}
+function onPlusScroll(e: Event) {
+  const el = e.target as HTMLElement
+  plusPage.value = Math.round(el.scrollLeft / Math.max(1, el.clientWidth))
+}
+function regenerateLast() {
+  const m = lastAssistant.value
+  if (!m || generating.value) return
+  showPlus.value = false
+  regenerate(m)
 }
 
 function regenerate(m: ChatMessage) {
@@ -510,9 +556,9 @@ async function shareMsg(m: ChatMessage) {
   }
 }
 
-// ================= 顶部菜单 =================
-const showMenu = ref(false)
-const confirmClear = ref(0)    // 清空需要确认两次
+// ================= 聊天样式面板 / 记录管理 =================
+const showStylePanel = ref(false)
+const showClearConfirm = ref(false)
 const importInput = ref<HTMLInputElement | null>(null)
 
 const ctxInfo = computed(() => {
@@ -525,7 +571,7 @@ const ctxInfo = computed(() => {
 })
 
 async function doExport() {
-  showMenu.value = false
+  showPlus.value = false
   const json = await exportJson()
   const d = new Date()
   const name = `eclipsis-${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}.json`
@@ -553,21 +599,19 @@ async function doImport(e: Event) {
 }
 
 async function doClear() {
-  if (confirmClear.value < 1) { confirmClear.value++; return }
   await clearMessages()
   messages.value = []
-  confirmClear.value = 0
-  showMenu.value = false
+  showClearConfirm.value = false
   toast('已清空')
 }
 
 // 键盘开合时保持在底部
 watch(keyboardOpen, () => scrollToBottom())
 
-watch(showMenu, v => { if (!v) confirmClear.value = 0 })
 
 // ================= 代码块复制（v-html 内容用事件委托）=================
 async function onAreaClick(e: MouseEvent) {
+  showPlus.value = false
   const btn = (e.target as HTMLElement).closest('.code-copy') as HTMLButtonElement | null
   if (!btn) return
   const code = btn.closest('.code-block')?.querySelector('code')?.textContent || ''
@@ -591,7 +635,6 @@ function toast(t: string) {
 // ================= 生命周期 =================
 onMounted(async () => {
   applyCustomCSS()
-  loadCustomFont()
   try {
     const migrated = await migrateFromLocalStorage()
     messages.value = await getAllMessages()
@@ -613,6 +656,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  pageBackdrop.value = null
   ro?.disconnect()
   // 离开页面前把待保存的写进去
   for (const [id, t] of saveTimers) {
@@ -623,22 +667,14 @@ onBeforeUnmount(() => {
   abortCtrl?.abort()
 })
 
-const subtitle = computed(() =>
-  generating.value ? '正在输入…' : (settings.value.chatSubtitle || '')
-)
+const subtitle = computed(() => settings.value.chatSubtitle || '')
 </script>
 
 <template>
-  <div class="chat-page app-screen" :style="pageStyle">
-    <div class="chat-bg" :style="bgStyle" aria-hidden="true"></div>
-
-    <!-- ===== 顶栏 ===== -->
+  <div class="chat-page shell-page" :style="pageStyle">
+    <!-- ===== 顶栏：通栏卡片，头像在两端，中间心电图爱心、名字、状态 ===== -->
     <header class="chat-header">
-      <button class="glass-btn" aria-label="返回" @click="router.push('/living-room')">
-        <Icon name="back" />
-      </button>
-
-      <div class="header-card glass-bar">
+      <div class="header-card glass header-glass">
         <img :src="settings.avatarAI" class="h-avatar" :alt="settings.nameAI" />
         <div class="header-mid">
           <!-- 心电图：两边的波形向中间流动，汇到爱心。他回复时跳得更快 -->
@@ -650,41 +686,94 @@ const subtitle = computed(() =>
                 <stop offset="1" stop-color="#9fb2dc" />
               </linearGradient>
             </defs>
-            <!-- 底线（静态、很淡） -->
             <path class="pulse-base" d="M0 16 H14 L18 10 L22 22 L26 4 L30 26 L34 13 L38 16 H46 M74 16 H82 L86 13 L90 26 L94 4 L98 22 L102 10 L106 16 H120" />
-            <!-- 流动的高亮段 -->
             <path class="pulse-flow" pathLength="100" d="M0 16 H14 L18 10 L22 22 L26 4 L30 26 L34 13 L38 16 H46" />
             <path class="pulse-flow" pathLength="100" d="M120 16 H106 L102 10 L98 22 L94 4 L90 26 L86 13 L82 16 H74" />
-            <!-- 爱心 -->
             <g class="pulse-heart">
               <path d="M60 24 C52 18 50 14 50 11.5 C50 8.8 52 7 54.6 7 C56.8 7 58.4 8.2 60 10.2 C61.6 8.2 63.2 7 65.4 7 C68 7 70 8.8 70 11.5 C70 14 68 18 60 24 Z" />
             </g>
           </svg>
           <div class="header-name">{{ settings.nameAI }}</div>
-          <div v-if="subtitle" class="header-sub">{{ subtitle }}</div>
+          <!-- 状态：他回复时显示"正在输入"；平时显示他自己设的状态；都没有就显示签名 -->
+          <div v-if="generating || aiStatus || subtitle" class="header-status" aria-live="polite">
+            <template v-if="generating"><span class="st-dot typing"></span>正在输入…</template>
+            <template v-else-if="aiStatus"><span class="st-emoji">{{ aiStatus.emoji }}</span>{{ aiStatus.text }}</template>
+            <template v-else>{{ subtitle }}</template>
+          </div>
         </div>
         <img :src="settings.avatarUser" class="h-avatar" :alt="settings.nameUser" />
       </div>
-
-      <button class="glass-btn" aria-label="菜单" :aria-expanded="showMenu" @click="showMenu = !showMenu">
-        <Icon name="menu" />
-      </button>
     </header>
 
-    <!-- 顶部菜单 -->
-    <transition name="pop">
-      <div v-if="showMenu" class="menu-pop glass-strong" role="menu">
-        <button role="menuitem" @click="showStylePanel = true; showMenu = false"><Icon name="palette" />聊天样式</button>
-        <button role="menuitem" @click="doExport"><Icon name="download" />导出聊天记录</button>
-        <button role="menuitem" @click="importInput?.click(); showMenu = false"><Icon name="upload" />导入聊天记录</button>
-        <button role="menuitem" @click="router.push('/settings')"><Icon name="settings" />设置</button>
-        <button role="menuitem" class="danger" @click="doClear">
-          <Icon name="trash" />{{ confirmClear ? '再点一次，真的全部清空' : '清空聊天记录' }}
-        </button>
-        <div class="menu-foot">{{ ctxInfo }}</div>
-      </div>
-    </transition>
-    <div v-if="showMenu" class="scrim-clear" @click="showMenu = false"></div>
+    <!-- 聊天样式：底部面板，只占下半屏，调的时候能看到上面聊天的变化 -->
+    <Teleport defer to="#shell-overlay">
+      <transition name="fade">
+        <div v-if="showStylePanel" class="scrim scrim-light" @click="showStylePanel = false"></div>
+      </transition>
+      <transition name="sheet">
+        <div v-if="showStylePanel" class="sheet style-sheet glass-strong" role="dialog" aria-modal="true" aria-label="聊天样式">
+          <div class="sheet-grip" aria-hidden="true"></div>
+          <div class="sheet-title">聊天样式</div>
+          <div class="style-scroll">
+            <div class="style-grid">
+              <label>背景色
+                <span class="row"><input type="color" :value="chatStyle.bgColor || '#eef0f5'" @input="chatStyle.bgColor = ($event.target as HTMLInputElement).value" />
+                  <button v-if="chatStyle.bgColor" class="mini" @click="chatStyle.bgColor = ''">默认</button></span>
+              </label>
+              <label>背景图
+                <span class="row">
+                  <span class="mini upload">上传<input type="file" accept="image/*" hidden @change="handleBgUpload" /></span>
+                  <button v-if="chatStyle.bgImage" class="mini" @click="chatStyle.bgImage = ''">清除</button>
+                </span>
+              </label>
+              <label>他的气泡 <input type="color" v-model="chatStyle.aiBubbleBg" /></label>
+              <label>透明度 {{ Math.round(chatStyle.aiBubbleOpacity * 100) }}%
+                <input type="range" min="0.1" max="1" step="0.05" v-model.number="chatStyle.aiBubbleOpacity" /></label>
+              <label>我的气泡 <input type="color" v-model="chatStyle.userBubbleBg" /></label>
+              <label>透明度 {{ Math.round(chatStyle.userBubbleOpacity * 100) }}%
+                <input type="range" min="0.1" max="1" step="0.05" v-model.number="chatStyle.userBubbleOpacity" /></label>
+              <label class="full">顶栏透明度 {{ Math.round((1 - chatStyle.headerOpacity) * 100) }}%
+                <input type="range" min="0.05" max="0.95" step="0.05" :value="1 - chatStyle.headerOpacity"
+                  @input="chatStyle.headerOpacity = +(1 - +($event.target as HTMLInputElement).value).toFixed(2)" /></label>
+              <label class="full">输入栏透明度 {{ Math.round((1 - chatStyle.footerOpacity) * 100) }}%
+                <input type="range" min="0.05" max="0.95" step="0.05" :value="1 - chatStyle.footerOpacity"
+                  @input="chatStyle.footerOpacity = +(1 - +($event.target as HTMLInputElement).value).toFixed(2)" /></label>
+              <label class="full">字号 {{ chatStyle.fontSize }}px
+                <input type="range" min="12" max="22" step="1" v-model.number="chatStyle.fontSize" /></label>
+              <label class="full">字体（全局）{{ fontName ? '：' + fontName : '' }}
+                <span class="row">
+                  <span class="mini upload">导入 TTF/OTF<input type="file" accept=".ttf,.otf,.woff,.woff2" hidden @change="handleFontUpload" /></span>
+                  <button v-if="fontName" class="mini" @click="clearFont">恢复系统字体</button>
+                </span>
+              </label>
+              <label class="full">自定义 CSS
+                <textarea v-model="chatStyle.customCSS" rows="4" spellcheck="false" placeholder=".bubble.ai { border-radius: 8px; }"></textarea>
+              </label>
+            </div>
+          </div>
+          <div class="sheet-row">
+            <button class="sheet-btn ghost" @click="chatStyle = { ...DEFAULT_STYLE }">恢复默认</button>
+            <button class="sheet-btn" @click="showStylePanel = false">完成</button>
+          </div>
+        </div>
+      </transition>
+
+      <!-- 清空确认 -->
+      <transition name="fade">
+        <div v-if="showClearConfirm" class="scrim" @click="showClearConfirm = false"></div>
+      </transition>
+      <transition name="sheet">
+        <div v-if="showClearConfirm" class="sheet glass-strong" role="alertdialog" aria-modal="true" aria-label="清空聊天记录">
+          <div class="sheet-grip" aria-hidden="true"></div>
+          <div class="sheet-title">清空全部 {{ messages.length }} 条聊天记录？</div>
+          <div class="sheet-hint">只删这台设备上的记录，删了找不回来。想留底的话先用"导出记录"。</div>
+          <div class="sheet-row">
+            <button class="sheet-btn ghost" @click="showClearConfirm = false">取消</button>
+            <button class="sheet-btn danger" @click="doClear">清空</button>
+          </div>
+        </div>
+      </transition>
+    </Teleport>
     <input ref="importInput" type="file" accept="application/json,.json" hidden @change="doImport" />
 
     <!-- ===== 消息区 ===== -->
@@ -806,11 +895,13 @@ const subtitle = computed(() =>
           </div>
         </div>
       </template>
+      <!-- 底部占位：高度 = 输入栏实际高度，最后一条消息才能滚到输入栏上面 -->
+      <div class="chat-tail" aria-hidden="true"></div>
     </main>
 
     <!-- ===== 输入栏 ===== -->
     <footer ref="footerEl" class="input-footer">
-      <div class="input-capsule glass-bar footer-glass">
+      <div class="input-capsule glass footer-glass">
         <div v-if="pendingImages.length" class="pending-images">
           <div v-for="(img, i) in pendingImages" :key="i" class="pending-thumb">
             <img :src="img" alt="待发送的图片" />
@@ -827,14 +918,22 @@ const subtitle = computed(() =>
           aria-label="输入消息"
           @input="autoGrow"
           @keydown="onInputKeydown"
+          @focus="showPlus = false"
           @compositionstart="composing = true"
           @compositionend="composing = false"
         ></textarea>
         <div class="input-tools">
-          <label class="tool-btn" aria-label="发送图片">
-            <Icon name="attach" />
-            <input type="file" accept="image/*" multiple hidden @change="handleImageSelect" />
-          </label>
+          <button
+            :class="['tool-btn', 'plus-btn', { open: showPlus }]"
+            :aria-label="showPlus ? '收起功能面板' : '更多功能'"
+            :aria-expanded="showPlus"
+            aria-controls="plus-panel"
+            @click="togglePlus"
+          >
+            <Icon name="plus" />
+          </button>
+          <input ref="imageInput" type="file" accept="image/*" multiple hidden @change="handleImageSelect" />
+          <input ref="cameraInput" type="file" accept="image/*" capture="environment" hidden @change="handleImageSelect" />
           <span class="input-model">{{ settings.model }}</span>
           <button
             :class="['send-btn', { stop: generating, ready: inputText.trim() || unanswered || pendingImages.length }]"
@@ -844,10 +943,35 @@ const subtitle = computed(() =>
             <Icon :name="generating ? 'stop' : 'send'" />
           </button>
         </div>
+        <!-- + 功能面板：和输入栏是同一张卡片，向下展开，可左右翻页 -->
+        <transition name="plus">
+          <div v-if="showPlus" id="plus-panel" class="plus-panel" role="region" aria-label="更多功能">
+            <div class="plus-pages" @scroll.passive="onPlusScroll">
+              <div v-for="(page, pi) in plusPages" :key="pi" class="plus-page">
+                <button
+                  v-for="it in page"
+                  :key="it.key"
+                  :class="['plus-item', { soon: !it.ready }]"
+                  :aria-disabled="!it.ready"
+                  @click="onPlusItem(it)"
+                >
+                  <span class="plus-icon"><Icon :name="it.icon" :size="24" /></span>
+                  <span class="plus-label">{{ it.label }}</span>
+                </button>
+              </div>
+            </div>
+            <div v-if="plusPages.length > 1" class="plus-dots" aria-hidden="true">
+              <span v-for="(_, pi) in plusPages" :key="pi" :class="{ on: pi === plusPage }"></span>
+            </div>
+            <div v-if="plusPage === plusPages.length - 1 && ctxInfo" class="plus-foot">{{ ctxInfo }}</div>
+          </div>
+        </transition>
       </div>
+
     </footer>
 
-    <!-- ===== 消息操作面板 ===== -->
+    <!-- ===== 消息操作面板（挂到外壳浮层，盖住底栏） ===== -->
+    <Teleport defer to="#shell-overlay">
     <transition name="fade">
       <div v-if="sheet" class="scrim" @click="closeSheet"></div>
     </transition>
@@ -899,56 +1023,7 @@ const subtitle = computed(() =>
         </template>
       </div>
     </transition>
-
-    <!-- ===== 聊天样式面板 ===== -->
-    <transition name="fade">
-      <div v-if="showStylePanel" class="scrim" @click="showStylePanel = false"></div>
-    </transition>
-    <transition name="sheet">
-      <div v-if="showStylePanel" class="sheet style-sheet glass-strong" role="dialog" aria-modal="true" aria-label="聊天样式">
-        <div class="sheet-grip" aria-hidden="true"></div>
-        <div class="sheet-title">聊天样式</div>
-        <div class="style-grid">
-          <label>背景色
-            <span class="row"><input type="color" :value="chatStyle.bgColor || '#eef0f5'" @input="chatStyle.bgColor = ($event.target as HTMLInputElement).value" />
-              <button v-if="chatStyle.bgColor" class="mini" @click="chatStyle.bgColor = ''">默认</button></span>
-          </label>
-          <label>背景图
-            <span class="row">
-              <span class="mini upload">上传<input type="file" accept="image/*" hidden @change="handleBgUpload" /></span>
-              <button v-if="chatStyle.bgImage" class="mini" @click="chatStyle.bgImage = ''">清除</button>
-            </span>
-          </label>
-          <label>他的气泡 <input type="color" v-model="chatStyle.aiBubbleBg" /></label>
-          <label>透明度 {{ Math.round(chatStyle.aiBubbleOpacity * 100) }}%
-            <input type="range" min="0.1" max="1" step="0.05" v-model.number="chatStyle.aiBubbleOpacity" /></label>
-          <label>我的气泡 <input type="color" v-model="chatStyle.userBubbleBg" /></label>
-          <label>透明度 {{ Math.round(chatStyle.userBubbleOpacity * 100) }}%
-            <input type="range" min="0.1" max="1" step="0.05" v-model.number="chatStyle.userBubbleOpacity" /></label>
-          <label>顶栏透明度 {{ Math.round((1 - chatStyle.headerOpacity) * 100) }}%
-            <input type="range" min="0.05" max="0.95" step="0.05" :value="1 - chatStyle.headerOpacity"
-              @input="chatStyle.headerOpacity = +(1 - +($event.target as HTMLInputElement).value).toFixed(2)" /></label>
-          <label>输入栏透明度 {{ Math.round((1 - chatStyle.footerOpacity) * 100) }}%
-            <input type="range" min="0.05" max="0.95" step="0.05" :value="1 - chatStyle.footerOpacity"
-              @input="chatStyle.footerOpacity = +(1 - +($event.target as HTMLInputElement).value).toFixed(2)" /></label>
-          <label>字号 {{ chatStyle.fontSize }}px
-            <input type="range" min="12" max="22" step="1" v-model.number="chatStyle.fontSize" /></label>
-          <label>字体
-            <span class="row">
-              <span class="mini upload">导入 TTF/OTF<input type="file" accept=".ttf,.otf,.woff,.woff2" hidden @change="handleFontUpload" /></span>
-              <button v-if="chatStyle.fontFamily" class="mini" @click="chatStyle.fontFamily = ''; chatStyle.fontData = ''">恢复</button>
-            </span>
-          </label>
-          <label class="full">自定义 CSS
-            <textarea v-model="chatStyle.customCSS" rows="4" spellcheck="false" placeholder=".bubble.ai { border-radius: 8px; }"></textarea>
-          </label>
-        </div>
-        <div class="sheet-row">
-          <button class="sheet-btn ghost" @click="chatStyle = { ...DEFAULT_STYLE }">恢复默认</button>
-          <button class="sheet-btn" @click="showStylePanel = false">完成</button>
-        </div>
-      </div>
-    </transition>
+    </Teleport>
 
     <!-- 图片预览 -->
     <transition name="fade">
@@ -968,14 +1043,6 @@ const subtitle = computed(() =>
   color: var(--text);
 }
 
-.chat-bg {
-  position: absolute;
-  inset: 0;
-  background: var(--page-bg);
-  background-size: cover;
-  background-position: center;
-  z-index: 0;
-}
 
 /* ===== 顶栏 ===== */
 .chat-header {
@@ -983,38 +1050,31 @@ const subtitle = computed(() =>
   top: 0; left: 0; right: 0;
   z-index: 20;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: calc(var(--safe-top) + 6px) 10px 0;
+  justify-content: center;
+  padding: calc(var(--safe-top) + 6px) 12px 0;
   pointer-events: none;
 }
 .chat-header > * { pointer-events: auto; }
-.chat-header .glass-btn { width: 38px; height: 38px; flex-shrink: 0; }
 
 
 
-.glass-bar {
-  background: var(--header-bg);
-  -webkit-backdrop-filter: var(--glass-blur);
-  backdrop-filter: var(--glass-blur);
-  border: 1px solid var(--glass-border);
-  box-shadow: var(--glass-shadow);
-}
-.glass-bar.footer-glass { background: var(--footer-bg); }
+/* 顶栏、输入栏用全局 .glass，只把底色换成可调透明度 */
+.glass.header-glass { background: var(--header-bg); }
+.glass.footer-glass { background: var(--footer-bg); }
 
+/* 通栏卡片（参考图三）：圆角大卡片，头像在两端，中间一列 */
+/* 按参考图二的比例：头像往里收，和中间一列靠拢；整组居中 */
 .header-card {
-  flex: 1 1 auto;
-  min-width: 0;
-  border-radius: 36px;
-  padding: 10px 12px;
+  width: 100%;
+  border-radius: 30px;
+  padding: 12px 16px 12px;
   display: flex;
   align-items: center;
-  gap: 4px;
+  justify-content: center;
+  gap: 14px;
 }
-/* 头像贴着卡片两端，撑开整个顶栏 */
 .h-avatar {
-  width: 58px; height: 58px;
+  width: 56px; height: 56px;
   flex-shrink: 0;
   border-radius: 50%;
   object-fit: cover;
@@ -1022,16 +1082,18 @@ const subtitle = computed(() =>
   box-shadow: 0 3px 10px rgba(60, 72, 110, 0.16);
 }
 .header-mid {
-  flex: 1;
+  flex: 0 1 160px;
   min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
+  /* 心电图压在头像中线上，名字、状态往下挂（参考图二） */
+  padding-top: 14px;
 }
 
-.pulse { width: 100%; max-width: 150px; height: 30px; overflow: visible; }
+.pulse { width: 100%; max-width: 150px; height: 34px; overflow: visible; }
 .pulse path { fill: none; stroke-linecap: round; stroke-linejoin: round; }
-.pulse-base { stroke: rgba(111, 134, 184, 0.22); stroke-width: 1.4; }
+.pulse-base { stroke: rgba(111, 134, 184, 0.3); stroke-width: 1.5; }
 .pulse-flow {
   stroke: url(#pulseGrad);
   stroke-width: 1.9;
@@ -1072,8 +1134,9 @@ const subtitle = computed(() =>
 }
 
 .header-name {
-  margin-top: 1px;
-  font-size: 16px;
+  margin-top: 4px;
+  line-height: 1.25;
+  font-size: 15px;
   font-weight: 600;
   letter-spacing: 0.5px;
   white-space: nowrap;
@@ -1081,45 +1144,28 @@ const subtitle = computed(() =>
   text-overflow: ellipsis;
   max-width: 100%;
 }
-.header-sub {
+.header-status {
+  margin-top: 2px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
   font-size: 12px;
   color: var(--text-2);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 100%;
 }
+.st-emoji { font-size: 12px; }
+.st-dot { width: 6px; height: 6px; border-radius: 50%; background: #8fc7a0; flex-shrink: 0; }
+.st-dot.typing { animation: st-blink 1s ease-in-out infinite; }
+@keyframes st-blink { 50% { opacity: 0.3; } }
 
-.menu-pop {
-  position: absolute;
-  z-index: 31;
-  top: calc(var(--safe-top) + 92px);
-  right: 12px;
-  width: 240px;
-  border-radius: 20px;
-  padding: 6px;
-  display: flex;
-  flex-direction: column;
-}
-.menu-pop button {
-  display: flex; align-items: center; gap: 10px;
-  padding: 11px 12px;
-  border: none; background: none;
-  border-radius: 14px;
-  font-size: 15px;
-  text-align: left;
-}
-.menu-pop button:active { background: rgba(255, 255, 255, 0.6); }
-.menu-pop .danger { color: var(--danger); }
-.menu-foot {
-  padding: 8px 12px 6px;
-  font-size: 11px;
-  line-height: 1.5;
-  color: var(--text-3);
-  border-top: 1px solid rgba(0, 0, 0, 0.05);
-  margin-top: 4px;
-}
-.scrim-clear { position: absolute; inset: 0; z-index: 30; }
+/* 聊天样式面板：浅遮罩、只占下半屏 */
+.scrim-light { background: rgba(30, 36, 56, 0.06); }
+.sheet.style-sheet { max-height: 58%; }
+.style-scroll { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; padding-top: 4px; }
+.plus-foot { padding: 8px 16px 0; font-size: 11px; line-height: 1.5; color: var(--text-3); text-align: center; }
 
 /* ===== 消息区 ===== */
 .chat-area {
@@ -1129,10 +1175,12 @@ const subtitle = computed(() =>
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
-  padding: calc(var(--safe-top) + 100px) 12px calc(var(--footer-h, 90px) + 16px);
+  padding: calc(var(--safe-top) + 116px) 12px 0;
   display: flex;
   flex-direction: column;
 }
+
+.chat-tail { flex-shrink: 0; height: calc(var(--footer-h, 90px) + 16px); }
 
 .load-earlier, .chat-empty {
   align-self: center;
@@ -1142,7 +1190,7 @@ const subtitle = computed(() =>
 }
 .load-earlier {
   border: 1px solid var(--glass-border);
-  background: var(--glass-bg);
+  background: var(--glass-bg-soft);
   border-radius: 999px;
   padding: 6px 14px;
 }
@@ -1158,9 +1206,9 @@ const subtitle = computed(() =>
   color: var(--text-2);
   padding: 3px 10px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.35);
-  -webkit-backdrop-filter: blur(10px);
-  backdrop-filter: blur(10px);
+  background: rgba(var(--glass-tint), 0.35);
+  -webkit-backdrop-filter: var(--glass-blur-soft);
+  backdrop-filter: var(--glass-blur-soft);
 }
 
 .msg-row {
@@ -1197,16 +1245,14 @@ const subtitle = computed(() =>
   padding: 9px 14px;
   border-radius: 20px;
   font-size: var(--bubble-font-size, 15px);
-  font-family: var(--bubble-font, inherit);
+  font-family: inherit;
   line-height: 1.6;
   word-break: break-word;
   overflow-wrap: anywhere;
   border: 1px solid rgba(255, 255, 255, 0.65);
-  -webkit-backdrop-filter: blur(14px) saturate(170%);
-  backdrop-filter: blur(14px) saturate(170%);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.8),
-    0 3px 12px rgba(60, 72, 110, 0.08);
+  -webkit-backdrop-filter: var(--glass-blur-soft);
+  backdrop-filter: var(--glass-blur-soft);
+  box-shadow: var(--glass-shadow-soft);
   /* 长按用自己的菜单，关掉系统的选择/放大镜 */
   -webkit-user-select: none;
   user-select: none;
@@ -1388,19 +1434,80 @@ const subtitle = computed(() =>
   border-radius: 10px;
   color: inherit;
 }
-.msg-actions button:active { background: rgba(255, 255, 255, 0.5); }
+.msg-actions button:active { background: var(--glass-bg-soft); }
 .msg-actions button:disabled { opacity: 0.35; }
 .ver-switch { display: inline-flex; align-items: center; font-size: 12px; }
 .ver-switch button { width: 24px; }
 .msg-time { font-size: 11px; color: var(--text-3); margin-left: 4px; }
 .user-time { margin-top: 1px; padding: 0 4px; }
 
+/* ===== + 功能面板 ===== */
+.plus-btn { border: none; background: none; }
+.plus-btn .icon { transition: transform 0.3s var(--spring); }
+.plus-btn.open .icon { transform: rotate(45deg); }
+.plus-btn.open { color: var(--text); }
+
+/* 面板是输入栏卡片的下半部分：抵消卡片左右内边距，用一条淡分隔线隔开 */
+.plus-panel {
+  margin: 10px -10px 0 -18px;
+  padding: 14px 0 2px;
+  border-top: 1px solid rgba(60, 72, 110, 0.08);
+  overflow: hidden;
+}
+.plus-pages {
+  display: flex;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.plus-pages::-webkit-scrollbar { display: none; }
+.plus-page {
+  flex: 0 0 100%;
+  scroll-snap-align: start;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  grid-template-rows: repeat(2, auto);
+  gap: 14px 4px;
+  padding: 0 10px;
+  align-content: start;
+}
+.plus-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: none;
+  color: var(--text);
+  transition: transform 0.35s var(--spring);
+}
+.plus-item:active { transform: scale(var(--press-scale)); transition-duration: 0.08s; }
+.plus-icon {
+  width: 54px; height: 54px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 18px;
+  background: var(--glass-bg-soft);
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 2px 8px rgba(60, 72, 110, 0.07);
+  color: var(--accent);
+}
+.plus-label { font-size: 12px; color: var(--text-2); }
+.plus-item.soon .plus-icon { color: var(--text-3); background: rgba(255, 255, 255, 0.3); }
+.plus-item.soon .plus-label { color: var(--text-3); }
+.plus-dots { display: flex; justify-content: center; gap: 6px; padding-top: 10px; }
+.plus-dots span { width: 6px; height: 6px; border-radius: 3px; background: rgba(60, 72, 110, 0.18); transition: width 0.25s, background 0.25s; }
+.plus-dots span.on { width: 16px; background: rgba(60, 72, 110, 0.5); }
+.plus-enter-active, .plus-leave-active { transition: transform 0.28s cubic-bezier(0.2, 0.9, 0.3, 1), opacity 0.2s; }
+.plus-enter-from, .plus-leave-to { transform: translateY(16px); opacity: 0; }
+
 /* ===== 输入栏 ===== */
 .input-footer {
   position: absolute;
   left: 0; right: 0; bottom: 0;
   z-index: 20;
-  padding: 0 12px calc(var(--safe-bottom) + 10px);
+  padding: 0 12px 10px;
 }
 /* 键盘弹起时底部横条区域被键盘盖住，不需要再留安全区 */
 
@@ -1460,11 +1567,19 @@ const subtitle = computed(() =>
   color: var(--text-3);
   display: flex; align-items: center; justify-content: center;
   flex-shrink: 0;
-  transition: background 0.2s, color 0.2s, transform 0.15s;
+  transition: background 0.2s, color 0.2s, transform 0.35s var(--spring);
 }
 .send-btn.ready { background: rgba(111, 134, 184, 0.85); color: #fff; }
 .send-btn.stop { background: rgba(40, 44, 60, 0.75); color: #fff; }
-.send-btn:active { transform: scale(0.92); }
+/* 按压回弹（参数在 style.css） */
+.send-btn:active, .sheet-btn:active, .sheet-item:active, .msg-actions button:active,
+.fold-chip:active, .tool-btn:active {
+  transform: scale(var(--press-scale));
+  transition-duration: 0.08s;
+}
+.sheet-btn, .sheet-item, .msg-actions button, .fold-chip, .tool-btn {
+  transition: transform 0.35s var(--spring), background 0.15s;
+}
 
 /* ===== 底部面板 ===== */
 .scrim {
@@ -1499,7 +1614,7 @@ const subtitle = computed(() =>
   font-size: 16px;
   text-align: left;
 }
-.sheet-item:active { background: rgba(255, 255, 255, 0.6); }
+.sheet-item:active { background: var(--glass-bg-soft); }
 .sheet-item:disabled { opacity: 0.4; }
 .sheet-item.danger { color: var(--danger); }
 .sheet-title { font-size: 15px; font-weight: 600; padding: 6px 8px 10px; }
@@ -1546,8 +1661,8 @@ const subtitle = computed(() =>
 .style-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 12px 14px;
-  padding: 0 8px;
+  gap: 14px 14px;
+  padding: 4px 6px;
   font-size: 13px;
   color: var(--text-2);
 }
@@ -1606,12 +1721,13 @@ const subtitle = computed(() =>
 .fade-enter-from, .fade-leave-to { opacity: 0; }
 .sheet-enter-active, .sheet-leave-active { transition: transform 0.28s cubic-bezier(0.2, 0.9, 0.3, 1), opacity 0.2s; }
 .sheet-enter-from, .sheet-leave-to { transform: translateY(105%); opacity: 0.6; }
+
 .pop-enter-active, .pop-leave-active { transition: transform 0.18s, opacity 0.18s; transform-origin: top right; }
 .pop-enter-from, .pop-leave-to { transform: scale(0.9); opacity: 0; }
 </style>
 
 <style>
-/* 键盘弹起时底部横条被键盘盖住，不需要再留安全区。
+/* 键盘弹起时贴紧键盘。
    html 上的 .kb-open 由 viewport.ts 切换；放在非 scoped 样式里才能跨组件匹配 */
 html.kb-open .chat-page .input-footer { padding-bottom: 6px !important; }
 </style>

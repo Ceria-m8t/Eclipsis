@@ -113,7 +113,7 @@ function toast(t: string) {
 </script>
 
 <template>
-  <div class="editor-page app-screen">
+  <div class="editor-page shell-page">
     <header class="ed-header">
       <button class="glass-btn" aria-label="返回" @click="router.back()"><Icon name="back" /></button>
       <div class="ed-title glass">
@@ -199,7 +199,6 @@ function toast(t: string) {
 .editor-page {
   display: flex;
   flex-direction: column;
-  background: var(--page-bg);
   padding: calc(var(--safe-top) + 8px) 12px 0;
 }
 
@@ -261,7 +260,7 @@ function toast(t: string) {
 .ed-footer {
   display: flex;
   gap: 10px;
-  padding: 8px 0 calc(var(--safe-bottom) + 10px);
+  padding: 8px 0 10px;
 }
 .ed-btn {
   flex: 1;
@@ -280,7 +279,7 @@ function toast(t: string) {
 .sheet {
   position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 41;
   border-radius: 28px;
-  padding: 8px 12px calc(var(--safe-bottom) + 12px);
+  padding: 8px 12px 12px;
   max-height: 82%;
   overflow-y: auto;
   display: flex; flex-direction: column; gap: 6px;

@@ -46,7 +46,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="room">
+  <div class="room shell-page">
     <div
       class="room-scroll"
       ref="container"
@@ -75,13 +75,13 @@ onMounted(() => {
         <!-- 交互热区层 -->
         <div class="hotspot-layer">
           <button class="hotspot bedroom-door" @click.stop="onHotspot('/bedroom')">
-            <span class="hotspot-label">🌙 卧室</span>
+            <span class="hotspot-label glass">🌙 卧室</span>
           </button>
           <button class="hotspot kitchen-door" @click.stop="onHotspot('/kitchen')">
-            <span class="hotspot-label">🍳 厨房</span>
+            <span class="hotspot-label glass">🍳 厨房</span>
           </button>
           <button class="hotspot study-door" @click.stop="onHotspot('/study')">
-            <span class="hotspot-label">📚 书房</span>
+            <span class="hotspot-label glass">📚 书房</span>
           </button>
         </div>
       </div>
@@ -90,15 +90,17 @@ onMounted(() => {
 </template>
 
 <style scoped>
+/* 房间缩小显示：画面占页面区高度的 --room-scale，上下居中，左右仍可滑动。
+   底图透明处先透出页面背景，以后换成氛围层 */
 .room {
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-  background: #1a1a2e;
+  --room-scale: 0.78;
+  background: transparent;
 }
 
 .room-scroll {
   height: 100%;
+  display: flex;
+  align-items: center;
   overflow-x: auto;
   overflow-y: hidden;
   cursor: grab;
@@ -117,12 +119,17 @@ onMounted(() => {
 
 .room-canvas {
   position: relative;
-  height: 100%;
-  display: inline-block;
+  flex-shrink: 0;
+  height: calc(100% * var(--room-scale));
+  /* 窄屏时左右留点边，宽屏（图比屏幕窄）时居中 */
+  margin: 0 auto;
+  padding: 0 12px;
 }
 
 .room-base {
   height: 100%;
+  border-radius: 18px;
+  filter: drop-shadow(0 10px 24px rgba(60, 72, 110, 0.18));
   width: auto;
   display: block;
   image-rendering: pixelated;
@@ -155,29 +162,20 @@ onMounted(() => {
   z-index: 5;
 }
 
+/* 热区标签：浅色玻璃（用全局 .glass） */
 .hotspot-label {
   display: inline-block;
   padding: 6px 14px;
-  background: rgba(10, 10, 20, 0.65);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 20px;
   font-size: 13px;
-  color: rgba(255, 255, 255, 0.9);
+  color: var(--text);
   letter-spacing: 1px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
-  transition: all 0.2s;
   white-space: nowrap;
+  transition: transform 0.35s var(--spring);
 }
-
-.hotspot:hover .hotspot-label {
-  background: rgba(10, 10, 20, 0.8);
-  border-color: rgba(255, 255, 255, 0.25);
-}
-
 .hotspot:active .hotspot-label {
-  transform: scale(0.95);
+  transform: scale(var(--press-scale));
+  transition-duration: 0.08s;
 }
 
 /* 热区位置 — 先占位，以后对齐底图里的门 */

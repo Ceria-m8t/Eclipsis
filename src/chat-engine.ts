@@ -2,6 +2,7 @@
 import { composePrompt } from './prompt-store'
 import { type Settings, apiUrl, apiHeaders } from './settings'
 import { type McpServer, type ToolCall, buildToolDefinitions, executeToolCall } from './mcp'
+import { localToolDefinitions, isLocalTool, runLocalTool } from './local-tools'
 import type { ChatMessage, MessageVersion, ToolEvent, ApiTurn } from './db'
 
 const MAX_TOOL_ROUNDS = 8
@@ -212,7 +213,8 @@ export async function generate(
 ): Promise<BuiltContext> {
   const ctx = buildContext(history, settings.contextTokens)
   const messages = [...ctx.messages]
-  const tools = buildToolDefinitions(servers)
+  // MCP 工具在前，前端内置工具（状态等）在后
+  const tools = [...buildToolDefinitions(servers), ...localToolDefinitions()]
   version.content = ''
   version.thinking = ''
   version.tools = []
@@ -244,7 +246,7 @@ export async function generate(
       const ev: ToolEvent = { id: c.id, name: c.name, args: c.arguments, status: 'running' }
       version.tools!.push(ev)
       emit()
-      const res = await executeToolCall(servers, c)
+      const res = isLocalTool(c.name) ? runLocalTool(c) : await executeToolCall(servers, c)
       if (signal.aborted) throw new DOMException('aborted', 'AbortError')
       ev.result = res.content
       ev.isError = res.is_error
