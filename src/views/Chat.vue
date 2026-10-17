@@ -1051,7 +1051,8 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
   z-index: 20;
   display: flex;
   justify-content: center;
-  padding: calc(var(--safe-top) + 6px) 12px 0;
+  /* 卡片贴到屏幕最顶上（延伸到状态栏后面），内容留在状态栏下方 */
+  padding: 0 12px;
   pointer-events: none;
 }
 .chat-header > * { pointer-events: auto; }
@@ -1066,8 +1067,9 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
 /* 按参考图二的比例：头像往里收，和中间一列靠拢；整组居中 */
 .header-card {
   width: 100%;
-  border-radius: 30px;
-  padding: 12px 16px 12px;
+  border-radius: 0 0 30px 30px;
+  border-top: none;
+  padding: calc(var(--safe-top) + 4px) 16px 12px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1175,7 +1177,7 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
-  padding: calc(var(--safe-top) + 116px) 12px 0;
+  padding: calc(var(--safe-top) + 112px) 12px 0;
   display: flex;
   flex-direction: column;
 }
