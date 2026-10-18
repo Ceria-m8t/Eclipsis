@@ -634,6 +634,7 @@ function toast(t: string) {
 
 // ================= 生命周期 =================
 onMounted(async () => {
+  document.documentElement.classList.add('chat-open')
   applyCustomCSS()
   try {
     const migrated = await migrateFromLocalStorage()
@@ -656,6 +657,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  document.documentElement.classList.remove('chat-open')
   pageBackdrop.value = null
   ro?.disconnect()
   // 离开页面前把待保存的写进去
@@ -1069,14 +1071,15 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
   width: 100%;
   border-radius: 0 0 30px 30px;
   border-top: none;
-  padding: calc(var(--safe-top) + 4px) 16px 12px;
+  /* 头像中心大约在状态栏下沿，上半部分和时间、电量同一高度（参考图二） */
+  padding: calc(var(--safe-top) - 30px) 16px 8px;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 14px;
+  gap: 12px;
 }
 .h-avatar {
-  width: 56px; height: 56px;
+  width: 54px; height: 54px;
   flex-shrink: 0;
   border-radius: 50%;
   object-fit: cover;
@@ -1084,16 +1087,16 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
   box-shadow: 0 3px 10px rgba(60, 72, 110, 0.16);
 }
 .header-mid {
-  flex: 0 1 160px;
+  flex: 0 1 150px;
   min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
   /* 心电图压在头像中线上，名字、状态往下挂（参考图二） */
-  padding-top: 14px;
+  padding-top: 16px;
 }
 
-.pulse { width: 100%; max-width: 150px; height: 34px; overflow: visible; }
+.pulse { width: 100%; max-width: 142px; height: 30px; overflow: visible; }
 .pulse path { fill: none; stroke-linecap: round; stroke-linejoin: round; }
 .pulse-base { stroke: rgba(111, 134, 184, 0.3); stroke-width: 1.5; }
 .pulse-flow {
@@ -1136,7 +1139,7 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
 }
 
 .header-name {
-  margin-top: 4px;
+  margin-top: 2px;
   line-height: 1.25;
   font-size: 15px;
   font-weight: 600;
@@ -1147,7 +1150,7 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
   max-width: 100%;
 }
 .header-status {
-  margin-top: 2px;
+  margin-top: 0;
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -1177,7 +1180,7 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
-  padding: calc(var(--safe-top) + 112px) 12px 0;
+  padding: calc(var(--safe-top) + 62px) 12px 0;
   display: flex;
   flex-direction: column;
 }
@@ -1732,4 +1735,6 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
 /* 键盘弹起时贴紧键盘。
    html 上的 .kb-open 由 viewport.ts 切换；放在非 scoped 样式里才能跨组件匹配 */
 html.kb-open .chat-page .input-footer { padding-bottom: 6px !important; }
+/* 聊天页：顶栏卡片已经垫在状态栏后面，去掉全局的灰色渐变条 */
+html.chat-open body::before { display: none !important; }
 </style>
