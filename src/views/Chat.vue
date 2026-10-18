@@ -1046,6 +1046,9 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
 <style scoped>
 .chat-page {
   color: var(--text);
+  /* 心电图上沿：比安全区上沿高 10px，正好落在灵动岛/刘海下面，和它错开而不是整块空出。
+     浏览器里没有安全区时按 30px 算 */
+  --ecg-top: calc(max(var(--safe-top), 30px) - 10px);
 }
 
 
@@ -1073,17 +1076,20 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
 /* 独立的圆角卡片，上沿收在状态栏下面一点 */
 .header-card {
   width: 100%;
-  margin-top: 6px;
+  margin-top: 8px;
   border-radius: 30px;
-  padding: 8px 16px 9px;
+  /* 卡片上沿和灵动岛上沿齐平，内容从 --ecg-top 开始 */
+  padding: calc(var(--ecg-top) - 8px) 16px 8px;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
   gap: 12px;
 }
 .h-avatar {
-  width: 62px; height: 62px;
+  width: 56px; height: 56px;
   flex-shrink: 0;
+  /* 头像圆心对齐爱心中心（心电图上沿往下约 18px） */
+  margin-top: -10px;
   border-radius: 50%;
   object-fit: cover;
   border: 2px solid rgba(255, 255, 255, 0.95);
@@ -1095,11 +1101,10 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
   display: flex;
   flex-direction: column;
   align-items: center;
-  /* 心电图压在头像中线上，名字紧贴在下面 */
-  padding-top: 4px;
+  padding-top: 0;
 }
 
-.pulse { width: 100%; max-width: 146px; height: 40px; overflow: visible; }
+.pulse { width: 110px; max-width: 100%; height: 30px; overflow: visible; }
 .pulse path { fill: none; stroke-linecap: round; stroke-linejoin: round; }
 .pulse-base { stroke: rgba(111, 134, 184, 0.3); stroke-width: 1.5; }
 .pulse-flow {
@@ -1136,7 +1141,7 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
 
 .header-name {
   margin-top: -3px;
-  line-height: 1.25;
+  line-height: 1.15;
   font-size: 15px;
   font-weight: 600;
   letter-spacing: 0.5px;
@@ -1147,6 +1152,7 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
 }
 .header-status {
   margin-top: 0;
+  line-height: 1.2;
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -1176,7 +1182,8 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
-  padding: 112px 12px 0;
+  /* 卡片下沿 + 10px */
+  padding: calc(var(--ecg-top) + 76px) 12px 0;
   display: flex;
   flex-direction: column;
 }
