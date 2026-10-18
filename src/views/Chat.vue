@@ -680,7 +680,8 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
         <img :src="settings.avatarAI" class="h-avatar" :alt="settings.nameAI" />
         <div class="header-mid">
           <!-- 心电图：两边的波形向中间流动，汇到爱心。他回复时跳得更快 -->
-          <svg class="pulse" :class="{ fast: generating }" viewBox="0 0 120 32" aria-hidden="true">
+          <!-- 心电图（参考图三）：两端圆点 → 平线 → 大尖峰 → 汇入空心爱心。亮段从两边流向爱心 -->
+          <svg class="pulse" :class="{ fast: generating }" viewBox="0 0 160 44" aria-hidden="true">
             <defs>
               <linearGradient id="pulseGrad" x1="0" x2="1">
                 <stop offset="0" stop-color="#9fb2dc" />
@@ -688,11 +689,14 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
                 <stop offset="1" stop-color="#9fb2dc" />
               </linearGradient>
             </defs>
-            <path class="pulse-base" d="M0 16 H14 L18 10 L22 22 L26 4 L30 26 L34 13 L38 16 H46 M74 16 H82 L86 13 L90 26 L94 4 L98 22 L102 10 L106 16 H120" />
-            <path class="pulse-flow" pathLength="100" d="M0 16 H14 L18 10 L22 22 L26 4 L30 26 L34 13 L38 16 H46" />
-            <path class="pulse-flow" pathLength="100" d="M120 16 H106 L102 10 L98 22 L94 4 L90 26 L86 13 L82 16 H74" />
+            <path class="pulse-base" d="M4 24 H16 L20 18 L25 40 L31 4 L37 34 L41 24 H64 M156 24 H144 L140 18 L135 40 L129 4 L123 34 L119 24 H96" />
+            <circle class="pulse-dot" cx="3" cy="24" r="2.2" />
+            <circle class="pulse-dot" cx="157" cy="24" r="2.2" />
+            <path class="pulse-flow" pathLength="100" d="M4 24 H16 L20 18 L25 40 L31 4 L37 34 L41 24 H64" />
+            <path class="pulse-flow" pathLength="100" d="M156 24 H144 L140 18 L135 40 L129 4 L123 34 L119 24 H96" />
             <g class="pulse-heart">
-              <path d="M60 24 C52 18 50 14 50 11.5 C50 8.8 52 7 54.6 7 C56.8 7 58.4 8.2 60 10.2 C61.6 8.2 63.2 7 65.4 7 C68 7 70 8.8 70 11.5 C70 14 68 18 60 24 Z" />
+              <!-- 空心爱心，左右两端正好接上波形 -->
+              <path d="M80 38 C72 31 64 26 64 18 C64 13 67.5 10 71.5 10 C75.5 10 78.5 13 80 16 C81.5 13 84.5 10 88.5 10 C92.5 10 96 13 96 18 C96 26 88 31 80 38 Z" />
             </g>
           </svg>
           <div class="header-name">{{ settings.nameAI }}</div>
@@ -1067,19 +1071,19 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
 
 /* 通栏卡片（参考图三）：圆角大卡片，头像在两端，中间一列 */
 /* 按参考图二的比例：头像往里收，和中间一列靠拢；整组居中 */
+/* 独立的圆角卡片，上沿收在状态栏下面一点 */
 .header-card {
   width: 100%;
-  border-radius: 0 0 30px 30px;
-  border-top: none;
-  /* 头像中心大约在状态栏下沿，上半部分和时间、电量同一高度（参考图二） */
-  padding: calc(var(--safe-top) - 30px) 16px 8px;
+  margin-top: calc(var(--safe-top) - 6px);
+  border-radius: 30px;
+  padding: 8px 16px 9px;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 12px;
 }
 .h-avatar {
-  width: 54px; height: 54px;
+  width: 62px; height: 62px;
   flex-shrink: 0;
   border-radius: 50%;
   object-fit: cover;
@@ -1092,11 +1096,11 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
   display: flex;
   flex-direction: column;
   align-items: center;
-  /* 心电图压在头像中线上，名字、状态往下挂（参考图二） */
-  padding-top: 16px;
+  /* 心电图压在头像中线上，名字紧贴在下面 */
+  padding-top: 4px;
 }
 
-.pulse { width: 100%; max-width: 142px; height: 30px; overflow: visible; }
+.pulse { width: 100%; max-width: 146px; height: 40px; overflow: visible; }
 .pulse path { fill: none; stroke-linecap: round; stroke-linejoin: round; }
 .pulse-base { stroke: rgba(111, 134, 184, 0.3); stroke-width: 1.5; }
 .pulse-flow {
@@ -1109,11 +1113,12 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
   animation: flow 2.4s linear infinite;
   filter: drop-shadow(0 0 2px rgba(228, 154, 174, 0.55));
 }
+.pulse-dot { fill: #b4c2e2; }
 .pulse-heart path {
-  fill: #e8a0b4;
-  stroke: rgba(255, 255, 255, 0.9);
-  stroke-width: 1;
-  filter: drop-shadow(0 0 3px rgba(232, 160, 180, 0.6));
+  fill: none;
+  stroke: #e49aae;
+  stroke-width: 2;
+  filter: drop-shadow(0 0 2px rgba(228, 154, 174, 0.5));
 }
 .pulse-heart {
   transform-box: fill-box;
@@ -1139,7 +1144,7 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
 }
 
 .header-name {
-  margin-top: 2px;
+  margin-top: -3px;
   line-height: 1.25;
   font-size: 15px;
   font-weight: 600;
@@ -1180,7 +1185,7 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
-  padding: calc(var(--safe-top) + 62px) 12px 0;
+  padding: calc(var(--safe-top) + 96px) 12px 0;
   display: flex;
   flex-direction: column;
 }
