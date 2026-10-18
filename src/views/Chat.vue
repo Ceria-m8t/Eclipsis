@@ -681,22 +681,15 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
         <div class="header-mid">
           <!-- 心电图：两边的波形向中间流动，汇到爱心。他回复时跳得更快 -->
           <!-- 心电图（参考图三）：两端圆点 → 平线 → 大尖峰 → 汇入空心爱心。亮段从两边流向爱心 -->
-          <svg class="pulse" :class="{ fast: generating }" viewBox="0 0 136 52" aria-hidden="true">
-            <defs>
-              <linearGradient id="pulseGrad" x1="0" x2="1">
-                <stop offset="0" stop-color="#9fb2dc" />
-                <stop offset="0.5" stop-color="#e49aae" />
-                <stop offset="1" stop-color="#9fb2dc" />
-              </linearGradient>
-            </defs>
-            <!-- 参考图三：两端圆点 → 平线 → 小折 → 大尖峰（上到头像顶、下到名字中间）→ 平线接到爱心偏下方 -->
-            <path class="pulse-base" d="M3 32 H14 L18 27 L22 50 L28 3 L35 50 L39 32 H58.5 M133 32 H122 L118 27 L114 50 L108 3 L101 50 L97 32 H77.5" />
-            <circle class="pulse-dot" cx="3" cy="32" r="2" />
-            <circle class="pulse-dot" cx="133" cy="32" r="2" />
-            <path class="pulse-flow" pathLength="100" d="M3 32 H14 L18 27 L22 50 L28 3 L35 50 L39 32 H58.5" />
-            <path class="pulse-flow" pathLength="100" d="M133 32 H122 L118 27 L114 50 L108 3 L101 50 L97 32 H77.5" />
+          <svg class="pulse" :class="{ fast: generating }" viewBox="0 0 140 50" aria-hidden="true">
+            <!-- 参考图三：两端圆点 → 平线 → 小波 → 大尖峰（下到名字中间）→ 平线接到爱心偏下方 -->
+            <path class="pulse-base" d="M3 29 H10 L13 25 L16 33 L19 29 H24 L29 6 L35 46 L39 29 H62.8 M137 29 H130 L127 25 L124 33 L121 29 H116 L111 6 L105 46 L101 29 H77.2" />
+            <circle class="pulse-dot" cx="2.5" cy="29" r="2" />
+            <circle class="pulse-dot" cx="137.5" cy="29" r="2" />
+            <path class="pulse-flow" pathLength="100" d="M3 29 H10 L13 25 L16 33 L19 29 H24 L29 6 L35 46 L39 29 H62.8" />
+            <path class="pulse-flow" pathLength="100" d="M137 29 H130 L127 25 L124 33 L121 29 H116 L111 6 L105 46 L101 29 H77.2" />
             <!-- 空心爱心：两个相对的缺口，一起沿轮廓逆时针转 -->
-            <path class="heart-line" pathLength="100" d="M68 40 C59 33 53 28 53 21 C53 16.5 56.5 13 61 13 C64.5 13 67 15 68 18 C69 15 71.5 13 75 13 C79.5 13 83 16.5 83 21 C83 28 77 33 68 40 Z" />
+            <path class="heart-line" pathLength="100" d="M70 34 C63 29.5 57 25.5 57 20 C57 16.5 59.8 14 63.2 14 C66.2 14 68.6 15.8 70 18.5 C71.4 15.8 73.8 14 76.8 14 C80.2 14 83 16.5 83 20 C83 25.5 77 29.5 70 34 Z" />
           </svg>
           <div class="header-name">{{ settings.nameAI }}</div>
           <!-- 状态：他回复时显示"正在输入"；平时显示他自己设的状态；都没有就显示签名 -->
@@ -1079,8 +1072,8 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
   margin-top: 8px;
   border-radius: 30px;
   /* 卡片上沿和灵动岛上沿齐平，内容从 --ecg-top 开始 */
-  /* 左右内边距让头像圆心落在离屏幕边缘约 22% 处；中间留给心电图 */
-  padding: calc(var(--ecg-top) - 8px) calc(22vw - 44px) 8px;
+  /* 左右内边距：(屏宽 - 两侧外边距 24 - 头像 64×2 - 中间 148) ÷ 2，整组正好居中 */
+  padding: calc(var(--ecg-top) - 8px) calc(50vw - 150px) 8px;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -1090,7 +1083,7 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
   width: 64px; height: 64px;
   flex-shrink: 0;
   /* 头像圆心对齐爱心中心（心电图上沿往下约 18px） */
-  margin-top: -8px;
+  margin-top: -4px;
   border-radius: 50%;
   object-fit: cover;
   border: 2px solid rgba(255, 255, 255, 0.95);
@@ -1098,50 +1091,49 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
 }
 .header-mid {
   position: relative;
-  flex: 1 1 0;
   min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
   /* 名字和签名位置不变；心电图绝对定位，不占高度，尖峰可以落到名字两侧 */
   padding-top: 31px;
+  flex: 0 0 148px;
 }
 
 .pulse {
   position: absolute;
-  top: 0; left: 50%;
-  width: 136px; height: 52px;
+  top: -2px; left: 50%;
+  width: 140px; height: 50px;
   transform: translateX(-50%);
   overflow: visible;
 }
 .pulse path { fill: none; stroke-linecap: round; stroke-linejoin: round; }
-.pulse-base { stroke: rgba(111, 134, 184, 0.3); stroke-width: 1.5; }
+.pulse-base { stroke: #1d1d22; stroke-width: 1.6; }
+/* 黑线上一段亮白高光，从两端流向爱心 */
 .pulse-flow {
-  stroke: url(#pulseGrad);
-  stroke-width: 1.9;
-  /* 亮段 26、暗段 74，正好一整圈 100。偏移量匀速走完一圈，
-     下一圈的开头和这一圈的结尾是同一个位置，所以看不出断点 */
-  stroke-dasharray: 26 74;
+  stroke: rgba(255, 255, 255, 0.9);
+  stroke-width: 1.2;
+  /* 亮段 18、暗段 82，一整圈 100，匀速走完看不出断点 */
+  stroke-dasharray: 18 82;
   stroke-dashoffset: 0;
-  animation: flow 2.4s linear infinite;
-  filter: drop-shadow(0 0 2px rgba(228, 154, 174, 0.55));
+  animation: flow 4.8s linear infinite;
 }
-.pulse-dot { fill: #b4c2e2; }
+.pulse-dot { fill: #1d1d22; }
 /* 一圈 100：两段描边各 42、两个缺口各 8，缺口正好相对；
    偏移量增大时图案朝路径起点方向走，这条路径是顺时针画的，所以缺口逆时针转 */
 .heart-line {
-  stroke: #e49aae;
-  stroke-width: 2;
+  stroke: #1d1d22;
+  stroke-width: 1.8;
   stroke-dasharray: 42 8 42 8;
-  animation: heart-spin 2.4s linear infinite;
-  filter: drop-shadow(0 0 2px rgba(228, 154, 174, 0.5));
+  /* 平时慢慢转，他在输入时加速 */
+  animation: heart-spin 4.8s linear infinite;
 }
-.pulse.fast .heart-line { animation-duration: 1.1s; }
+.pulse.fast .heart-line { animation-duration: 1.2s; }
 @keyframes heart-spin {
   from { stroke-dashoffset: 0; }
   to { stroke-dashoffset: 100; }
 }
-.pulse.fast .pulse-flow { animation-duration: 1.1s; }
+.pulse.fast .pulse-flow { animation-duration: 1.2s; }
 
 @keyframes flow {
   from { stroke-dashoffset: 100; }
