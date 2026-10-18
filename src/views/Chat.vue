@@ -709,13 +709,13 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
         <div class="header-mid">
           <!-- 心电图：两边的波形向中间流动，汇到爱心。他回复时跳得更快 -->
           <!-- 心电图（参考图三）：两端圆点 → 平线 → 大尖峰 → 汇入空心爱心。亮段从两边流向爱心 -->
-          <svg class="pulse" viewBox="0 0 168 50" aria-hidden="true">
-            <!-- 心电图（照图二黑笔）：静止，左右不对称；只有爱心在转 -->
-            <path class="pulse-base" d="M5 29 H22 L25 24 L28 33 L31 29 H36 L42 4 L49 47 L54 29 H76.8 M91.2 29 H112 L118 6 L125 46 L129 29 H136 L139 33 L142 26 L145 29 H163" />
-            <circle class="pulse-dot" cx="4" cy="29" r="2" />
-            <circle class="pulse-dot" cx="164" cy="29" r="2" />
+          <svg class="pulse" viewBox="0 0 150 54" aria-hidden="true">
+            <!-- 心电图（照红笔）：静止；每边一小一大两个波，左右按同一顺序排（不镜像），两端不伸到头像边 -->
+            <path class="pulse-base" d="M3 30 H10 L14 16 L18 46 L21 30 H30 L35 9 L40 52 L44 30 H67.8 M82.2 30 H96 L100 16 L104 46 L107 30 H116 L121 9 L126 52 L130 30 H147" />
+            <circle class="pulse-dot" cx="3" cy="30" r="2" />
+            <circle class="pulse-dot" cx="147" cy="30" r="2" />
             <!-- 空心爱心：两个相对的缺口，一起逆时针转；每段描边的前头一颗小圆点 -->
-            <path ref="heartEl" class="heart-line" pathLength="100" :style="{ strokeDashoffset: heartPhase }" d="M84 34 C77 29.5 71 25.5 71 20 C71 16.5 73.8 14 77.2 14 C80.2 14 82.6 15.8 84 18.5 C85.4 15.8 87.8 14 90.8 14 C94.2 14 97 16.5 97 20 C97 25.5 91 29.5 84 34 Z" />
+            <path ref="heartEl" class="heart-line" pathLength="100" :style="{ strokeDashoffset: heartPhase }" d="M75 35 C68 30.5 62 26.5 62 21 C62 17.5 64.8 15 68.2 15 C71.2 15 73.6 16.8 75 19.5 C76.4 16.8 78.8 15 81.8 15 C85.2 15 88 17.5 88 21 C88 26.5 82 30.5 75 35 Z" />
             <circle v-for="(d, i) in heartDots" :key="i" class="pulse-dot" :cx="d[0]" :cy="d[1]" r="1.9" />
           </svg>
           <div class="header-name">{{ settings.nameAI }}</div>
@@ -1123,16 +1123,17 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
   flex-direction: column;
   align-items: center;
   /* 名字和签名位置不变；心电图绝对定位，不占高度，尖峰可以落到名字两侧 */
-  padding-top: 31px;
+  padding-top: 28px;
   /* 中间列宽 142：头像圆心正好回到 5dfa86b 的位置（iPhone 13 上 x=80） */
   flex: 0 1 142px;
 }
 
 .pulse {
   position: absolute;
-  top: -11px; left: 50%;
-  /* 比中间列宽，两端伸到头像边上，各留约 4px */
-  width: 162px; height: 48.2px;
+  /* 基线落在名字上沿上方约 5px，爱心底尖贴着名字 */
+  top: -7px; left: 50%;
+  /* 两端离头像各留约 8px */
+  width: 150px; height: 54px;
   transform: translateX(-50%);
   overflow: visible;
 }
@@ -1190,7 +1191,7 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
   /* 卡片下沿 + 10px */
-  padding: calc(var(--ecg-top) + 78px) 12px 0;
+  padding: calc(var(--ecg-top) + 73px) 12px 0;
   display: flex;
   flex-direction: column;
 }
