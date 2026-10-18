@@ -710,8 +710,8 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
           <!-- 心电图：两边的波形向中间流动，汇到爱心。他回复时跳得更快 -->
           <!-- 心电图（参考图三）：两端圆点 → 平线 → 大尖峰 → 汇入空心爱心。亮段从两边流向爱心 -->
           <svg class="pulse" viewBox="0 0 150 54" aria-hidden="true">
-            <!-- 心电图（照红笔）：静止；每边一小一大两个波，左右按同一顺序排（不镜像），两端不伸到头像边 -->
-            <path class="pulse-base" d="M3 30 H10 L14 16 L18 46 L21 30 H30 L35 9 L40 52 L44 30 H67.8 M82.2 30 H96 L100 16 L104 46 L107 30 H116 L121 9 L126 52 L130 30 H147" />
+            <!-- 心电图（照红笔）：静止；每边一个波，三个折（小下、大上、大下）连着画，左右同序不镜像，两端不伸到头像边 -->
+            <path class="pulse-base" d="M3 30 H26 L29 36 L34 9 L39 52 L43 30 H67.8 M82.2 30 H108 L111 36 L116 9 L121 52 L125 30 H147" />
             <circle class="pulse-dot" cx="3" cy="30" r="2" />
             <circle class="pulse-dot" cx="147" cy="30" r="2" />
             <!-- 空心爱心：两个相对的缺口，一起逆时针转；每段描边的前头一颗小圆点 -->
@@ -1138,12 +1138,12 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
   overflow: visible;
 }
 .pulse path { fill: none; stroke-linecap: round; stroke-linejoin: round; }
-.pulse-base { stroke: #1d1d22; stroke-width: 1.6; }
+.pulse-base { stroke: #1d1d22; stroke-width: 1.3; }
 .pulse-dot { fill: #1d1d22; }
 /* 一圈 100：两段描边各 42、两个缺口各 8，缺口正好相对；偏移量由 heartTick 推进 */
 .heart-line {
   stroke: #1d1d22;
-  stroke-width: 1.8;
+  stroke-width: 1.5;
   stroke-dasharray: 42 8 42 8;
 }
 
