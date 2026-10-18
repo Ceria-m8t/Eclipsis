@@ -1258,11 +1258,12 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
 /* ===== 气泡 ===== */
 .bubble {
   max-width: 100%;
-  padding: 9px 14px;
-  border-radius: 20px;
+  /* 内边距和圆角跟着字号走（15px 时约 6/11、圆角 17），气泡更贴字 */
+  padding: 0.4em 0.75em;
+  border-radius: 1.15em;
   font-size: var(--bubble-font-size, 15px);
   font-family: inherit;
-  line-height: 1.6;
+  line-height: 1.5;
   word-break: break-word;
   overflow-wrap: anywhere;
   border: 1px solid rgba(255, 255, 255, 0.65);
