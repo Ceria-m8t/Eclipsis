@@ -296,7 +296,7 @@ let heartLast = 0
 function heartTick(t: number) {
   const dt = heartLast ? Math.min(t - heartLast, 100) : 0
   heartLast = t
-  const period = generating.value ? 1200 : 4800   // 平时慢，他输入时快
+  const period = generating.value ? 2400 : 4800   // 平时慢，他输入时快一倍
   heartPhase.value = (heartPhase.value + dt / period * 100) % 100
   const el = heartEl.value
   if (el) {
