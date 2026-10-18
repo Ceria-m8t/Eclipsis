@@ -694,10 +694,9 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
             <circle class="pulse-dot" cx="157" cy="24" r="2.2" />
             <path class="pulse-flow" pathLength="100" d="M4 24 H16 L20 18 L25 40 L31 4 L37 34 L41 24 H64" />
             <path class="pulse-flow" pathLength="100" d="M156 24 H144 L140 18 L135 40 L129 4 L123 34 L119 24 H96" />
-            <g class="pulse-heart">
-              <!-- 空心爱心，左右两端正好接上波形 -->
-              <path d="M80 38 C72 31 64 26 64 18 C64 13 67.5 10 71.5 10 C75.5 10 78.5 13 80 16 C81.5 13 84.5 10 88.5 10 C92.5 10 96 13 96 18 C96 26 88 31 80 38 Z" />
-            </g>
+            <!-- 空心爱心：底下一圈很淡的轮廓，上面一条带缺口的描边顺着爱心形状一直转 -->
+            <path class="heart-track" d="M80 38 C72 31 64 26 64 18 C64 13 67.5 10 71.5 10 C75.5 10 78.5 13 80 16 C81.5 13 84.5 10 88.5 10 C92.5 10 96 13 96 18 C96 26 88 31 80 38 Z" />
+            <path class="heart-flow" pathLength="100" d="M80 38 C72 31 64 26 64 18 C64 13 67.5 10 71.5 10 C75.5 10 78.5 13 80 16 C81.5 13 84.5 10 88.5 10 C92.5 10 96 13 96 18 C96 26 88 31 80 38 Z" />
           </svg>
           <div class="header-name">{{ settings.nameAI }}</div>
           <!-- 状态：他回复时显示"正在输入"；平时显示他自己设的状态；都没有就显示签名 -->
@@ -1074,7 +1073,7 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
 /* 独立的圆角卡片，上沿收在状态栏下面一点 */
 .header-card {
   width: 100%;
-  margin-top: calc(var(--safe-top) - 6px);
+  margin-top: 6px;
   border-radius: 30px;
   padding: 8px 16px 9px;
   display: flex;
@@ -1114,33 +1113,25 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
   filter: drop-shadow(0 0 2px rgba(228, 154, 174, 0.55));
 }
 .pulse-dot { fill: #b4c2e2; }
-.pulse-heart path {
-  fill: none;
+.heart-track { stroke: rgba(228, 154, 174, 0.22); stroke-width: 2; }
+/* 描边占 78、缺口 22，一圈 100；偏移量匀速走一圈，缺口就沿着爱心转 */
+.heart-flow {
   stroke: #e49aae;
   stroke-width: 2;
+  stroke-dasharray: 78 22;
+  animation: heart-flow 2.4s linear infinite;
   filter: drop-shadow(0 0 2px rgba(228, 154, 174, 0.5));
 }
-.pulse-heart {
-  transform-box: fill-box;
-  transform-origin: center;
-  /* 波形到达爱心时跳一下 */
-  animation: heartbeat 2.4s ease-in-out infinite;
-}
 .pulse.fast .pulse-flow { animation-duration: 1.1s; }
-.pulse.fast .pulse-heart { animation-duration: 1.1s; }
+.pulse.fast .heart-flow { animation-duration: 1.1s; }
 
 @keyframes flow {
   from { stroke-dashoffset: 100; }
   to { stroke-dashoffset: 0; }
 }
-/* 亮段的头在 0% 时刚好到达爱心，所以每圈开头跳一下；
-   首尾帧都是 scale(1)，循环接得上 */
-@keyframes heartbeat {
-  0% { transform: scale(1); }
-  6% { transform: scale(1.26); }
-  13% { transform: scale(0.97); }
-  20% { transform: scale(1.12); }
-  30%, 100% { transform: scale(1); }
+@keyframes heart-flow {
+  from { stroke-dashoffset: 0; }
+  to { stroke-dashoffset: -100; }
 }
 
 .header-name {
@@ -1185,7 +1176,7 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
-  padding: calc(var(--safe-top) + 96px) 12px 0;
+  padding: 112px 12px 0;
   display: flex;
   flex-direction: column;
 }
