@@ -285,6 +285,32 @@ async function handleImageSelect(e: Event) {
 
 // ================= 生成 =================
 const generating = ref(false)
+
+// ---- 顶栏爱心：两段描边沿轮廓逆时针转，前头各一颗小圆点 ----
+// 用 JS 驱动，加速/减速时位置连续，不会跳
+const heartEl = ref<SVGPathElement | null>(null)
+const heartPhase = ref(0)            // 0~100，对应 stroke-dashoffset
+const heartDots = ref<[number, number][]>([])
+let heartRaf = 0
+let heartLast = 0
+function heartTick(t: number) {
+  const dt = heartLast ? Math.min(t - heartLast, 100) : 0
+  heartLast = t
+  const period = generating.value ? 1200 : 4800   // 平时慢，他输入时快
+  heartPhase.value = (heartPhase.value + dt / period * 100) % 100
+  const el = heartEl.value
+  if (el) {
+    const len = el.getTotalLength()
+    // dasharray 42 8 42 8：描边从路径位置 -phase 和 50-phase 开始；
+    // 图案朝路径起点方向走，所以描边的"前头"就是这个起点
+    heartDots.value = [0, 50].map(o => {
+      const f = ((o - heartPhase.value) % 100 + 100) % 100
+      const q = el.getPointAtLength(len * f / 100)
+      return [q.x, q.y] as [number, number]
+    })
+  }
+  heartRaf = requestAnimationFrame(heartTick)
+}
 let abortCtrl: AbortController | null = null
 const lastCtx = ref<BuiltContext | null>(null)
 
@@ -635,6 +661,7 @@ function toast(t: string) {
 // ================= 生命周期 =================
 onMounted(async () => {
   document.documentElement.classList.add('chat-open')
+  heartRaf = requestAnimationFrame(heartTick)
   applyCustomCSS()
   try {
     const migrated = await migrateFromLocalStorage()
@@ -658,6 +685,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   document.documentElement.classList.remove('chat-open')
+  cancelAnimationFrame(heartRaf)
   pageBackdrop.value = null
   ro?.disconnect()
   // 离开页面前把待保存的写进去
@@ -681,15 +709,14 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
         <div class="header-mid">
           <!-- 心电图：两边的波形向中间流动，汇到爱心。他回复时跳得更快 -->
           <!-- 心电图（参考图三）：两端圆点 → 平线 → 大尖峰 → 汇入空心爱心。亮段从两边流向爱心 -->
-          <svg class="pulse" :class="{ fast: generating }" viewBox="0 0 140 50" aria-hidden="true">
-            <!-- 参考图三：两端圆点 → 平线 → 小波 → 大尖峰（下到名字中间）→ 平线接到爱心偏下方 -->
-            <path class="pulse-base" d="M3 29 H10 L13 25 L16 33 L19 29 H24 L29 6 L35 46 L39 29 H62.8 M137 29 H130 L127 25 L124 33 L121 29 H116 L111 6 L105 46 L101 29 H77.2" />
-            <circle class="pulse-dot" cx="2.5" cy="29" r="2" />
-            <circle class="pulse-dot" cx="137.5" cy="29" r="2" />
-            <path class="pulse-flow" pathLength="100" d="M3 29 H10 L13 25 L16 33 L19 29 H24 L29 6 L35 46 L39 29 H62.8" />
-            <path class="pulse-flow" pathLength="100" d="M137 29 H130 L127 25 L124 33 L121 29 H116 L111 6 L105 46 L101 29 H77.2" />
-            <!-- 空心爱心：两个相对的缺口，一起沿轮廓逆时针转 -->
-            <path class="heart-line" pathLength="100" d="M70 34 C63 29.5 57 25.5 57 20 C57 16.5 59.8 14 63.2 14 C66.2 14 68.6 15.8 70 18.5 C71.4 15.8 73.8 14 76.8 14 C80.2 14 83 16.5 83 20 C83 25.5 77 29.5 70 34 Z" />
+          <svg class="pulse" viewBox="0 0 168 50" aria-hidden="true">
+            <!-- 心电图（照图二黑笔）：静止，左右不对称；只有爱心在转 -->
+            <path class="pulse-base" d="M5 29 H22 L25 24 L28 33 L31 29 H36 L42 4 L49 47 L54 29 H76.8 M91.2 29 H112 L118 6 L125 46 L129 29 H136 L139 33 L142 26 L145 29 H163" />
+            <circle class="pulse-dot" cx="4" cy="29" r="2" />
+            <circle class="pulse-dot" cx="164" cy="29" r="2" />
+            <!-- 空心爱心：两个相对的缺口，一起逆时针转；每段描边的前头一颗小圆点 -->
+            <path ref="heartEl" class="heart-line" pathLength="100" :style="{ strokeDashoffset: heartPhase }" d="M84 34 C77 29.5 71 25.5 71 20 C71 16.5 73.8 14 77.2 14 C80.2 14 82.6 15.8 84 18.5 C85.4 15.8 87.8 14 90.8 14 C94.2 14 97 16.5 97 20 C97 25.5 91 29.5 84 34 Z" />
+            <circle v-for="(d, i) in heartDots" :key="i" class="pulse-dot" :cx="d[0]" :cy="d[1]" r="1.9" />
           </svg>
           <div class="header-name">{{ settings.nameAI }}</div>
           <!-- 状态：他回复时显示"正在输入"；平时显示他自己设的状态；都没有就显示签名 -->
@@ -1072,18 +1099,18 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
   margin-top: 8px;
   border-radius: 30px;
   /* 卡片上沿和灵动岛上沿齐平，内容从 --ecg-top 开始 */
-  /* 左右内边距：(屏宽 - 两侧外边距 24 - 头像 64×2 - 中间 148) ÷ 2，整组正好居中 */
-  padding: calc(var(--ecg-top) - 8px) calc(50vw - 150px) 8px;
+  /* 头像位置回到 5dfa86b：左右内边距 16、间距 12，整组居中 */
+  padding: calc(var(--ecg-top) - 8px) 16px 8px;
   display: flex;
   align-items: flex-start;
-  justify-content: space-between;
-  gap: 0;
+  justify-content: center;
+  gap: 12px;
 }
 .h-avatar {
-  width: 64px; height: 64px;
+  width: 60px; height: 60px;
   flex-shrink: 0;
-  /* 头像圆心对齐爱心中心（心电图上沿往下约 18px） */
-  margin-top: -4px;
+  /* 圆心和 5dfa86b 时一样（心电图上沿往下 18px），只是放大了一点 */
+  margin-top: -12px;
   border-radius: 50%;
   object-fit: cover;
   border: 2px solid rgba(255, 255, 255, 0.95);
@@ -1097,47 +1124,26 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
   align-items: center;
   /* 名字和签名位置不变；心电图绝对定位，不占高度，尖峰可以落到名字两侧 */
   padding-top: 31px;
-  flex: 0 0 148px;
+  /* 中间列宽 142：头像圆心正好回到 5dfa86b 的位置（iPhone 13 上 x=80） */
+  flex: 0 1 142px;
 }
 
 .pulse {
   position: absolute;
-  top: -2px; left: 50%;
-  width: 140px; height: 50px;
+  top: -11px; left: 50%;
+  /* 比中间列宽，两端伸到头像边上，各留约 4px */
+  width: 162px; height: 48.2px;
   transform: translateX(-50%);
   overflow: visible;
 }
 .pulse path { fill: none; stroke-linecap: round; stroke-linejoin: round; }
 .pulse-base { stroke: #1d1d22; stroke-width: 1.6; }
-/* 黑线上一段亮白高光，从两端流向爱心 */
-.pulse-flow {
-  stroke: rgba(255, 255, 255, 0.9);
-  stroke-width: 1.2;
-  /* 亮段 18、暗段 82，一整圈 100，匀速走完看不出断点 */
-  stroke-dasharray: 18 82;
-  stroke-dashoffset: 0;
-  animation: flow 4.8s linear infinite;
-}
 .pulse-dot { fill: #1d1d22; }
-/* 一圈 100：两段描边各 42、两个缺口各 8，缺口正好相对；
-   偏移量增大时图案朝路径起点方向走，这条路径是顺时针画的，所以缺口逆时针转 */
+/* 一圈 100：两段描边各 42、两个缺口各 8，缺口正好相对；偏移量由 heartTick 推进 */
 .heart-line {
   stroke: #1d1d22;
   stroke-width: 1.8;
   stroke-dasharray: 42 8 42 8;
-  /* 平时慢慢转，他在输入时加速 */
-  animation: heart-spin 4.8s linear infinite;
-}
-.pulse.fast .heart-line { animation-duration: 1.2s; }
-@keyframes heart-spin {
-  from { stroke-dashoffset: 0; }
-  to { stroke-dashoffset: 100; }
-}
-.pulse.fast .pulse-flow { animation-duration: 1.2s; }
-
-@keyframes flow {
-  from { stroke-dashoffset: 100; }
-  to { stroke-dashoffset: 0; }
 }
 
 .header-name {
