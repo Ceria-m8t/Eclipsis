@@ -56,6 +56,21 @@ export function renderMd(text: string): string {
   return DOMPurify.sanitize(raw, { ADD_ATTR: ['aria-label'] })
 }
 
+// 回复正文里用 <think>…</think> 或 <thinking>…</thinking> 包起来的段落，显示成"思考过程"折叠块。
+// 只在显示时拆，原文不改（发回给模型的上下文里标签照旧保留）。
+// 生成中只写了开头标签、还没收尾时，后面的内容先都算思考，不会在气泡里一闪而过。
+const THINK_RE = /<(think|thinking)>([\s\S]*?)(?:<\/\1>|$)/gi
+export function splitThink(text: string): { body: string; think: string } {
+  if (!text || !/<think(ing)?>/i.test(text)) return { body: text, think: '' }
+  const thinks: string[] = []
+  const body = text.replace(THINK_RE, (_m, _tag, inner: string) => {
+    const t = inner.trim()
+    if (t) thinks.push(t)
+    return '\n\n'
+  })
+  return { body: body.replace(/\n{3,}/g, '\n\n').trim(), think: thinks.join('\n\n') }
+}
+
 // 把一条回复拆成多个气泡：
 // 普通文字每一行一个气泡；代码块、列表、表格、引用各自整体成一个气泡；标题跟着下一段走
 export function splitBubbles(text: string): string[] {

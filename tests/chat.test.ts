@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { splitBubbles, renderMd } from '../src/markdown'
+import { splitBubbles, renderMd, splitThink } from '../src/markdown'
 import { buildContext, generate, estimateTokens, timeLabel } from '../src/chat-engine'
 import { buildToolDefinitions, resolveMcpUrl, type McpServer } from '../src/mcp'
 import type { ChatMessage, MessageVersion } from '../src/db'
@@ -221,5 +221,24 @@ describe('generate', () => {
     await expect(generate(getSettings(), [user('hi')], [], new AbortController().signal, v, { onUpdate: () => {} }))
       .rejects.toThrow(/502/)
     vi.unstubAllGlobals()
+  })
+})
+
+describe('splitThink', () => {
+  it('没有标签时原样返回', () => {
+    expect(splitThink('你好')).toEqual({ body: '你好', think: '' })
+  })
+  it('拆出 <think> 和 <thinking>，大小写都认', () => {
+    const r = splitThink('<think>想一下</think>\n吃完了好。\n<THINKING>再想</THINKING>\n晚安')
+    expect(r.think).toBe('想一下\n\n再想')
+    expect(r.body).toBe('吃完了好。\n\n晚安')
+  })
+  it('生成中还没收尾时，后面都先算思考', () => {
+    expect(splitThink('<think>正在想')).toEqual({ body: '', think: '正在想' })
+  })
+  it('标签不配对时不会互相吞', () => {
+    const r = splitThink('<think>a</thinking>b</think>c')
+    expect(r.think).toBe('a</thinking>b')
+    expect(r.body).toBe('c')
   })
 })

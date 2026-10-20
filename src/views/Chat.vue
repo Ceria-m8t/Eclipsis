@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import Icon from '../components/Icon.vue'
 import { getSettings } from '../settings'
 import { loadMcpServers } from '../mcp'
-import { renderMd, splitBubbles } from '../markdown'
+import { renderMd, splitBubbles, splitThink } from '../markdown'
 import { generate, finalizeVersion, buildContext, type BuiltContext } from '../chat-engine'
 import { compressImage } from '../image'
 import { copyText, hexToRgba, hhmm, dividerTime, downloadText } from '../utils'
@@ -167,6 +167,7 @@ interface Row {
   msg: ChatMessage
   index: number
   parts: string[]          // 拆分后的气泡
+  thinking: string         // 原生思考 + 正文里 <think> 标签拆出来的部分
   showAvatar: boolean      // 连续消息只有第一条显示头像
   divider?: string         // 上方的居中时间
   isLastOfGroup: boolean
@@ -194,9 +195,13 @@ const rows = computed<Row[]>(() => {
     const next = list[i + 1]
     const gapBefore = !prev || m.createdAt - prev.createdAt > GAP_MS
     const gapAfter = !next || next.createdAt - m.createdAt > GAP_MS
-    const text = textOf(m)
+    let text = textOf(m)
     let parts: string[]
+    let thinking = ''
     if (m.role === 'assistant') {
+      const sp = splitThink(text)
+      text = sp.body
+      thinking = [curVersion(m)?.thinking?.trim(), sp.think].filter(Boolean).join('\n\n')
       parts = text ? (settings.value.splitBubbles ? splitBubbles(text) : [text]) : []
     } else {
       parts = text ? [text] : []
@@ -206,6 +211,7 @@ const rows = computed<Row[]>(() => {
       msg: m,
       index: i,
       parts,
+      thinking,
       showAvatar: gapBefore || prev.role !== m.role,
       divider: gapBefore ? dividerTime(m.createdAt) : undefined,
       isLastOfGroup: gapAfter || next.role !== m.role
@@ -524,7 +530,8 @@ function cancelPress() {
 }
 
 async function doCopy(m: ChatMessage) {
-  const ok = await copyText(textOf(m))
+  // 复制时不带 <think> 里的内容
+  const ok = await copyText(m.role === 'assistant' ? splitThink(textOf(m)).body : textOf(m))
   toast(ok ? '已复制' : '复制失败，可以用"选择复制"')
   if (sheet.value) closeSheet()
 }
@@ -829,13 +836,13 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
 
           <div class="msg-col">
             <!-- 思考过程 -->
-            <template v-if="row.msg.role === 'assistant' && curVersion(row.msg)?.thinking">
+            <template v-if="row.msg.role === 'assistant' && row.thinking">
               <button class="fold-chip" :aria-expanded="!!expanded[row.key + ':think']" @click="toggle(row.key + ':think')">
                 <Icon name="thought" :size="15" />
                 <span>思考过程</span>
                 <Icon name="chevron" :size="14" :class="['chev', { open: expanded[row.key + ':think'] }]" />
               </button>
-              <div v-if="expanded[row.key + ':think']" class="fold-body glass">{{ curVersion(row.msg)?.thinking }}</div>
+              <div v-if="expanded[row.key + ':think']" class="fold-body glass">{{ row.thinking }}</div>
             </template>
 
             <!-- 工具调用 -->
