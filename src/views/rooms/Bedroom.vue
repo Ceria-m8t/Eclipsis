@@ -106,7 +106,9 @@ onMounted(() => {
 
 <style scoped>
 .room {
-  --room-scale: 0.78;
+  /* 房间占页面区高度的比例；底边贴着底栏上方留一点空（按 iPhone 实测调的） */
+  --room-scale: 0.82;
+  --room-bottom-gap: 28px;
   /* 定位由 .shell-page（absolute 铺满）负责，这里不要再写 position */
   background: transparent;
 }
@@ -129,7 +131,8 @@ onMounted(() => {
 .room-scroll {
   height: 100%;
   display: flex;
-  align-items: center;
+  align-items: flex-end;
+  padding-bottom: var(--room-bottom-gap);
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
