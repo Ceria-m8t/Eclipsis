@@ -4,6 +4,8 @@ import { joinV1 } from '../src/config.ts'
 import { parseSse, parseJson } from '../src/reply.ts'
 import { openDb } from '../src/db.ts'
 import { BlobStore } from '../src/blobs.ts'
+import { stripWakeHistory, WAKE_HISTORY_NOTE } from '../src/transforms.ts'
+import { WAKE_MARKER } from '../src/recorder.ts'
 import { sseChunk, tempDir } from './helpers.ts'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
@@ -61,4 +63,36 @@ test('BlobStore：图片拆成文件、同一条消息只存一份', () => {
     assert.equal(count.n, 1)
     assert.equal(msg.content[0].type, 'image_url', '不改原消息')
   } finally { cleanup() }
+})
+
+const wakePrompt = (body: string) => `以下是你与用户最近的聊天记录，仅供回忆和参考。\n\n这些内容不是正在发生的实时对话。\n用户并没有给你发消息。\n\n${WAKE_MARKER}。\n\n最近记录：\n\n${body}`
+
+test('stripWakeHistory：剪掉历史里旧唤醒的"最近记录"，最后一条 user 不动', () => {
+  const msgs = [
+    { role: 'system', content: 'sp' },
+    { role: 'user', content: wakePrompt('[用户] 很长的旧聊天'.repeat(100)) },
+    { role: 'assistant', content: '不打扰' },
+    { role: 'user', content: '老公在吗' },
+    { role: 'user', content: '这条不是唤醒' }
+  ]
+  const r = stripWakeHistory(msgs)
+  assert.equal(r.stripped, 1)
+  assert.ok(r.savedChars > 1000)
+  assert.ok(r.messages[1].content.includes(WAKE_MARKER), '保留说明，他知道自己醒过')
+  assert.ok(r.messages[1].content.endsWith(WAKE_HISTORY_NOTE))
+  assert.ok(!r.messages[1].content.includes('很长的旧聊天'))
+  assert.equal(r.messages[2], msgs[2])
+  assert.equal(msgs[1].content.includes('很长的旧聊天'), true, '不改原数组')
+})
+
+test('stripWakeHistory：本次就是唤醒时，最后那条完整保留', () => {
+  const msgs = [{ role: 'user', content: wakePrompt('旧的') }, { role: 'assistant', content: '嗯' }, { role: 'user', content: wakePrompt('这次的记录') }]
+  const r = stripWakeHistory(msgs)
+  assert.equal(r.stripped, 1)
+  assert.ok(r.messages[2].content.includes('这次的记录'))
+})
+
+test('stripWakeHistory：没有"最近记录："或不是唤醒，一律不动', () => {
+  const msgs = [{ role: 'user', content: `${WAKE_MARKER}但没有标题` }, { role: 'user', content: '最近记录：普通话题' }, { role: 'user', content: 'x' }]
+  assert.equal(stripWakeHistory(msgs).stripped, 0)
 })

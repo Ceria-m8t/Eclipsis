@@ -53,7 +53,7 @@ before(async () => {
     dbPath: ':memory:', blobDir: tmp.dir
   }
   db = openDb(':memory:')
-  const s = buildServers(cfg, db, { linkRid: true, log: m => logs.push(m) })
+  const s = buildServers(cfg, db, { linkRid: true, stripWakeHistory: true, log: m => logs.push(m) })
   front = s.front; tap = s.tap
   frontPort = await listen(front)
   tapPort = await listen(tap)
@@ -232,6 +232,23 @@ test('客户端读到 [DONE] 就断开（xiaoke 的做法）：记为 ok，不�
   await new Promise(r => setTimeout(r, 300))
   assert.equal(exchanges()[0].status, 'ok')
   assert.equal(episodes().find(e => e.actor === 'ai')?.content, '好')
+})
+
+test('上游入口剪掉历史里旧唤醒的"最近记录"；记录的是实际发出去的内容', async () => {
+  const old = `以下是……\n\n${WAKE_MARKER}。\n\n最近记录：\n\n` + '旧聊天'.repeat(500)
+  await (await chat({ model: 'm', stream: true, messages: [
+    { role: 'user', content: old }, { role: 'assistant', content: '不打扰' }, { role: 'user', content: '在吗' }
+  ] }, { 'x-eclipsis-turn': 'a8' })).text()
+  await settle()
+  const sent = JSON.parse(station.seen[0].body).messages
+  assert.ok(sent[0].content.includes(WAKE_MARKER) && !sent[0].content.includes('旧聊天'))
+  assert.equal(sent[2].content, '在吗')
+  const up = exchanges().find(e => e.tap === 'upstream')
+  assert.equal(JSON.parse(up.transforms).strip_wake_history.stripped, 1)
+  const firstMsg = JSON.parse((db.prepare('SELECT text FROM blobs WHERE hash = ?').get(JSON.parse(up.message_hashes)[0]) as any).text)
+  assert.ok(!firstMsg.content.includes('旧聊天'), 'exchange 记的是剪过的')
+  const front = exchanges().find(e => e.tap === 'front')
+  assert.equal(front.transforms, null)
 })
 
 test('/v1/models 纯透传，不记录', async () => {

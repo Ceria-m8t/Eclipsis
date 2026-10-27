@@ -9,6 +9,7 @@ import { openDb, type DB } from './db.ts'
 import { BlobStore } from './blobs.ts'
 import { Recorder } from './recorder.ts'
 import { createTap, forwardHeaders, type Prepared } from './proxy.ts'
+import { stripWakeHistory } from './transforms.ts'
 
 function bearer(req: IncomingMessage): string {
   const h = String(req.headers.authorization || '')
@@ -20,7 +21,13 @@ function safeEqual(a: string, b: string): boolean {
   return x.length === y.length && timingSafeEqual(x, y)
 }
 
-export function buildServers(cfg: Config, db: DB, opts: { linkRid?: boolean; log?: (m: string, e?: unknown) => void } = {}): { front: Server; tap: Server } {
+export interface ServerOptions {
+  linkRid?: boolean           // LINK_RID=1
+  stripWakeHistory?: boolean  // STRIP_WAKE_HISTORY=1
+  log?: (m: string, e?: unknown) => void
+}
+
+export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { front: Server; tap: Server } {
   const blobs = new BlobStore(db, cfg.blobDir)
   const recorder = new Recorder(db, blobs)
 
@@ -55,9 +62,24 @@ export function buildServers(cfg: Config, db: DB, opts: { linkRid?: boolean; log
     },
     prepare: (json, raw): Prepared => {
       const linkedRid = typeof json?.eclipsis_rid === 'string' && /^[\w-]{8,64}$/.test(json.eclipsis_rid) ? json.eclipsis_rid : null
-      if (!('eclipsis_rid' in json)) return { rid: crypto.randomUUID(), linked: false, body: raw }
-      const { eclipsis_rid: _drop, ...rest } = json
-      return { rid: linkedRid || crypto.randomUUID(), linked: !!linkedRid, body: Buffer.from(JSON.stringify(rest)) }
+      const rid = linkedRid || crypto.randomUUID()
+      let out = json
+      let changed = 'eclipsis_rid' in json
+      const transforms: Record<string, unknown> = {}
+      if (changed) { const { eclipsis_rid: _drop, ...rest } = json; out = rest }
+      if (opts.stripWakeHistory && Array.isArray(out.messages)) {
+        const r = stripWakeHistory(out.messages)
+        if (r.stripped) {
+          out = { ...out, messages: r.messages }
+          transforms.strip_wake_history = { stripped: r.stripped, saved_chars: r.savedChars }
+          changed = true
+        }
+      }
+      if (!changed) return { rid, linked: false, body: raw }
+      return {
+        rid, linked: !!linkedRid, body: Buffer.from(JSON.stringify(out)), json: out,
+        transforms: Object.keys(transforms).length ? transforms : null
+      }
     }
   })
   return { front, tap }
@@ -68,9 +90,13 @@ function main() {
   if (!cfg.tapKey) console.warn('[eclipsis] TAP_KEY 未设置：上游入口会拒绝所有请求')
   if (!cfg.upstreamUrl) console.warn('[eclipsis] UPSTREAM_URL 未设置：上游入口返回 503')
   const db = openDb(cfg.dbPath)
-  const { front, tap } = buildServers(cfg, db, { linkRid: process.env.LINK_RID === '1' })
+  const { front, tap } = buildServers(cfg, db, {
+    linkRid: process.env.LINK_RID === '1',
+    stripWakeHistory: process.env.STRIP_WAKE_HISTORY === '1'
+  })
   front.listen(cfg.frontPort, '127.0.0.1', () => console.log(`[eclipsis] front  127.0.0.1:${cfg.frontPort} → ${cfg.dylanUrl}`))
-  tap.listen(cfg.tapPort, '127.0.0.1', () => console.log(`[eclipsis] tap    127.0.0.1:${cfg.tapPort} → ${cfg.upstreamUrl || '(未配置)'}`))
+  tap.listen(cfg.tapPort, '127.0.0.1', () => console.log(`[eclipsis] tap    127.0.0.1:${cfg.tapPort} → ${cfg.upstreamUrl || '(未配置)'}` +
+    `  LINK_RID=${process.env.LINK_RID === '1' ? 1 : 0} STRIP_WAKE_HISTORY=${process.env.STRIP_WAKE_HISTORY === '1' ? 1 : 0}`))
   const stop = () => {
     front.close(); tap.close()
     setTimeout(() => { db.close(); process.exit(0) }, 3000).unref()

@@ -27,7 +27,8 @@ export interface StartInput {
   linked: boolean               // 上游入口：请求里带了前端出口给的 rid
   path: string
   headers: Record<string, string | string[] | undefined>
-  body: any                     // 已解析的 JSON（转发前的原样）
+  body: any                     // 已解析的 JSON（实际发出去的内容）
+  transforms?: Record<string, unknown> | null
 }
 
 export interface ExchangeCtx {
@@ -105,11 +106,12 @@ export class Recorder {
       scene, conversation, turn, version, startedAt: now.toISOString(), startMs: now.getTime(), wake, derive
     }
     tx(this.db, () => {
-      const r = this.db.prepare(`INSERT INTO exchanges(rid, tap, started_at, status, path, scene, conversation, turn, model, stream, message_hashes, options_hash)
-        VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      const r = this.db.prepare(`INSERT INTO exchanges(rid, tap, started_at, status, path, scene, conversation, turn, model, stream, message_hashes, options_hash, transforms)
+        VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         input.rid, input.tap, ctx.startedAt, input.path, scene, conversation, turn,
         typeof body.model === 'string' ? body.model : null, body.stream === true ? 1 : 0,
-        JSON.stringify(stored.map(s => s.hash)), optionsHash
+        JSON.stringify(stored.map(s => s.hash)), optionsHash,
+        input.transforms ? JSON.stringify(input.transforms) : null
       )
       ctx.id = Number(r.lastInsertRowid)
       if (derive) this.startEpisodes(ctx, stored)

@@ -18,6 +18,8 @@ export interface Prepared {
   rid: string
   linked: boolean
   body: Buffer            // 实际发出去的请求体
+  json?: any              // 改过请求时：实际发出去的 JSON（记录用这个）
+  transforms?: Record<string, unknown> | null
 }
 
 export interface TapOptions {
@@ -92,7 +94,12 @@ export function createTap(opts: TapOptions): Server {
 
     let ctx: ExchangeCtx | null = null
     if (json && opts.recorder) {
-      try { ctx = opts.recorder.start({ tap: opts.tap, rid: prepared.rid, linked: prepared.linked, path, headers: req.headers, body: json }) }
+      try {
+        ctx = opts.recorder.start({
+          tap: opts.tap, rid: prepared.rid, linked: prepared.linked, path, headers: req.headers,
+          body: prepared.json ?? json, transforms: prepared.transforms
+        })
+      }
       catch (e) { log('记录 start 失败', e) }
     }
     const finish = (input: Parameters<Recorder['finish']>[1]) => {

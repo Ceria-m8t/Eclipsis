@@ -39,7 +39,8 @@ CREATE TABLE IF NOT EXISTS exchanges (
   reply_tool_calls TEXT,         -- JSON
   finish_reason TEXT,
   usage TEXT,                    -- JSON
-  error TEXT
+  error TEXT,
+  transforms TEXT                -- JSON：上游入口对请求做了哪些改动（message_hashes 记的是改动后的）
 );
 CREATE INDEX IF NOT EXISTS idx_exchanges_rid ON exchanges(rid);
 CREATE INDEX IF NOT EXISTS idx_exchanges_started ON exchanges(started_at);
@@ -68,6 +69,9 @@ export function openDb(path: string): DB {
   db.exec('PRAGMA busy_timeout = 5000')
   db.exec('PRAGMA foreign_keys = ON')
   db.exec(SCHEMA)
+  // 旧库补列
+  const cols = (db.prepare('PRAGMA table_info(exchanges)').all() as { name: string }[]).map(c => c.name)
+  if (!cols.includes('transforms')) db.exec('ALTER TABLE exchanges ADD COLUMN transforms TEXT')
   return db
 }
 
