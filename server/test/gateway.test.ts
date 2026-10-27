@@ -149,6 +149,19 @@ test('重新生成：同一 turn 的 user 只记一次，第二个回复标 rege
   assert.equal(JSON.parse(ai[1].meta).regenerated, true)
 })
 
+test('分条发的几句（回车分条、最后点发送）：每句一条经历，按顺序；重新生成不重复记', async () => {
+  const body = { model: 'm', stream: true, messages: [
+    { role: 'user', content: '旧的' }, { role: 'assistant', content: '嗯' },
+    { role: 'user', content: '第一句' }, { role: 'user', content: '第二句' }, { role: 'user', content: '第三句' }
+  ] }
+  await (await chat(body, { 'x-eclipsis-turn': 'm1', 'x-eclipsis-version': '0' })).text()
+  await (await chat(body, { 'x-eclipsis-turn': 'm1', 'x-eclipsis-version': '1' })).text()
+  await settle()
+  const ep = episodes()
+  assert.deepEqual(ep.filter(e => e.actor === 'erica').map(e => e.content), ['第一句', '第二句', '第三句'])
+  assert.equal(ep.filter(e => e.actor === 'ai').length, 2)
+})
+
 test('工具调用：tool_call 和下一轮的 tool_result 都进经历', async () => {
   stationReply = streamReply([
     sseChunk({ content: '我放首歌' }),

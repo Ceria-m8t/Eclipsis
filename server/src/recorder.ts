@@ -134,19 +134,27 @@ export class Recorder {
     const last = stored[stored.length - 1]
     if (!last) return
     if (last.message?.role === 'user') {
-      const text = textOf(last.message.content).trim() || (last.images.length ? '[图片]' : '')
-      if (!text) return
-      // 有 turn header 时按 turn 去重（重新生成不会重复记）；没有时按"会话 + 上下文链"去重
-      const ref = ctx.turn
+      // 她这一次发送的所有话：结尾连在一起的 user（回车分条发、最后才点发送的几句），每句一条经历
+      let first = stored.length - 1
+      while (first > 0 && stored[first - 1].message?.role === 'user') first--
+      // 有 turn header 时按 turn 去重（重新生成不会重复记）；没有时按"会话 + 上下文链"去重。
+      // 最后一句沿用原来的键；前面几句加 -1、-2……（倒数第几句）
+      const base = ctx.turn
         ? `${ctx.tap}:turn:${ctx.conversation || '-'}:${ctx.turn}:user`
         : `${ctx.tap}:fp:${sha256((ctx.conversation || '-') + '|' + stored.map(s => s.hash).join(','))}:user`
-      const meta: Record<string, unknown> = {}
-      if (last.images.length) meta.images = last.images
-      if (ctx.tap === 'upstream') meta.via = 'upstream'
-      addEpisode(this.db, {
-        ts: ctx.startedAt, channel, scope, actor: 'erica', kind: 'message', content: text,
-        meta: Object.keys(meta).length ? meta : null, sourceRef: ref
-      })
+      for (let i = first; i < stored.length; i++) {
+        const m = stored[i]
+        const text = textOf(m.message.content).trim() || (m.images.length ? '[图片]' : '')
+        if (!text) continue
+        const back = stored.length - 1 - i
+        const meta: Record<string, unknown> = {}
+        if (m.images.length) meta.images = m.images
+        if (ctx.tap === 'upstream') meta.via = 'upstream'
+        addEpisode(this.db, {
+          ts: ctx.startedAt, channel, scope, actor: 'erica', kind: 'message', content: text,
+          meta: Object.keys(meta).length ? meta : null, sourceRef: back ? `${base}-${back}` : base
+        })
+      }
       return
     }
     // 结尾是一串 tool 消息：上一轮工具调用的结果
