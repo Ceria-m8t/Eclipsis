@@ -7,7 +7,10 @@
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "server:check": "tsc -p server/tsconfig.json",
+    "server:test": "node --test --test-concurrency=1 'server/test/**/*.test.ts'",
+    "server:start": "node server/src/main.ts"
   },
   "dependencies": {
     "dompurify": "^3.2.6",

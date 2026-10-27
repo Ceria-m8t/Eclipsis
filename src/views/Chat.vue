@@ -357,7 +357,7 @@ async function runGeneration(target?: ChatMessage) {
         persist(msg)
         scrollToBottom()
       }
-    })
+    }, { scene: 'chat', conversation: 'main', turn: msg.id, version: msg.activeVersion ?? 0 })
   } catch (err: any) {
     if (err?.name !== 'AbortError') {
       msg.error = err?.message || String(err)

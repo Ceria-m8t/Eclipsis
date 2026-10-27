@@ -136,12 +136,32 @@ interface StreamResult {
   finishReason: string
 }
 
+// 告诉后端这一轮在哪个场景、属于哪条回复。只在走同源 /api 时带：
+// 直连其他 API 时带自定义 header 会触发跨域预检
+export interface TurnMeta {
+  scene: string          // chat / room / creative / game / work …
+  conversation: string
+  turn: string           // 这条 assistant 消息的 id（重新生成时不变）
+  version: number        // 第几个版本（重新生成 +1）
+}
+
+export function turnHeaders(settings: Settings, meta?: TurnMeta): Record<string, string> {
+  if (!meta || settings.apiBase) return {}
+  return {
+    'X-Eclipsis-Scene': meta.scene,
+    'X-Eclipsis-Conversation': meta.conversation,
+    'X-Eclipsis-Turn': meta.turn,
+    'X-Eclipsis-Version': String(meta.version)
+  }
+}
+
 async function streamOnce(
   settings: Settings, body: any, signal: AbortSignal,
-  onText: (delta: string) => void, onThinking: (delta: string) => void
+  onText: (delta: string) => void, onThinking: (delta: string) => void,
+  meta?: TurnMeta
 ): Promise<StreamResult> {
   const res = await fetch(apiUrl(settings, '/chat/completions'), {
-    method: 'POST', headers: apiHeaders(settings), body: JSON.stringify(body), signal
+    method: 'POST', headers: { ...apiHeaders(settings), ...turnHeaders(settings, meta) }, body: JSON.stringify(body), signal
   })
   if (!res.ok) {
     const t = await res.text()
@@ -209,7 +229,8 @@ export async function generate(
   servers: McpServer[],
   signal: AbortSignal,
   version: MessageVersion,   // 由调用方创建并持有：中途停止或出错时已生成的部分不会丢
-  cb: GenerateCallbacks
+  cb: GenerateCallbacks,
+  meta?: TurnMeta
 ): Promise<BuiltContext> {
   const ctx = buildContext(history, settings.contextTokens)
   const messages = [...ctx.messages]
@@ -230,7 +251,8 @@ export async function generate(
 
     const r = await streamOnce(settings, body, signal,
       d => { version.content += d; emit() },
-      d => { version.thinking += d; emit() })
+      d => { version.thinking += d; emit() },
+      meta)
 
     const turn: ApiTurn = { content: r.content }
     if (!r.toolCalls.length) {

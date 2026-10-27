@@ -215,6 +215,23 @@ describe('generate', () => {
     vi.unstubAllGlobals()
   })
 
+  it('同源 /api 时带上场景/轮次 header；直连其他 API 时不带', async () => {
+    const seen: any[] = []
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: any) => {
+      seen.push(init.headers)
+      return sse([delta({ content: 'hi' }), delta({}, 'stop')])
+    }))
+    const meta = { scene: 'chat', conversation: 'main', turn: 'a9', version: 1 }
+    await generate(getSettings(), [user('hi')], [], new AbortController().signal, { content: '', createdAt: 0 }, { onUpdate: () => {} }, meta)
+    expect(seen[0]['X-Eclipsis-Scene']).toBe('chat')
+    expect(seen[0]['X-Eclipsis-Turn']).toBe('a9')
+    expect(seen[0]['X-Eclipsis-Version']).toBe('1')
+    const direct = { ...getSettings(), apiBase: 'https://other.example/v1', apiKey: 'k' }
+    await generate(direct, [user('hi')], [], new AbortController().signal, { content: '', createdAt: 0 }, { onUpdate: () => {} }, meta)
+    expect(seen[1]['X-Eclipsis-Scene']).toBeUndefined()
+    vi.unstubAllGlobals()
+  })
+
   it('网关报错时抛出带状态码的错误', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('upstream down', { status: 502 })))
     const v: MessageVersion = { content: '', createdAt: 0 }

@@ -1,0 +1,211 @@
+// 端到端：前端 → 前端出口 → 假 Dylan（原样转给上游入口，模拟 Dylan+xiaoke）→ 上游入口 → 假中转站
+import { test, before, after, beforeEach } from 'node:test'
+import assert from 'node:assert/strict'
+import type { Server } from 'node:http'
+import { buildServers } from '../src/main.ts'
+import { openDb, type DB } from '../src/db.ts'
+import { loadConfig, type Config } from '../src/config.ts'
+import { WAKE_MARKER } from '../src/recorder.ts'
+import { listen, close, fakeUpstream, sseChunk, tempDir, type Seen } from './helpers.ts'
+
+const TAP_KEY = 'tap-key-for-test'
+const STATION_KEY = 'station-key-for-test'
+
+let station: ReturnType<typeof fakeUpstream>
+let stationReply: (req: Seen, res: import('node:http').ServerResponse) => void
+let dylan: Server
+let front: Server, tap: Server
+let frontPort = 0, tapPort = 0
+let db: DB
+let tmp: ReturnType<typeof tempDir>
+const logs: string[] = []
+
+function streamReply(chunks: string[]) {
+  return (_req: Seen, res: import('node:http').ServerResponse) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    for (const c of chunks) res.write(c)
+    res.end('data: [DONE]\n\n')
+  }
+}
+
+before(async () => {
+  tmp = tempDir()
+  station = fakeUpstream((req, res) => stationReply(req, res))
+  const stationPort = await listen(station.server)
+
+  // 假 Dylan：把请求体原样转发给上游入口（真 Dylan/xiaoke 也会保留 eclipsis_rid 这类多余字段）
+  const { server } = fakeUpstream(async (req, res) => {
+    if (req.url === '/v1/models') { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"data":[{"id":"m1"}]}'); return }
+    const r = await fetch(`http://127.0.0.1:${tapPort}${req.url}`, {
+      method: req.method, headers: { 'content-type': 'application/json', authorization: `Bearer ${TAP_KEY}` }, body: req.body
+    })
+    res.writeHead(r.status, { 'content-type': r.headers.get('content-type') || '' })
+    res.end(Buffer.from(await r.arrayBuffer()))
+  })
+  dylan = server
+  const dylanPort = await listen(dylan)
+
+  const cfg: Config = {
+    ...loadConfig({}),
+    dylanUrl: `http://127.0.0.1:${dylanPort}/v1`,
+    upstreamUrl: `http://127.0.0.1:${stationPort}/v1`,
+    upstreamKey: STATION_KEY, tapKey: TAP_KEY, headerTimeoutMs: 5000,
+    dbPath: ':memory:', blobDir: tmp.dir
+  }
+  db = openDb(':memory:')
+  const s = buildServers(cfg, db, { linkRid: true, log: m => logs.push(m) })
+  front = s.front; tap = s.tap
+  frontPort = await listen(front)
+  tapPort = await listen(tap)
+})
+
+after(async () => {
+  await Promise.all([close(front), close(tap), close(dylan), close(station.server)])
+  db.close()
+  tmp.cleanup()
+})
+
+beforeEach(() => {
+  station.seen.length = 0
+  db.exec('DELETE FROM exchanges; DELETE FROM episodes; DELETE FROM blobs;')
+  stationReply = streamReply([sseChunk({ content: '在' }), sseChunk({ content: '呢' }), sseChunk({}, 'stop')])
+})
+
+function chat(body: any, headers: Record<string, string> = {}) {
+  return fetch(`http://127.0.0.1:${frontPort}/v1/chat/completions`, {
+    method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer gw', ...headers },
+    body: JSON.stringify(body)
+  })
+}
+const episodes = () => db.prepare('SELECT actor, kind, channel, scope, content, meta, source_ref FROM episodes ORDER BY ts, seq').all() as any[]
+const exchanges = () => db.prepare('SELECT * FROM exchanges ORDER BY id').all() as any[]
+// finish 在响应结束后才写库，给它一点时间
+const settle = () => new Promise(r => setTimeout(r, 30))
+
+test('流式回复原样到达前端；两边记录用同一个 rid 串起来；中转站看不到 rid 和本地 key', async () => {
+  const res = await chat({ model: 'm', stream: true, messages: [{ role: 'system', content: 'sp' }, { role: 'user', content: '在吗' }] },
+    { 'x-eclipsis-scene': 'chat', 'x-eclipsis-conversation': 'main', 'x-eclipsis-turn': 'a1', 'x-eclipsis-version': '0' })
+  const text = await res.text()
+  await settle()
+  assert.equal(res.status, 200)
+  assert.ok(text.includes('"在"') && text.includes('"呢"') && text.trim().endsWith('[DONE]'))
+
+  const sent = JSON.parse(station.seen[0].body)
+  assert.equal('eclipsis_rid' in sent, false)
+  assert.equal(station.seen[0].headers.authorization, `Bearer ${STATION_KEY}`)
+  assert.equal(station.seen[0].headers['x-eclipsis-scene'], undefined)
+
+  const ex = exchanges()
+  assert.deepEqual(ex.map(e => e.tap), ['front', 'upstream'])
+  assert.equal(ex[0].rid, ex[1].rid)
+  assert.ok(ex.every(e => e.status === 'ok' && e.reply_content === '在呢'))
+  assert.equal(ex[0].scene, 'chat')
+
+  const ep = episodes()
+  assert.deepEqual(ep.map(e => [e.actor, e.kind, e.content]), [['erica', 'message', '在吗'], ['ai', 'message', '在呢']])
+  assert.ok(ep.every(e => e.channel === 'chat' && e.scope === 'daily'))
+})
+
+test('重新生成：同一 turn 的 user 只记一次，第二个回复标 regenerated', async () => {
+  const body = { model: 'm', stream: true, messages: [{ role: 'user', content: '讲个笑话' }] }
+  await (await chat(body, { 'x-eclipsis-turn': 'a2', 'x-eclipsis-version': '0' })).text()
+  await (await chat(body, { 'x-eclipsis-turn': 'a2', 'x-eclipsis-version': '1' })).text()
+  await settle()
+  const ep = episodes()
+  assert.equal(ep.filter(e => e.actor === 'erica').length, 1)
+  const ai = ep.filter(e => e.actor === 'ai')
+  assert.equal(ai.length, 2)
+  assert.equal(JSON.parse(ai[1].meta).regenerated, true)
+})
+
+test('工具调用：tool_call 和下一轮的 tool_result 都进经历', async () => {
+  stationReply = streamReply([
+    sseChunk({ content: '我放首歌' }),
+    sseChunk({ tool_calls: [{ index: 0, id: 'call_x', function: { name: 'play_song', arguments: '{"q":"晴天"}' } }] }),
+    sseChunk({}, 'tool_calls')
+  ])
+  const h = { 'x-eclipsis-turn': 'a3', 'x-eclipsis-version': '0' }
+  await (await chat({ model: 'm', stream: true, messages: [{ role: 'user', content: '放歌' }] }, h)).text()
+  stationReply = streamReply([sseChunk({ content: '放好了' }), sseChunk({}, 'stop')])
+  await (await chat({ model: 'm', stream: true, messages: [
+    { role: 'user', content: '放歌' },
+    { role: 'assistant', content: '我放首歌', tool_calls: [{ id: 'call_x', type: 'function', function: { name: 'play_song', arguments: '{"q":"晴天"}' } }] },
+    { role: 'tool', tool_call_id: 'call_x', content: '正在播放：晴天' }
+  ] }, h)).text()
+  await settle()
+  assert.deepEqual(episodes().map(e => [e.actor, e.kind, e.content]), [
+    ['erica', 'message', '放歌'],
+    ['ai', 'message', '我放首歌'],
+    ['ai', 'tool_call', 'play_song({"q":"晴天"})'],
+    ['tool', 'tool_result', '正在播放：晴天'],
+    ['ai', 'message', '放好了']
+  ])
+})
+
+test('图片：拆出来存文件，经历里记哈希', async () => {
+  const png = Buffer.from('img').toString('base64')
+  await (await chat({ model: 'm', stream: true, messages: [{ role: 'user', content: [
+    { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${png}` } }, { type: 'text', text: '看这个' }
+  ] }] }, { 'x-eclipsis-turn': 'a4' })).text()
+  await settle()
+  const user = episodes().find(e => e.actor === 'erica')
+  assert.equal(user.content, '[图片]\n看这个')
+  assert.equal(JSON.parse(user.meta).images.length, 1)
+})
+
+test('创作场景进 fiction 作用域', async () => {
+  await (await chat({ model: 'm', stream: true, messages: [{ role: 'user', content: '续写' }] }, { 'x-eclipsis-scene': 'creative', 'x-eclipsis-turn': 'a5' })).text()
+  await settle()
+  assert.ok(episodes().every(e => e.scope === 'fiction' && e.channel === 'creative'))
+})
+
+test('上游 400：状态码和正文原样回给前端，记为 http_error，不记他的回复', async () => {
+  stationReply = (_r, res) => { res.writeHead(400, { 'content-type': 'application/json' }); res.end('{"error":{"message":"Invalid request"}}') }
+  const res = await chat({ model: 'm', stream: true, messages: [{ role: 'user', content: '在吗' }] }, { 'x-eclipsis-turn': 'a6' })
+  assert.equal(res.status, 400)
+  assert.equal(await res.text(), '{"error":{"message":"Invalid request"}}')
+  await settle()
+  const ex = exchanges()
+  assert.ok(ex.every(e => e.status === 'http_error' && e.error === 'Invalid request'))
+  assert.deepEqual(episodes().map(e => e.actor), ['erica'])
+})
+
+test('上游入口：key 不对直接 401，不碰中转站', async () => {
+  const res = await fetch(`http://127.0.0.1:${tapPort}/v1/chat/completions`, {
+    method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer wrong' }, body: '{"messages":[]}'
+  })
+  assert.equal(res.status, 401)
+  assert.equal(station.seen.length, 0)
+})
+
+test('唤醒请求（不经前端）：记成 wake 经历', async () => {
+  stationReply = (_r, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ choices: [{ message: { content: '醒了，想她' }, finish_reason: 'stop' }] })) }
+  const res = await fetch(`http://127.0.0.1:${tapPort}/v1/chat/completions`, {
+    method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${TAP_KEY}` },
+    body: JSON.stringify({ model: 'm', stream: false, messages: [{ role: 'system', content: 'wake' }, { role: 'user', content: `最近记录……${WAKE_MARKER}` }] })
+  })
+  assert.equal((await res.json() as any).choices[0].message.content, '醒了，想她')
+  await settle()
+  assert.deepEqual(episodes().map(e => [e.channel, e.kind, e.content]), [['wake', 'wake', '醒了，想她']])
+})
+
+test('/v1/models 纯透传，不记录', async () => {
+  const res = await fetch(`http://127.0.0.1:${frontPort}/v1/models`)
+  assert.deepEqual(await res.json(), { data: [{ id: 'm1' }] })
+  await settle()
+  assert.equal(exchanges().length, 0)
+})
+
+test('Dylan 不在：返回 502，记为 network_error', async () => {
+  const cfg: Config = { ...loadConfig({}), dylanUrl: 'http://127.0.0.1:1/v1', dbPath: ':memory:', blobDir: tmp.dir, headerTimeoutMs: 2000 }
+  const s = buildServers(cfg, db, { log: () => {} })
+  const port = await listen(s.front)
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ messages: [{ role: 'user', content: 'x' }] })
+    })
+    assert.equal(res.status, 502)
+    await settle()
+    assert.equal(exchanges()[0].status, 'network_error')
+  } finally { await close(s.front); await close(s.tap) }
+})

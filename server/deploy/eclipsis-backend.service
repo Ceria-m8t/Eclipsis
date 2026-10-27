@@ -1,0 +1,30 @@
+[Unit]
+Description=Eclipsis backend (phase 1: shadow gateway, record only)
+After=network.target
+
+[Service]
+Type=simple
+User=eclipsis-backend
+Group=eclipsis-backend
+WorkingDirectory=/opt/eclipsis
+# 换站改这个文件里的 UPSTREAM_URL / UPSTREAM_KEY，然后 systemctl restart eclipsis-backend
+EnvironmentFile=/etc/eclipsis/backend.env
+ExecStart=/usr/local/bin/node --disable-warning=ExperimentalWarning /opt/eclipsis/server/src/main.ts
+Restart=always
+RestartSec=2
+
+# 加固：只能写自己的数据目录
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/eclipsis
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

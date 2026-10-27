@@ -1,0 +1,25 @@
+# 前端出口接入：/api/ 先到后端（3480），后端没起来时 nginx 直接走 Dylan（3457）。
+# upstream 块放在 server {} 外面（http 级别）。
+
+upstream eclipsis_api {
+    server 127.0.0.1:3480 max_fails=1 fail_timeout=10s;
+    server 127.0.0.1:3457 backup;
+}
+
+# server {} 里替换原来的 location /api/：只改了 proxy_pass 这一行
+location /api/ {
+    error_page 401 = @need_login_api;
+    proxy_pass http://eclipsis_api/v1/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $eclipsis_client_ip;
+    include /etc/nginx/secrets/eclipsis-gateway.conf;
+    proxy_http_version 1.1;
+    proxy_set_header Connection '';
+    proxy_buffering off;
+    proxy_cache off;
+    chunked_transfer_encoding on;
+    proxy_read_timeout 300s;
+    proxy_request_buffering off;
+    # 只有连不上（后端没起来）才换 Dylan；已经发出去的请求不重发，避免一句话发两遍
+    proxy_next_upstream error;
+}
