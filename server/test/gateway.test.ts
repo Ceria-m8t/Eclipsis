@@ -279,6 +279,37 @@ test('上游入口剪掉历史里旧唤醒的"最近记录"；记录的是实际
   assert.equal(front.transforms, null)
 })
 
+test('调试接口：按 turn+version 查到每一轮，区分前端发的和一路补进来的', async () => {
+  // 假 Dylan 原样转发，这里在前端出口发 1 条；再直接往上游入口发一条带历史的，模拟 xiaoke 补了历史
+  await (await chat({ model: 'm', stream: true, messages: [{ role: 'system', content: '提示词' }, { role: 'user', content: '在吗' }] },
+    { 'x-eclipsis-turn': 'dbg1', 'x-eclipsis-version': '0' })).text()
+  await (await chat({ model: 'm', stream: true, messages: [{ role: 'user', content: '在吗' }] },
+    { 'x-eclipsis-turn': 'dbg1', 'x-eclipsis-version': '1' })).text()
+  await settle()
+  const r0 = await (await fetch(`http://127.0.0.1:${frontPort}/v1/eclipsis/turn/dbg1?version=0`)).json() as any
+  assert.equal(r0.rounds.length, 1)
+  const round = r0.rounds[0]
+  assert.equal(round.status, 'ok')
+  assert.deepEqual(round.sent, { messages: 2, chars: 5, system_chars: 3 })
+  assert.equal(round.delivered.from_gateway, 0)
+  assert.deepEqual(round.messages.map((m: any) => [m.role, m.origin, m.preview]), [['system', 'frontend', '提示词'], ['user', 'frontend', '在吗']])
+  assert.equal(round.reply.chars, 2)
+  assert.ok(round.front.latency_ms !== null && round.upstream.latency_ms !== null)
+  const r1 = await (await fetch(`http://127.0.0.1:${frontPort}/v1/eclipsis/turn/dbg1?version=1`)).json() as any
+  assert.equal(r1.rounds.length, 1)
+  assert.notEqual(r1.rounds[0].rid, round.rid)
+  const post = await fetch(`http://127.0.0.1:${frontPort}/v1/eclipsis/turn/dbg1`, { method: 'POST', body: '{}' })
+  assert.equal(post.status, 405, '只读')
+  const none = await (await fetch(`http://127.0.0.1:${frontPort}/v1/eclipsis/turn/nope`)).json() as any
+  assert.deepEqual(none.rounds, [])
+  assert.equal(exchanges().filter((e: any) => e.path.includes('eclipsis')).length, 0, '调试接口本身不记录')
+})
+
+test('上游入口不提供调试接口', async () => {
+  const res = await fetch(`http://127.0.0.1:${tapPort}/v1/eclipsis/turn/x`, { headers: { authorization: 'Bearer wrong' } })
+  assert.equal(res.status, 401)
+})
+
 test('/v1/models 纯透传，不记录', async () => {
   const res = await fetch(`http://127.0.0.1:${frontPort}/v1/models`)
   assert.deepEqual(await res.json(), { data: [{ id: 'm1' }] })

@@ -11,6 +11,7 @@ export interface Settings {
   chatSubtitle: string   // 顶栏名字下面那行小字
   contextTokens: number  // 发给模型的聊天历史上限（估算值，不含系统提示词）
   splitBubbles: boolean  // 他的回复按段落拆成多个气泡
+  keepAlive: boolean     // 他回复时后台静音保活（切到别的 app 不断）
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -25,7 +26,8 @@ const DEFAULT_SETTINGS: Settings = {
   nameUser: 'Erica',
   chatSubtitle: '',
   contextTokens: 60000,
-  splitBubbles: true
+  splitBubbles: true,
+  keepAlive: true
 }
 
 const STORAGE_KEY = 'our-home-settings'

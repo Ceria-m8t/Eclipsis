@@ -31,6 +31,7 @@ export interface TapOptions {
   prepare: (json: any | null, raw: Buffer) => Prepared
   recorder: Recorder | null
   headerTimeoutMs: number
+  api?: (req: IncomingMessage, res: ServerResponse) => boolean   // 本地接口，返回 true 表示已处理，不转发
   log?: (msg: string, err?: unknown) => void
 }
 
@@ -99,6 +100,9 @@ export function createTap(opts: TapOptions): Server {
     const t0 = Date.now()
     const path = req.url || '/'
     if (path === '/healthz') return sendJson(res, 200, { service: 'eclipsis-backend', tap: opts.tap, status: 'ok' })
+    if (opts.api) {
+      try { if (opts.api(req, res)) return } catch (e) { log('接口出错', e); return sendJson(res, 500, { error: 'internal error' }) }
+    }
     if (!opts.authorize(req)) return sendJson(res, 401, { error: { message: 'unauthorized', type: 'authentication_error' } })
     const target = opts.target(path)
     if (!target) return sendJson(res, 503, { error: { message: `${opts.name}: 上游地址未配置`, type: 'config_error' } })

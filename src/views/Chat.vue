@@ -5,6 +5,8 @@ import { getSettings } from '../settings'
 import { loadMcpServers } from '../mcp'
 import { renderMd, splitBubbles, splitThink } from '../markdown'
 import { generate, finalizeVersion, buildContext, type BuiltContext } from '../chat-engine'
+import { startKeepAlive, stopKeepAlive } from '../keepalive'
+import TurnDebug from '../components/TurnDebug.vue'
 import { compressImage } from '../image'
 import { copyText, hexToRgba, hhmm, dividerTime, downloadText } from '../utils'
 import { keyboardOpen } from '../viewport'
@@ -272,8 +274,10 @@ const unanswered = computed(() => {
 
 async function onSendButton() {
   if (generating.value) { stopGenerating(); return }
+  // iOS 只认点按里同步发起的播放，所以保活要在任何 await 之前开
+  if (getSettings().keepAlive) startKeepAlive(`${settings.value.nameAI}正在回复…`)
   await pushUserMessage()
-  if (unanswered.value === 0) { toast('先说点什么吧'); return }
+  if (unanswered.value === 0) { stopKeepAlive(); toast('先说点什么吧'); return }
   await runGeneration()
 }
 
@@ -324,6 +328,8 @@ const lastCtx = ref<BuiltContext | null>(null)
 async function runGeneration(target?: ChatMessage) {
   if (generating.value) return
   settings.value = getSettings()
+  // 重新生成/重试也是点按进来的，这里同步开（发送按钮那边已经开过就不会重复）
+  if (settings.value.keepAlive) startKeepAlive(`${settings.value.nameAI}正在回复…`)
   generating.value = true
   abortCtrl = new AbortController()
 
@@ -375,6 +381,7 @@ async function runGeneration(target?: ChatMessage) {
     else saveTimers.delete(msg.id)
     generating.value = false
     abortCtrl = null
+    stopKeepAlive()
     scrollToBottom()
   }
 }
@@ -504,7 +511,7 @@ function prettyJson(s: string): string {
 }
 
 // ================= 长按 / 操作面板 =================
-type SheetMode = 'menu' | 'select' | 'edit' | 'confirm-delete' | 'confirm-delete-version'
+type SheetMode = 'menu' | 'select' | 'edit' | 'confirm-delete' | 'confirm-delete-version' | 'debug'
 const sheet = ref<{ msg: ChatMessage; mode: SheetMode } | null>(null)
 const editText = ref('')
 
@@ -1017,12 +1024,17 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
           <button class="sheet-item" @click="startEdit"><Icon name="edit" />编辑</button>
           <button class="sheet-item" @click="shareMsg(sheet.msg)"><Icon name="share" />分享</button>
           <button v-if="sheet.msg.role === 'assistant'" class="sheet-item" :disabled="generating" @click="regenerate(sheet.msg)"><Icon name="refresh" />重新生成</button>
+          <button v-if="sheet.msg.role === 'assistant' && !settings.apiBase" class="sheet-item" @click="sheet.mode = 'debug'"><Icon name="tool" />这一轮发了什么</button>
           <button
             v-if="sheet.msg.role === 'assistant' && (sheet.msg.versions?.length || 0) > 1"
             class="sheet-item danger"
             @click="sheet.mode = 'confirm-delete-version'"
           ><Icon name="trash" />删除这个版本</button>
           <button class="sheet-item danger" @click="sheet.mode = 'confirm-delete'"><Icon name="trash" />删除这条消息</button>
+        </template>
+
+        <template v-else-if="sheet.mode === 'debug'">
+          <TurnDebug :turn="sheet.msg.id" :version="sheet.msg.activeVersion ?? 0" @close="closeSheet" />
         </template>
 
         <template v-else-if="sheet.mode === 'select'">

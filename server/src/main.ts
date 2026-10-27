@@ -10,6 +10,7 @@ import { BlobStore } from './blobs.ts'
 import { Recorder } from './recorder.ts'
 import { createTap, forwardHeaders, type Prepared } from './proxy.ts'
 import { stripWakeHistory } from './transforms.ts'
+import { handleApi } from './api.ts'
 
 function bearer(req: IncomingMessage): string {
   const h = String(req.headers.authorization || '')
@@ -34,6 +35,7 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
   // 前端出口：鉴权交给 Dylan（nginx 注入的网关 key 原样带过去）；本端口只监听 127.0.0.1
   const front = createTap({
     tap: 'front', name: 'front', recorder, headerTimeoutMs: cfg.headerTimeoutMs, log: opts.log,
+    api: (req, res) => handleApi(db, req, res),
     authorize: () => true,
     target: path => joinV1(cfg.dylanUrl, path),
     outgoingHeaders: forwardHeaders,

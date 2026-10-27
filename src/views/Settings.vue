@@ -385,6 +385,11 @@ onMounted(() => {
           <input v-model="settings.splitBubbles" type="checkbox" />
           他的回复按行拆成多个气泡
         </label>
+        <label class="check-row">
+          <input v-model="settings.keepAlive" type="checkbox" />
+          他回复时后台保活
+        </label>
+        <span class="hint">他回复的时候在后台放一段听不见的声音，切到别的 app 也不容易断。代价：会让正在放的音乐暂停。能撑多久由 iOS 决定。</span>
 
         <RouterLink to="/settings/prompt" class="prompt-entry">
           <span>系统提示词</span>

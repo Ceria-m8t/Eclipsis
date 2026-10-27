@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS exchanges (
   scene TEXT,
   conversation TEXT,
   turn TEXT,
+  version INTEGER,               -- 第几个版本（重新生成 +1）
   model TEXT,
   stream INTEGER,
   message_hashes TEXT,           -- JSON 数组：按顺序的消息哈希
@@ -78,12 +79,13 @@ export function openDb(path: string): DB {
   db.exec(SCHEMA)
   // 旧库补列
   addColumns(db, 'exchanges', {
-    transforms: 'TEXT', ttfb_ms: 'INTEGER', first_token_ms: 'INTEGER', client_closed_ms: 'INTEGER', bytes_out: 'INTEGER'
+    version: 'INTEGER', transforms: 'TEXT', ttfb_ms: 'INTEGER', first_token_ms: 'INTEGER', client_closed_ms: 'INTEGER', bytes_out: 'INTEGER'
   })
   if (addColumns(db, 'episodes', { xiaoke_id: 'TEXT', retracted_at: 'TEXT', retract_reason: 'TEXT' }).includes('xiaoke_id')) {
     db.exec("UPDATE episodes SET xiaoke_id = substr(source_ref, 8) WHERE source_ref LIKE 'xiaoke:%'")
   }
   db.exec('CREATE INDEX IF NOT EXISTS idx_episodes_xiaoke ON episodes(xiaoke_id)')
+  db.exec('CREATE INDEX IF NOT EXISTS idx_exchanges_turn ON exchanges(turn)')
   return db
 }
 

@@ -115,9 +115,9 @@ export class Recorder {
       scene, conversation, turn, version, startedAt: now.toISOString(), startMs: now.getTime(), wake, derive
     }
     tx(this.db, () => {
-      const r = this.db.prepare(`INSERT INTO exchanges(rid, tap, started_at, status, path, scene, conversation, turn, model, stream, message_hashes, options_hash, transforms)
-        VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-        input.rid, input.tap, ctx.startedAt, input.path, scene, conversation, turn,
+      const r = this.db.prepare(`INSERT INTO exchanges(rid, tap, started_at, status, path, scene, conversation, turn, version, model, stream, message_hashes, options_hash, transforms)
+        VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        input.rid, input.tap, ctx.startedAt, input.path, scene, conversation, turn, version,
         typeof body.model === 'string' ? body.model : null, body.stream === true ? 1 : 0,
         JSON.stringify(stored.map(s => s.hash)), optionsHash,
         input.transforms ? JSON.stringify(input.transforms) : null
