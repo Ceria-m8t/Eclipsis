@@ -189,6 +189,51 @@ test('唤醒请求（不经前端）：记成 wake 经历', async () => {
   assert.deepEqual(episodes().map(e => [e.channel, e.kind, e.content]), [['wake', 'wake', '醒了，想她']])
 })
 
+const tapChat = (body: any, signal?: AbortSignal) => fetch(`http://127.0.0.1:${tapPort}/v1/chat/completions`, {
+  method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${TAP_KEY}` }, body: JSON.stringify(body), signal
+})
+
+test('历史里有旧的唤醒提示，但最后一条是她的话：不算唤醒', async () => {
+  await (await tapChat({ model: 'm', stream: true, messages: [
+    { role: 'user', content: `以前的${WAKE_MARKER}` }, { role: 'assistant', content: '醒了' }, { role: 'user', content: '老公在吗' }
+  ] })).text()
+  await settle()
+  const ep = episodes()
+  assert.ok(ep.every(e => e.channel === 'chat'))
+  assert.deepEqual(ep.map(e => [e.actor, e.content]), [['erica', '老公在吗'], ['ai', '在呢']])
+})
+
+test('直连 Dylan 的客户端（不经前端出口）：上游入口推出经历，标 via=upstream', async () => {
+  await (await tapChat({ model: 'm', stream: true, messages: [{ role: 'user', content: 'Kelivo 发的' }] })).text()
+  await settle()
+  const ep = episodes()
+  assert.deepEqual(ep.map(e => e.actor), ['erica', 'ai'])
+  assert.ok(ep.every(e => JSON.parse(e.meta).via === 'upstream'))
+})
+
+test('经过前端出口的请求，上游入口不重复推经历', async () => {
+  await (await chat({ model: 'm', stream: true, messages: [{ role: 'user', content: '一次' }] }, { 'x-eclipsis-turn': 'a7' })).text()
+  await settle()
+  assert.equal(episodes().length, 2)
+})
+
+test('客户端读到 [DONE] 就断开（xiaoke 的做法）：记为 ok，不是 aborted', async () => {
+  stationReply = (_r, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.write(sseChunk({ content: '好' }) + sseChunk({}, 'stop') + 'data: [DONE]\n\n')
+    setTimeout(() => res.end(), 200)   // 中转站迟一点才关连接
+  }
+  const ac = new AbortController()
+  const res = await tapChat({ model: 'm', stream: true, messages: [{ role: 'user', content: '嗯' }] }, ac.signal)
+  const reader = res.body!.getReader()
+  let got = ''
+  while (!got.includes('[DONE]')) got += new TextDecoder().decode((await reader.read()).value)
+  ac.abort()
+  await new Promise(r => setTimeout(r, 300))
+  assert.equal(exchanges()[0].status, 'ok')
+  assert.equal(episodes().find(e => e.actor === 'ai')?.content, '好')
+})
+
 test('/v1/models 纯透传，不记录', async () => {
   const res = await fetch(`http://127.0.0.1:${frontPort}/v1/models`)
   assert.deepEqual(await res.json(), { data: [{ id: 'm1' }] })

@@ -42,6 +42,7 @@ export interface ExchangeCtx {
   startedAt: string
   startMs: number
   wake: boolean
+  derive: boolean               // 是否从这次调用推出经历
 }
 
 export interface FinishInput {
@@ -93,12 +94,15 @@ export class Recorder {
     const stored = messages.map(m => this.blobs.putMessage(m))
     const { messages: _m, eclipsis_rid: _r, ...options } = body
     const optionsHash = this.blobs.putText('options', JSON.stringify(options))
-    const wake = input.tap === 'upstream' && !input.linked &&
-      messages.some(m => m?.role === 'user' && textOf(m.content).includes(WAKE_MARKER))
+    // 只看最后一条 user：xiaoke 会把以前的唤醒提示当成历史注入回来
+    const lastUser = [...messages].reverse().find(m => m?.role === 'user')
+    const wake = input.tap === 'upstream' && !input.linked && !!lastUser && textOf(lastUser.content).includes(WAKE_MARKER)
+    // 前端出口的都推经历；上游入口只推"没经过前端出口"的（直连 Dylan 的客户端，如 Kelivo），避免记两遍
+    const derive = input.tap === 'front' || (input.tap === 'upstream' && !input.linked && !wake)
 
     const ctx: ExchangeCtx = {
       id: 0, tap: input.tap, rid: input.rid, linked: input.linked,
-      scene, conversation, turn, version, startedAt: now.toISOString(), startMs: now.getTime(), wake
+      scene, conversation, turn, version, startedAt: now.toISOString(), startMs: now.getTime(), wake, derive
     }
     tx(this.db, () => {
       const r = this.db.prepare(`INSERT INTO exchanges(rid, tap, started_at, status, path, scene, conversation, turn, model, stream, message_hashes, options_hash)
@@ -108,7 +112,7 @@ export class Recorder {
         JSON.stringify(stored.map(s => s.hash)), optionsHash
       )
       ctx.id = Number(r.lastInsertRowid)
-      if (input.tap === 'front') this.startEpisodes(ctx, stored)
+      if (derive) this.startEpisodes(ctx, stored)
     })
     return ctx
   }
@@ -123,11 +127,14 @@ export class Recorder {
       if (!text) return
       // 有 turn header 时按 turn 去重（重新生成不会重复记）；没有时按"会话 + 上下文链"去重
       const ref = ctx.turn
-        ? `front:turn:${ctx.conversation || '-'}:${ctx.turn}:user`
-        : `front:fp:${sha256((ctx.conversation || '-') + '|' + stored.map(s => s.hash).join(','))}:user`
+        ? `${ctx.tap}:turn:${ctx.conversation || '-'}:${ctx.turn}:user`
+        : `${ctx.tap}:fp:${sha256((ctx.conversation || '-') + '|' + stored.map(s => s.hash).join(','))}:user`
+      const meta: Record<string, unknown> = {}
+      if (last.images.length) meta.images = last.images
+      if (ctx.tap === 'upstream') meta.via = 'upstream'
       addEpisode(this.db, {
         ts: ctx.startedAt, channel, scope, actor: 'erica', kind: 'message', content: text,
-        meta: last.images.length ? { images: last.images } : null, sourceRef: ref
+        meta: Object.keys(meta).length ? meta : null, sourceRef: ref
       })
       return
     }
@@ -137,7 +144,7 @@ export class Recorder {
       const callId = String(m.tool_call_id || stored[i].hash)
       addEpisode(this.db, {
         ts: ctx.startedAt, channel, scope, actor: 'tool', kind: 'tool_result',
-        content: textOf(m.content), meta: { tool_call_id: callId }, sourceRef: `front:tool_result:${callId}`
+        content: textOf(m.content), meta: { tool_call_id: callId }, sourceRef: `${ctx.tap}:tool_result:${callId}`
       })
     }
   }
@@ -147,8 +154,9 @@ export class Recorder {
     const reply = input.httpStatus !== null ? parseReply(input.contentType, input.body) : null
     let status: string
     if (input.networkError) status = 'network_error'
-    else if (input.aborted) status = 'aborted'
     else if ((input.httpStatus ?? 0) >= 400 || reply?.error) status = 'http_error'
+    // xiaoke 读到 [DONE] 就断开，这不算中断
+    else if (input.aborted && !reply?.done) status = 'aborted'
     else status = 'ok'
     const error = input.networkError || reply?.error || ((input.httpStatus ?? 0) >= 400 ? input.body.slice(0, 2000) : null)
 
@@ -165,7 +173,7 @@ export class Recorder {
       const partial = status === 'aborted' || status === 'network_error'
       const usable = status === 'ok' || (partial && (reply.content.trim() || reply.toolCalls.length))
       if (!usable) return
-      if (ctx.tap === 'front') this.finishEpisodes(ctx, reply, partial, now.toISOString())
+      if (ctx.derive) this.finishEpisodes(ctx, reply, partial, now.toISOString())
       else if (ctx.wake && reply.content.trim()) {
         addEpisode(this.db, {
           ts: now.toISOString(), channel: 'wake', scope: 'daily', actor: 'ai', kind: 'wake',
@@ -186,16 +194,17 @@ export class Recorder {
         meta: {
           rid: ctx.rid, turn: ctx.turn, version: ctx.version,
           regenerated: (ctx.version ?? 0) > 0 || undefined,
-          partial: partial || undefined, finish_reason: reply.finishReason
+          partial: partial || undefined, finish_reason: reply.finishReason,
+          via: ctx.tap === 'upstream' ? 'upstream' : undefined
         },
-        sourceRef: `front:reply:${ctx.rid}`
+        sourceRef: `${ctx.tap}:reply:${ctx.rid}`
       })
     }
     reply.toolCalls.forEach((c, i) => {
       addEpisode(this.db, {
         ts, channel, scope, actor: 'ai', kind: 'tool_call', content: `${c.name}(${c.arguments})`,
         meta: { tool_call_id: c.id || null, name: c.name, rid: ctx.rid },
-        sourceRef: c.id ? `front:tool_call:${c.id}` : `front:tool_call:${ctx.rid}:${i}`
+        sourceRef: c.id ? `${ctx.tap}:tool_call:${c.id}` : `${ctx.tap}:tool_call:${ctx.rid}:${i}`
       })
     })
   }
