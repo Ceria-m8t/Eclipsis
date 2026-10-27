@@ -53,7 +53,7 @@ before(async () => {
     dbPath: ':memory:', blobDir: tmp.dir
   }
   db = openDb(':memory:')
-  const s = buildServers(cfg, db, { linkRid: true, stripWakeHistory: true, log: m => logs.push(m) })
+  const s = buildServers(cfg, db, { linkRid: true, stripWakeHistory: true, stripThinkHistory: true, log: m => logs.push(m) })
   front = s.front; tap = s.tap
   frontPort = await listen(front)
   tapPort = await listen(tap)
@@ -321,6 +321,20 @@ test('调试接口：按 turn+version 查到每一轮，区分前端发的和一
 test('上游入口不提供调试接口', async () => {
   const res = await fetch(`http://127.0.0.1:${tapPort}/v1/eclipsis/turn/x`, { headers: { authorization: 'Bearer wrong' } })
   assert.equal(res.status, 401)
+})
+
+test('上游入口剪掉历史里他的思考；前端出口记的是原样', async () => {
+  await (await chat({ model: 'm', stream: true, messages: [
+    { role: 'user', content: '在吗' }, { role: 'assistant', content: '<think>She misses me.</think>\n\n在呢' }, { role: 'user', content: '嗯' }
+  ] }, { 'x-eclipsis-turn': 'th1' })).text()
+  await settle()
+  const sent = JSON.parse(station.seen[0].body).messages
+  assert.equal(sent[1].content, '在呢')
+  const up = exchanges().find(e => e.tap === 'upstream')
+  assert.equal(JSON.parse(up.transforms).strip_think_history.stripped, 1)
+  const front = exchanges().find(e => e.tap === 'front')
+  const frontMsg = JSON.parse((db.prepare('SELECT text FROM blobs WHERE hash = ?').get(JSON.parse(front.message_hashes)[1]) as any).text)
+  assert.ok(frontMsg.content.includes('She misses me'), '前端出口那份是原样')
 })
 
 test('/v1/models 纯透传，不记录', async () => {

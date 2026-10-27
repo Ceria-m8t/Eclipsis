@@ -9,7 +9,7 @@ import { openDb, type DB } from './db.ts'
 import { BlobStore } from './blobs.ts'
 import { Recorder } from './recorder.ts'
 import { createTap, forwardHeaders, type Prepared } from './proxy.ts'
-import { stripWakeHistory } from './transforms.ts'
+import { stripWakeHistory, stripThinkHistory } from './transforms.ts'
 import { handleApi } from './api.ts'
 
 function bearer(req: IncomingMessage): string {
@@ -25,6 +25,7 @@ function safeEqual(a: string, b: string): boolean {
 export interface ServerOptions {
   linkRid?: boolean           // LINK_RID=1
   stripWakeHistory?: boolean  // STRIP_WAKE_HISTORY=1
+  stripThinkHistory?: boolean // STRIP_THINK_HISTORY=1
   log?: (m: string, e?: unknown) => void
 }
 
@@ -77,6 +78,14 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
           changed = true
         }
       }
+      if (opts.stripThinkHistory && Array.isArray(out.messages)) {
+        const r = stripThinkHistory(out.messages)
+        if (r.stripped) {
+          out = { ...out, messages: r.messages }
+          transforms.strip_think_history = { stripped: r.stripped, saved_chars: r.savedChars }
+          changed = true
+        }
+      }
       if (!changed) return { rid, linked: false, body: raw }
       return {
         rid, linked: !!linkedRid, body: Buffer.from(JSON.stringify(out)), json: out,
@@ -94,11 +103,13 @@ function main() {
   const db = openDb(cfg.dbPath)
   const { front, tap } = buildServers(cfg, db, {
     linkRid: process.env.LINK_RID === '1',
-    stripWakeHistory: process.env.STRIP_WAKE_HISTORY === '1'
+    stripWakeHistory: process.env.STRIP_WAKE_HISTORY === '1',
+    stripThinkHistory: process.env.STRIP_THINK_HISTORY === '1'
   })
   front.listen(cfg.frontPort, '127.0.0.1', () => console.log(`[eclipsis] front  127.0.0.1:${cfg.frontPort} → ${cfg.dylanUrl}`))
   tap.listen(cfg.tapPort, '127.0.0.1', () => console.log(`[eclipsis] tap    127.0.0.1:${cfg.tapPort} → ${cfg.upstreamUrl || '(未配置)'}` +
-    `  LINK_RID=${process.env.LINK_RID === '1' ? 1 : 0} STRIP_WAKE_HISTORY=${process.env.STRIP_WAKE_HISTORY === '1' ? 1 : 0}`))
+    `  LINK_RID=${process.env.LINK_RID === '1' ? 1 : 0} STRIP_WAKE_HISTORY=${process.env.STRIP_WAKE_HISTORY === '1' ? 1 : 0}` +
+    ` STRIP_THINK_HISTORY=${process.env.STRIP_THINK_HISTORY === '1' ? 1 : 0}`))
   const stop = () => {
     front.close(); tap.close()
     setTimeout(() => { db.close(); process.exit(0) }, 3000).unref()

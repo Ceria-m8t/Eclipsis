@@ -96,3 +96,31 @@ test('stripWakeHistory：没有"最近记录："或不是唤醒，一律不动',
   const msgs = [{ role: 'user', content: `${WAKE_MARKER}但没有标题` }, { role: 'user', content: '最近记录：普通话题' }, { role: 'user', content: 'x' }]
   assert.equal(stripWakeHistory(msgs).stripped, 0)
 })
+
+test('stripThinkHistory：剪掉历史回复里的思考，正文和工具调用留着', async () => {
+  const { stripThinkHistory } = await import('../src/transforms.ts')
+  const msgs = [
+    { role: 'system', content: '<think>系统提示词里的不动</think>' },
+    { role: 'user', content: '<think>她说的也不动</think>在吗' },
+    { role: 'assistant', content: '<think> She is testing. </think>\n\n在呢。' },
+    { role: 'assistant', content: '前半<thinking>想一下</thinking>后半' },
+    { role: 'assistant', content: '没有思考的回复' },
+    { role: 'assistant', content: '<think>只有思考</think>' },
+    { role: 'assistant', content: '<think>想完调工具</think>', tool_calls: [{ id: 'c' }] },
+    { role: 'assistant', content: '说了一半<think>没收尾的思考' },
+    { role: 'assistant', content: [{ type: 'text', text: '<think>数组里的</think>好' }] }
+  ]
+  const r = stripThinkHistory(msgs)
+  assert.equal(r.stripped, 5)   // 在呢、前半后半、工具那条、没收尾、数组
+  assert.deepEqual(r.messages.map((m: any) => m.content), [
+    '<think>系统提示词里的不动</think>', '<think>她说的也不动</think>在吗',
+    '在呢。', '前半\n\n后半', '没有思考的回复',
+    '<think>只有思考</think>',            // 剪完是空的、没工具调用：保留，免得空回复 400
+    '',                                    // 有工具调用：可以空
+    '说了一半',
+    [{ type: 'text', text: '好' }]
+  ])
+  assert.equal(r.messages[4], msgs[4], '没改的原样返回')
+  assert.ok(r.savedChars > 0)
+  assert.equal(String(msgs[2].content).includes('She is testing'), true, '不改原数组')
+})
