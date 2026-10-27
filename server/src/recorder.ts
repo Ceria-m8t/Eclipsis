@@ -46,12 +46,21 @@ export interface ExchangeCtx {
   derive: boolean               // 是否从这次调用推出经历
 }
 
+// 都是从收到请求起算的毫秒数
+export interface Timing {
+  ttfbMs: number | null         // 上游返回响应头
+  firstTokenMs: number | null   // 第一个有内容的分片（文字/思考/工具）
+  clientClosedMs: number | null // 调用方在回复结束前断开
+  bytesOut: number              // 实际写给调用方的字节数
+}
+
 export interface FinishInput {
   httpStatus: number | null
   contentType: string
   body: string                  // 上游响应原文（可能被截断）
   aborted: boolean              // 客户端中途断开
   networkError?: string
+  timing?: Timing
 }
 
 function header(h: StartInput['headers'], name: string): string | null {
@@ -164,11 +173,14 @@ export class Recorder {
 
     tx(this.db, () => {
       this.db.prepare(`UPDATE exchanges SET finished_at = ?, status = ?, http_status = ?, latency_ms = ?,
-        reply_content = ?, reply_thinking = ?, reply_tool_calls = ?, finish_reason = ?, usage = ?, error = ? WHERE id = ?`).run(
+        reply_content = ?, reply_thinking = ?, reply_tool_calls = ?, finish_reason = ?, usage = ?, error = ?,
+        ttfb_ms = ?, first_token_ms = ?, client_closed_ms = ?, bytes_out = ? WHERE id = ?`).run(
         now.toISOString(), status, input.httpStatus, now.getTime() - ctx.startMs,
         reply?.content || null, reply?.thinking || null,
         reply?.toolCalls.length ? JSON.stringify(reply.toolCalls) : null,
-        reply?.finishReason ?? null, reply?.usage ? JSON.stringify(reply.usage) : null, error, ctx.id
+        reply?.finishReason ?? null, reply?.usage ? JSON.stringify(reply.usage) : null, error,
+        input.timing?.ttfbMs ?? null, input.timing?.firstTokenMs ?? null, input.timing?.clientClosedMs ?? null,
+        input.timing?.bytesOut ?? null, ctx.id
       )
       if (!reply) return
       // 中途断开（她点了停止 / 网络断了）时，前端会保留已收到的部分并在下一轮发回去，所以也记

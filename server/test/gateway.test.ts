@@ -77,6 +77,9 @@ function chat(body: any, headers: Record<string, string> = {}) {
     body: JSON.stringify(body)
   })
 }
+const tapChat = (body: any, signal?: AbortSignal) => fetch(`http://127.0.0.1:${tapPort}/v1/chat/completions`, {
+  method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${TAP_KEY}` }, body: JSON.stringify(body), signal
+})
 const episodes = () => db.prepare('SELECT actor, kind, channel, scope, content, meta, source_ref FROM episodes ORDER BY ts, seq').all() as any[]
 const exchanges = () => db.prepare('SELECT * FROM exchanges ORDER BY id').all() as any[]
 // finish 在响应结束后才写库，给它一点时间
@@ -104,6 +107,34 @@ test('流式回复原样到达前端；两边记录用同一个 rid 串起来；
   const ep = episodes()
   assert.deepEqual(ep.map(e => [e.actor, e.kind, e.content]), [['erica', 'message', '在吗'], ['ai', 'message', '在呢']])
   assert.ok(ep.every(e => e.channel === 'chat' && e.scope === 'daily'))
+})
+
+test('计时：响应头、第一个字、写出字节数；没断开时 client_closed 为空', async () => {
+  stationReply = (_r, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.write(sseChunk({ role: 'assistant' }))           // 空分片不算第一个字
+    setTimeout(() => { res.write(sseChunk({ content: '嗯' }) + sseChunk({}, 'stop')); res.end('data: [DONE]\n\n') }, 150)
+  }
+  await (await chat({ model: 'm', stream: true, messages: [{ role: 'user', content: 'x' }] }, { 'x-eclipsis-turn': 't1' })).text()
+  await settle()
+  for (const e of exchanges()) {
+    // 假 Dylan 会攒完整个响应再回，所以前端出口的响应头时间不准；上游入口的才代表中转站
+    assert.ok(e.ttfb_ms !== null && (e.tap === 'front' || e.ttfb_ms < 150), `${e.tap} ttfb ${e.ttfb_ms}`)
+    assert.ok(e.first_token_ms >= 150, `${e.tap} first token ${e.first_token_ms}`)
+    assert.ok(e.bytes_out > 0)
+    assert.equal(e.client_closed_ms, null)
+  }
+})
+
+test('计时：调用方等不及先断开，记下断开时刻', async () => {
+  stationReply = (_r, res) => { setTimeout(() => { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end('data: [DONE]\n\n') }, 400) }
+  const ac = new AbortController()
+  setTimeout(() => ac.abort(), 100)
+  await tapChat({ model: 'm', stream: true, messages: [{ role: 'user', content: 'y' }] }, ac.signal).catch(() => {})
+  await new Promise(r => setTimeout(r, 450))
+  const e = exchanges()[0]
+  assert.ok(e.client_closed_ms >= 90 && e.client_closed_ms < 400, `closed ${e.client_closed_ms}`)
+  assert.equal(e.ttfb_ms, null)
 })
 
 test('重新生成：同一 turn 的 user 只记一次，第二个回复标 regenerated', async () => {
@@ -189,9 +220,6 @@ test('唤醒请求（不经前端）：记成 wake 经历', async () => {
   assert.deepEqual(episodes().map(e => [e.channel, e.kind, e.content]), [['wake', 'wake', '醒了，想她']])
 })
 
-const tapChat = (body: any, signal?: AbortSignal) => fetch(`http://127.0.0.1:${tapPort}/v1/chat/completions`, {
-  method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${TAP_KEY}` }, body: JSON.stringify(body), signal
-})
 
 test('历史里有旧的唤醒提示，但最后一条是她的话：不算唤醒', async () => {
   await (await tapChat({ model: 'm', stream: true, messages: [

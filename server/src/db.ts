@@ -40,7 +40,11 @@ CREATE TABLE IF NOT EXISTS exchanges (
   finish_reason TEXT,
   usage TEXT,                    -- JSON
   error TEXT,
-  transforms TEXT                -- JSON：上游入口对请求做了哪些改动（message_hashes 记的是改动后的）
+  transforms TEXT,               -- JSON：上游入口对请求做了哪些改动（message_hashes 记的是改动后的）
+  ttfb_ms INTEGER,               -- 收到请求 → 上游返回响应头
+  first_token_ms INTEGER,        -- 收到请求 → 第一个有内容的分片
+  client_closed_ms INTEGER,      -- 调用方在回复结束前断开的时刻（没断开为空）
+  bytes_out INTEGER              -- 实际写给调用方的字节数
 );
 CREATE INDEX IF NOT EXISTS idx_exchanges_rid ON exchanges(rid);
 CREATE INDEX IF NOT EXISTS idx_exchanges_started ON exchanges(started_at);
@@ -56,7 +60,10 @@ CREATE TABLE IF NOT EXISTS episodes (
   content TEXT NOT NULL,
   meta TEXT,                     -- JSON：图片哈希、工具名、是否重新生成……
   source_ref TEXT UNIQUE,        -- 去重键，如 front:turn:xxx:user、xiaoke:<id>
-  privacy TEXT NOT NULL DEFAULT 'normal'
+  privacy TEXT NOT NULL DEFAULT 'normal',
+  xiaoke_id TEXT,                -- 对应的 xiaoke 记录（对账时填）
+  retracted_at TEXT,             -- 软删：有值的永远不进上下文
+  retract_reason TEXT            -- xiaoke_deleted / not_in_xiaoke / cascade / manual
 );
 CREATE INDEX IF NOT EXISTS idx_episodes_ts ON episodes(ts);
 CREATE INDEX IF NOT EXISTS idx_episodes_scope_ts ON episodes(scope, ts);
@@ -70,9 +77,26 @@ export function openDb(path: string): DB {
   db.exec('PRAGMA foreign_keys = ON')
   db.exec(SCHEMA)
   // 旧库补列
-  const cols = (db.prepare('PRAGMA table_info(exchanges)').all() as { name: string }[]).map(c => c.name)
-  if (!cols.includes('transforms')) db.exec('ALTER TABLE exchanges ADD COLUMN transforms TEXT')
+  addColumns(db, 'exchanges', {
+    transforms: 'TEXT', ttfb_ms: 'INTEGER', first_token_ms: 'INTEGER', client_closed_ms: 'INTEGER', bytes_out: 'INTEGER'
+  })
+  if (addColumns(db, 'episodes', { xiaoke_id: 'TEXT', retracted_at: 'TEXT', retract_reason: 'TEXT' }).includes('xiaoke_id')) {
+    db.exec("UPDATE episodes SET xiaoke_id = substr(source_ref, 8) WHERE source_ref LIKE 'xiaoke:%'")
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_episodes_xiaoke ON episodes(xiaoke_id)')
   return db
+}
+
+// 旧库补列，返回新加的列名
+function addColumns(db: DB, table: string, cols: Record<string, string>): string[] {
+  const have = new Set((db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map(c => c.name))
+  const added: string[] = []
+  for (const [name, type] of Object.entries(cols)) {
+    if (have.has(name)) continue
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`)
+    added.push(name)
+  }
+  return added
 }
 
 export function tx<T>(db: DB, fn: () => T): T {
@@ -97,14 +121,15 @@ export interface EpisodeInput {
   meta?: Record<string, unknown> | null
   sourceRef?: string | null
   privacy?: string
+  xiaokeId?: string | null
 }
 
 // 有 sourceRef 且已存在时跳过，返回 false
 export function addEpisode(db: DB, e: EpisodeInput): boolean {
-  const r = db.prepare(`INSERT OR IGNORE INTO episodes(ts, channel, scope, actor, kind, content, meta, source_ref, privacy)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+  const r = db.prepare(`INSERT OR IGNORE INTO episodes(ts, channel, scope, actor, kind, content, meta, source_ref, privacy, xiaoke_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
     e.ts, e.channel, e.scope, e.actor, e.kind, e.content,
-    e.meta ? JSON.stringify(e.meta) : null, e.sourceRef ?? null, e.privacy ?? 'normal'
+    e.meta ? JSON.stringify(e.meta) : null, e.sourceRef ?? null, e.privacy ?? 'normal', e.xiaokeId ?? null
   )
   return Number(r.changes) > 0
 }

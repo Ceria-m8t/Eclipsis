@@ -2,7 +2,7 @@
 // 记录出错只打日志，永远不影响转发。
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http'
 import { randomUUID } from 'node:crypto'
-import type { Recorder, ExchangeCtx, Tap } from './recorder.ts'
+import type { Recorder, ExchangeCtx, Tap, Timing } from './recorder.ts'
 
 const MAX_BODY = 25 * 1024 * 1024      // nginx 那边是 20m
 const MAX_CAPTURE = 20 * 1024 * 1024   // 记录用的响应副本上限，超过不再追加（转发不受影响）
@@ -65,10 +65,38 @@ function sendJson(res: ServerResponse, status: number, obj: unknown) {
 
 const isChat = (path: string) => /^\/v1\/chat\/completions(\?|$)/.test(path)
 
+// 流里第一条有内容的分片（文字、思考或工具调用）。跨分片拼行，找到就不再看。
+export class FirstTokenWatch {
+  private buf = ''
+  found = false
+  feed(chunk: Buffer): boolean {
+    if (this.found) return false
+    this.buf += chunk.toString('utf8')
+    const lines = this.buf.split('\n')
+    this.buf = lines.pop() || ''
+    for (const raw of lines) {
+      const line = raw.trim()
+      if (!line.startsWith('data:')) continue
+      try {
+        const d = JSON.parse(line.slice(5).trim())?.choices?.[0]?.delta || {}
+        const think = d.reasoning_content ?? d.reasoning ?? d.thinking
+        if ((typeof d.content === 'string' && d.content) || (typeof think === 'string' && think) || d.tool_calls?.length) {
+          this.found = true
+          this.buf = ''
+          return true
+        }
+      } catch {}
+    }
+    if (this.buf.length > 1_000_000) this.buf = ''
+    return false
+  }
+}
+
 export function createTap(opts: TapOptions): Server {
   const log = opts.log || ((m: string, e?: unknown) => console.error(`[${opts.name}] ${m}`, e ?? ''))
 
   return createServer(async (req, res) => {
+    const t0 = Date.now()
     const path = req.url || '/'
     if (path === '/healthz') return sendJson(res, 200, { service: 'eclipsis-backend', tap: opts.tap, status: 'ok' })
     if (!opts.authorize(req)) return sendJson(res, 401, { error: { message: 'unauthorized', type: 'authentication_error' } })
@@ -111,7 +139,8 @@ export function createTap(opts: TapOptions): Server {
     // 客户端断开 → 取消上游请求
     const ac = new AbortController()
     let clientGone = false
-    res.on('close', () => { if (!res.writableFinished) { clientGone = true; ac.abort() } })
+    const timing: Timing = { ttfbMs: null, firstTokenMs: null, clientClosedMs: null, bytesOut: 0 }
+    res.on('close', () => { if (!res.writableFinished) { clientGone = true; timing.clientClosedMs = Date.now() - t0; ac.abort() } })
     const timer = setTimeout(() => ac.abort(new Error('上游响应头超时')), opts.headerTimeoutMs)
 
     let upstream: Response
@@ -126,11 +155,13 @@ export function createTap(opts: TapOptions): Server {
     } catch (e: any) {
       clearTimeout(timer)
       const msg = clientGone ? 'client aborted' : `上游连接失败：${e?.cause?.message || e?.message || e}`
-      finish({ httpStatus: null, contentType: '', body: '', aborted: clientGone, networkError: clientGone ? undefined : msg })
+      finish({ httpStatus: null, contentType: '', body: '', aborted: clientGone, networkError: clientGone ? undefined : msg, timing })
       if (!clientGone) sendJson(res, 502, { error: { message: msg, type: 'upstream_error' } })
       return
     }
     clearTimeout(timer)
+    timing.ttfbMs = Date.now() - t0
+    const watch = new FirstTokenWatch()
 
     const headers: Record<string, string> = {}
     upstream.headers.forEach((v, k) => { if (!DROP_RES.has(k)) headers[k] = v })
@@ -149,7 +180,8 @@ export function createTap(opts: TapOptions): Server {
         for await (const chunk of upstream.body as any as AsyncIterable<Uint8Array>) {
           const buf = Buffer.from(chunk)
           if (ctx && capturedSize < MAX_CAPTURE) { captured.push(buf); capturedSize += buf.length }
-          if (!clientGone) res.write(buf)
+          if (timing.firstTokenMs === null && watch.feed(buf)) timing.firstTokenMs = Date.now() - t0
+          if (!clientGone) { res.write(buf); timing.bytesOut += buf.length }
         }
       }
       res.end()
@@ -159,7 +191,7 @@ export function createTap(opts: TapOptions): Server {
     }
     finish({
       httpStatus: upstream.status, contentType: upstreamCt,
-      body: Buffer.concat(captured).toString('utf8'), aborted: clientGone, networkError: streamError
+      body: Buffer.concat(captured).toString('utf8'), aborted: clientGone, networkError: streamError, timing
     })
   })
 }

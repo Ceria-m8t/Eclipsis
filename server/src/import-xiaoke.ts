@@ -34,7 +34,8 @@ export function importXiaoke(target: DB, sourcePath: string, opts: { dryRun?: bo
           kind: wake ? (r.role === 'user' ? 'wake_prompt' : 'wake') : r.role === 'event' ? 'note' : 'message',
           content: r.content,   // 原样保留（含 <current_time>、时间前缀），清洗交给组装器
           meta: { imported: 'xiaoke', xiaoke_sequence: r.sequence, xiaoke_source: r.source },
-          sourceRef: `xiaoke:${r.id}`
+          sourceRef: `xiaoke:${r.id}`,
+          xiaokeId: r.id
         })
         if (ok) inserted++; else skipped++
       }

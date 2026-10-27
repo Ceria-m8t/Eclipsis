@@ -1,0 +1,9 @@
+[Unit]
+Description=Eclipsis: reconcile episodes with xiaoke timeline (soft-delete sync)
+After=eclipsis-backend.service
+
+[Service]
+Type=oneshot
+# xiaoke 的库在 /root 下，后端用户读不到：root 只读导出，写入由后端用户做（库文件归属不变）
+ExecStart=/bin/bash -o pipefail -c 'sqlite3 -json "file:/root/xiaoke/data/xiaoke.sqlite?mode=ro" "$(/usr/local/bin/node --disable-warning=ExperimentalWarning /opt/eclipsis/server/src/reconcile-xiaoke.ts --print-sql)" | runuser -u eclipsis-backend -- env DB_PATH=/var/lib/eclipsis/eclipsis.sqlite /usr/local/bin/node --disable-warning=ExperimentalWarning /opt/eclipsis/server/src/reconcile-xiaoke.ts'
+Nice=10
