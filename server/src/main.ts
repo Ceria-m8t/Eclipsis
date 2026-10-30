@@ -200,8 +200,6 @@ function main() {
 
       wakeScheduler = new WakeScheduler(db, {
         tickIntervalMs: tickMs,
-        quietStart: Number(process.env.WAKE_QUIET_START) || 1,
-        quietEnd: Number(process.env.WAKE_QUIET_END) || 7,
         maxPerDay: Number(process.env.WAKE_MAX_PER_DAY) || 12,
         xinchaoUrl,
         xinchaoRefreshMs: Number(process.env.WAKE_XINCHAO_REFRESH_MS) || 300_000,

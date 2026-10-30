@@ -68,7 +68,7 @@ const STATE_SUITABILITY: Record<UserState, number> = {
   needs_care: 0.9     // 可能需要关心 → 主动联系
 }
 
-function inferUserState(db: DB, now: Date): UserStateEstimate {
+export function inferUserState(db: DB, now: Date): UserStateEstimate {
   const nowMs = now.getTime()
 
   // 最近 3 条她的消息，看间隔和时间
