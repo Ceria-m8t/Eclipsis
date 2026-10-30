@@ -31,7 +31,7 @@ export interface TapOptions {
   prepare: (json: any | null, raw: Buffer) => Prepared
   recorder: Recorder | null
   headerTimeoutMs: number
-  api?: (req: IncomingMessage, res: ServerResponse) => boolean   // 本地接口，返回 true 表示已处理，不转发
+  api?: (req: IncomingMessage, res: ServerResponse) => boolean | Promise<boolean>   // 本地接口，返回 true 表示已处理，不转发
   log?: (msg: string, err?: unknown) => void
 }
 
@@ -101,7 +101,7 @@ export function createTap(opts: TapOptions): Server {
     const path = req.url || '/'
     if (path === '/healthz') return sendJson(res, 200, { service: 'eclipsis-backend', tap: opts.tap, status: 'ok' })
     if (opts.api) {
-      try { if (opts.api(req, res)) return } catch (e) { log('接口出错', e); return sendJson(res, 500, { error: 'internal error' }) }
+      try { if (await opts.api(req, res)) return } catch (e) { log('接口出错', e); return sendJson(res, 500, { error: 'internal error' }) }
     }
     if (!opts.authorize(req)) return sendJson(res, 401, { error: { message: 'unauthorized', type: 'authentication_error' } })
     const target = opts.target(path)

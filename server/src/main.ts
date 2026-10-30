@@ -1,7 +1,9 @@
-// Eclipsis 后端（第一期：影子地基）
+// Eclipsis 后端（第一期：影子地基 + Wake + Pulse）
 //   前端出口 FRONT_PORT：nginx /api/ → 这里 → Dylan。记下前端发了什么、场景、他回了什么，推出经历。
 //   上游入口 TAP_PORT ：xiaoke → 这里 → 中转站。记下实际发给模型的完整内容。
 // 两边都只记录、原样转发，不改回复。
+// Wake 模块（WAKE_ENABLED=1）在同一进程里定时 tick，触发时自己调模型。
+// Pulse 模块：身体状态引擎，每 30 秒 tick 一次，天气自动拉取，心潮桥接，聊天情绪检测。
 import { timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, Server } from 'node:http'
 import { loadConfig, joinV1, type Config } from './config.ts'
@@ -9,8 +11,15 @@ import { openDb, type DB } from './db.ts'
 import { BlobStore } from './blobs.ts'
 import { Recorder } from './recorder.ts'
 import { createTap, forwardHeaders, type Prepared } from './proxy.ts'
-import { stripWakeHistory, stripThinkHistory } from './transforms.ts'
+import { stripWakeHistory, stripThinkHistory, stripOldImages } from './transforms.ts'
 import { handleApi } from './api.ts'
+import { ensureWakeSchema, WakeScheduler, dispatchWake, handleWakeApi } from './wake/index.ts'
+import {
+  ensurePulseSchema, handlePulseApi, doTick as pulseTick,
+  setExternalWeather, setXinchaoEmotion,
+  WeatherFetcher, refreshXinchaoBridge,
+  pruneHrHistory, detectFromRecentChat
+} from './pulse/index.ts'
 
 function bearer(req: IncomingMessage): string {
   const h = String(req.headers.authorization || '')
@@ -26,6 +35,7 @@ export interface ServerOptions {
   linkRid?: boolean           // LINK_RID=1
   stripWakeHistory?: boolean  // STRIP_WAKE_HISTORY=1
   stripThinkHistory?: boolean // STRIP_THINK_HISTORY=1
+  stripOldImages?: boolean     // STRIP_OLD_IMAGES=1
   log?: (m: string, e?: unknown) => void
 }
 
@@ -36,14 +46,16 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
   // 前端出口：鉴权交给 Dylan（nginx 注入的网关 key 原样带过去）；本端口只监听 127.0.0.1
   const front = createTap({
     tap: 'front', name: 'front', recorder, headerTimeoutMs: cfg.headerTimeoutMs, log: opts.log,
-    api: (req, res) => handleApi(db, req, res),
+    api: async (req, res) => {
+      if (await handleWakeApi(db, req, res)) return true
+      if (await handlePulseApi(db, req, res)) return true
+      return handleApi(db, req, res)
+    },
     authorize: () => true,
     target: path => joinV1(cfg.dylanUrl, path),
     outgoingHeaders: forwardHeaders,
     prepare: (json, raw): Prepared => {
       const rid = crypto.randomUUID()
-      // 把 rid 塞进请求体，Dylan 和 xiaoke 会原样带到上游入口，两边记录就能对上。
-      // 上游入口会把它删掉再发给中转站；所以只有上游入口接好之后才能打开。
       if (!opts.linkRid) return { rid, linked: false, body: raw }
       return { rid, linked: false, body: Buffer.from(JSON.stringify({ ...json, eclipsis_rid: rid })) }
     }
@@ -86,6 +98,14 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
           changed = true
         }
       }
+      if (opts.stripOldImages && Array.isArray(out.messages)) {
+        const r = stripOldImages(out.messages)
+        if (r.stripped) {
+          out = { ...out, messages: r.messages }
+          transforms.strip_old_images = { stripped: r.stripped, saved_chars: r.savedChars }
+          changed = true
+        }
+      }
       if (!changed) return { rid, linked: false, body: raw }
       return {
         rid, linked: !!linkedRid, body: Buffer.from(JSON.stringify(out)), json: out,
@@ -104,13 +124,106 @@ function main() {
   const { front, tap } = buildServers(cfg, db, {
     linkRid: process.env.LINK_RID === '1',
     stripWakeHistory: process.env.STRIP_WAKE_HISTORY === '1',
-    stripThinkHistory: process.env.STRIP_THINK_HISTORY === '1'
+    stripThinkHistory: process.env.STRIP_THINK_HISTORY === '1',
+    stripOldImages: process.env.STRIP_OLD_IMAGES === '1'
   })
   front.listen(cfg.frontPort, '127.0.0.1', () => console.log(`[eclipsis] front  127.0.0.1:${cfg.frontPort} → ${cfg.dylanUrl}`))
   tap.listen(cfg.tapPort, '127.0.0.1', () => console.log(`[eclipsis] tap    127.0.0.1:${cfg.tapPort} → ${cfg.upstreamUrl || '(未配置)'}` +
     `  LINK_RID=${process.env.LINK_RID === '1' ? 1 : 0} STRIP_WAKE_HISTORY=${process.env.STRIP_WAKE_HISTORY === '1' ? 1 : 0}` +
-    ` STRIP_THINK_HISTORY=${process.env.STRIP_THINK_HISTORY === '1' ? 1 : 0}`))
+    ` STRIP_THINK_HISTORY=${process.env.STRIP_THINK_HISTORY === '1' ? 1 : 0}` +
+    ` STRIP_OLD_IMAGES=${process.env.STRIP_OLD_IMAGES === '1' ? 1 : 0}`))
+
+  // ── Pulse 模块（总是初始化，不需要开关） ──
+  ensurePulseSchema(db)
+  const pulseTickMs = Number(process.env.PULSE_TICK_MS) || 30_000  // 默认 30 秒
+  const xinchaoUrl = (process.env.XINCHAO_URL || '').trim() || undefined
+  const log = (msg: string) => console.log(msg)
+
+  // 天气自动拉取
+  const weatherFetcher = new WeatherFetcher({
+    intervalMs: Number(process.env.WEATHER_INTERVAL_MS) || 600_000,  // 默认 10 分钟
+    log
+  })
+  weatherFetcher.start()
+
+  // 心潮桥（复用 Wake 的 xinchao URL）
+  let xinchaoBridgeTimer: ReturnType<typeof setInterval> | null = null
+  if (xinchaoUrl) {
+    const bridgeRefreshMs = Number(process.env.XINCHAO_BRIDGE_REFRESH_MS) || 120_000  // 默认 2 分钟
+    const refreshBridge = async () => {
+      const result = await refreshXinchaoBridge(xinchaoUrl)
+      if (result?.inferredEmotion) {
+        setXinchaoEmotion(result.inferredEmotion)
+      }
+    }
+    refreshBridge()
+    xinchaoBridgeTimer = setInterval(refreshBridge, bridgeRefreshMs)
+    if (typeof xinchaoBridgeTimer === 'object' && 'unref' in xinchaoBridgeTimer) xinchaoBridgeTimer.unref()
+    log(`[pulse:xinchao] 桥启动 每 ${bridgeRefreshMs / 1000}s 刷新 → ${xinchaoUrl}`)
+  }
+
+  // Pulse 定时 tick（含聊天情绪检测）
+  const pulseTimer = setInterval(() => {
+    try {
+      // 注入最新天气
+      const w = weatherFetcher.latest
+      if (w) setExternalWeather(w)
+      // 聊天情绪检测：有新的 Erica 消息时，从文本推断情绪
+      const chatEmo = detectFromRecentChat(db)
+      if (chatEmo) {
+        log(`[pulse:emotion] 检测到 ${chatEmo.emotion} ← ${chatEmo.source}: "${chatEmo.trigger}"`)
+      }
+      // tick（聊天检测到的情绪优先级最高，因为是她直接说的话引起的）
+      pulseTick(db, chatEmo ? { emotion: chatEmo.emotion } : undefined)
+    } catch (e) {
+      console.error('[pulse] tick error', e)
+    }
+  }, pulseTickMs)
+  if (typeof pulseTimer === 'object' && 'unref' in pulseTimer) pulseTimer.unref()
+
+  // 每小时清理旧心率历史
+  const hrPruneTimer = setInterval(() => { try { pruneHrHistory(db) } catch {} }, 3600_000)
+  if (typeof hrPruneTimer === 'object' && 'unref' in hrPruneTimer) hrPruneTimer.unref()
+
+  log(`[pulse] 启动 tick=${pulseTickMs}ms weather=${weatherFetcher.latest ? '已拉取' : '等待'} xinchao=${xinchaoUrl || '(无)'}`)
+
+  // ── Wake 模块 ──
+  let wakeScheduler: WakeScheduler | null = null
+  if (process.env.WAKE_ENABLED === '1') {
+    const wakeModel = (process.env.WAKE_MODEL || "").trim() || undefined
+    if (!cfg.upstreamUrl || !cfg.upstreamKey) {
+      console.warn("[eclipsis] WAKE_ENABLED=1 但缺少 UPSTREAM_URL / UPSTREAM_KEY，Wake 不启动")
+    } else {
+      ensureWakeSchema(db)
+      const barkUrl = (process.env.WAKE_BARK_URL || '').trim() || undefined
+      const tickMs = Number(process.env.WAKE_TICK_MS) || 60_000
+
+      wakeScheduler = new WakeScheduler(db, {
+        tickIntervalMs: tickMs,
+        xinchaoUrl,
+        xinchaoRefreshMs: Number(process.env.WAKE_XINCHAO_REFRESH_MS) || 300_000,
+        log,
+        onWake: (opp, db) => dispatchWake(opp, db, {
+          upstreamUrl: cfg.upstreamUrl,
+          upstreamKey: cfg.upstreamKey,
+          model: wakeModel,
+          xinchaoUrl,
+          barkUrl,
+          maxTokens: Number(process.env.WAKE_MAX_TOKENS) || 800,
+          log
+        })
+      })
+      wakeScheduler.start()
+      console.log(`[eclipsis] Wake 启动  tick=${tickMs}ms  model=${wakeModel || '(自动跟随聊天)'}  xinchao=${xinchaoUrl || '(无)'}  bark=${barkUrl ? '是' : '否'}`)
+    }
+  }
+
   const stop = () => {
+    if (wakeScheduler) wakeScheduler.stop()
+    weatherFetcher.stop()
+    if (xinchaoBridgeTimer) clearInterval(xinchaoBridgeTimer)
+    clearInterval(pulseTimer)
+    clearInterval(hrPruneTimer)
     front.close(); tap.close()
     setTimeout(() => { db.close(); process.exit(0) }, 3000).unref()
   }

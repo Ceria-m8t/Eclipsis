@@ -66,3 +66,46 @@ export function stripThinkHistory(messages: any[]): { messages: any[]; stripped:
   })
   return { messages: out, stripped, savedChars }
 }
+
+
+// 历史里旧消息的图片（base64 data URL）占大量 token。只保留最后 KEEP 条 user 消息里的图片，
+// 更早的替换成 [图片] 占位。减少发给模型的 token 数，不影响记录（记录的是改动前的）。
+const IMG_KEEP_RECENT = 4 // 保留最近 4 条 user 消息的图片
+
+function replaceImages(content: any): { content: any; removed: number } {
+  if (!Array.isArray(content)) return { content, removed: 0 }
+  let removed = 0
+  const out = content.map((p: any) => {
+    if (p?.type === 'image_url' || p?.type === 'image') {
+      removed++
+      return { type: 'text', text: '[图片]' }
+    }
+    return p
+  })
+  return { content: out, removed }
+}
+
+export function stripOldImages(messages: any[]): { messages: any[]; stripped: number; savedChars: number } {
+  // find last N user messages to keep images for
+  const userIndices: number[] = []
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.role === 'user') {
+      userIndices.push(i)
+      if (userIndices.length >= IMG_KEEP_RECENT) break
+    }
+  }
+  const keep = new Set(userIndices)
+  let stripped = 0, savedChars = 0
+  const out = messages.map((m, i) => {
+    if (keep.has(i)) return m
+    if (!Array.isArray(m?.content)) return m
+    const hasImg = m.content.some((p: any) => p?.type === 'image_url' || p?.type === 'image')
+    if (!hasImg) return m
+    const r = replaceImages(m.content)
+    if (r.removed === 0) return m
+    stripped += r.removed
+    savedChars += JSON.stringify(m.content).length - JSON.stringify(r.content).length
+    return { ...m, content: r.content }
+  })
+  return { messages: out, stripped, savedChars }
+}
