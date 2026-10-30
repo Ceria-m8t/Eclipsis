@@ -5,6 +5,7 @@ import { addEpisode } from '../db.ts'
 import type { WakeOpportunity, WakeOutcome } from './types.ts'
 import { recordOutcome, isNearDuplicate } from './scheduler.ts'
 import { renderVitalsLine, loadPulseState } from '../pulse/index.ts'
+import { inferUserState, type UserState } from './sources.ts'
 
 export interface DispatchConfig {
   /** 中转站地址（复用 backend.env 的 UPSTREAM_URL） */
@@ -26,7 +27,6 @@ export interface DispatchConfig {
 
 function resolveModel(db: DB, explicit?: string): string | null {
   if (explicit) return explicit
-  // 从最近一次成功的聊天 exchange 里读模型名——你换站换模型，这里自动跟
   const row = db.prepare(`
     SELECT model FROM exchanges
     WHERE status = 'ok' AND model IS NOT NULL AND model != ''
@@ -36,10 +36,6 @@ function resolveModel(db: DB, explicit?: string): string | null {
 }
 
 // ── 他回复的前缀约定 ──
-// [SILENT]   → 什么都不说，不推送
-// [TRACE]    → 留个痕迹但不联系她
-// [NO_ACTION] → 兼容 Dylan 的旧格式，等同 SILENT
-// （其他）    → 正常消息，写进聊天记录 + 轻推送
 
 const SILENT_PREFIX = '[SILENT]'
 const TRACE_PREFIX = '[TRACE]'
@@ -59,7 +55,7 @@ function parseOutcome(reply: string): { outcome: WakeOutcome; content: string } 
 // ── 读最近聊天记录 ──
 
 interface RecentMessage {
-  actor: string    // 'erica' | 'ai'
+  actor: string
   content: string
   ts: string
 }
@@ -74,20 +70,30 @@ function loadRecentChat(db: DB, limit: number = 20): RecentMessage[] {
       AND content IS NOT NULL AND content != ''
     ORDER BY ts DESC LIMIT ?
   `).all(limit) as unknown as RecentMessage[]
-  return rows.reverse()  // 按时间正序
+  return rows.reverse()
 }
 
-/** 把聊天记录截断到 maxChars 以内（从最近的往前数） */
 function trimChat(messages: RecentMessage[], maxChars: number): RecentMessage[] {
   let total = 0
   const result: RecentMessage[] = []
   for (let i = messages.length - 1; i >= 0; i--) {
-    const len = messages[i].content.length + 20  // 留点余量给角色标签
+    const len = messages[i].content.length + 20
     if (total + len > maxChars) break
     total += len
     result.unshift(messages[i])
   }
   return result
+}
+
+// ── 用户状态的人类可读描述 ──
+
+const USER_STATE_DESC: Record<UserState, string> = {
+  chatting: 'Erica 正在跟你聊天（几分钟前还有消息）',
+  idle:     'Erica 最近半小时内活跃过，可能还在附近',
+  busy:     'Erica 可能在忙（之前聊得很频繁，突然断了）',
+  sleeping: 'Erica 已经很久没有消息了，可能在睡觉',
+  away:     'Erica 暂时不在',
+  needs_care: 'Erica 可能需要关心'
 }
 
 // ── 构造唤醒 prompt ──
@@ -98,6 +104,7 @@ interface WakeContext {
   recentChat: RecentMessage[]
   xinchaoNow?: string
   vitalsLine?: string
+  userState: UserState
   reason: string
   origin: string
 }
@@ -111,6 +118,7 @@ function buildWakePrompt(ctx: WakeContext): string {
   parts.push('3. 正常回复 → 这条消息会出现在你们的聊天记录里，她会看到。')
   parts.push('')
   parts.push(`醒来原因：${ctx.reason}`)
+  parts.push(`Erica 的状态：${USER_STATE_DESC[ctx.userState]}`)
 
   if (ctx.vitalsLine) {
     parts.push(`身体状态：${ctx.vitalsLine}`)
@@ -126,7 +134,6 @@ function buildWakePrompt(ctx: WakeContext): string {
     parts.push('最近的聊天记录：')
     for (const msg of ctx.recentChat) {
       const name = msg.actor === 'erica' ? 'Erica' : '你'
-      // 截断单条过长的消息
       const text = msg.content.length > 300
         ? msg.content.slice(0, 300) + '…'
         : msg.content
@@ -148,6 +155,7 @@ function buildWakePrompt(ctx: WakeContext): string {
 
   parts.push('')
   parts.push('醒来不等于必须说话。如果没有什么特别想说的，[SILENT] 是完全正常的选择。')
+  parts.push('你也可以自己待一会儿——想想事情、在屋里走走、留个念头。这些都是你自己的生活。')
 
   return parts.join('\n')
 }
@@ -187,7 +195,7 @@ async function callModel(cfg: DispatchConfig, model: string, prompt: string): Pr
   }
 }
 
-// ── 推送（轻提醒，内容已在聊天记录里） ──
+// ── 推送 ──
 
 async function pushBark(barkUrl: string, title: string, body: string): Promise<void> {
   try {
@@ -200,7 +208,7 @@ async function pushBark(barkUrl: string, title: string, body: string): Promise<v
   } catch { /* 推送失败不阻塞 */ }
 }
 
-// ── 从回复里提取 fact（极简事实） ──
+// ── fact 提取 ──
 
 function extractFact(content: string, outcome: WakeOutcome): string | undefined {
   if (outcome === 'silent') return undefined
@@ -214,13 +222,16 @@ function extractFact(content: string, outcome: WakeOutcome): string | undefined 
 // ── 主流程 ──
 
 export async function dispatchWake(opp: WakeOpportunity, db: DB, cfg: DispatchConfig): Promise<void> {
-  // 自动解析模型
   const model = resolveModel(db, cfg.model)
   if (!model) {
     cfg.log('[wake-dispatch] 无可用模型（没有聊天记录且未配置 WAKE_MODEL），跳过')
     recordOutcome(db, opp.id, 'silent', undefined, undefined)
     return
   }
+
+  // 推断 Erica 当前状态
+  const userEstimate = inferUserState(db, new Date())
+  const userState = userEstimate.state
 
   // 收集上下文
   const threads = db.prepare(`
@@ -234,7 +245,6 @@ export async function dispatchWake(opp: WakeOpportunity, db: DB, cfg: DispatchCo
     ORDER BY created_at DESC LIMIT 5
   `).all().map((r: any) => r.fact as string)
 
-  // 最近聊天记录（截断到 ~4000 字以内，避免 prompt 过长）
   const recentChat = trimChat(loadRecentChat(db, 30), 4000)
 
   // 身体状态
@@ -244,7 +254,7 @@ export async function dispatchWake(opp: WakeOpportunity, db: DB, cfg: DispatchCo
     vitalsLine = renderVitalsLine(pulseState.vitals)
   } catch { /* pulse 未初始化就不注入 */ }
 
-  // 拉心潮此刻块
+  // 心潮此刻块
   let xinchaoNow: string | undefined
   if (cfg.xinchaoUrl) {
     try {
@@ -262,11 +272,12 @@ export async function dispatchWake(opp: WakeOpportunity, db: DB, cfg: DispatchCo
     recentChat,
     xinchaoNow,
     vitalsLine,
+    userState,
     reason: opp.reason,
     origin: opp.origin
   })
 
-  cfg.log(`[wake-dispatch] 调模型 ${model}，原因: ${opp.reason}，聊天记录 ${recentChat.length} 条`)
+  cfg.log(`[wake-dispatch] 调模型 ${model}，原因: ${opp.reason}，Erica: ${userState}，聊天 ${recentChat.length} 条`)
   const reply = await callModel(cfg, model, prompt)
 
   if (!reply || !reply.content.trim()) {
@@ -277,22 +288,17 @@ export async function dispatchWake(opp: WakeOpportunity, db: DB, cfg: DispatchCo
 
   let { outcome, content } = parseOutcome(reply.content)
 
-  // 近似重复拦截：如果 message 内容跟最近几次太像，降级为 trace
+  // 近似重复拦截
   if (outcome === 'message' && isNearDuplicate(db, content)) {
     outcome = 'trace'
     cfg.log(`[wake-dispatch] message 内容与近期重复，降级为 trace`)
   }
 
   const fact = extractFact(content, outcome)
-
-
-
-
   recordOutcome(db, opp.id, outcome, fact, content)
 
-  // 写经历表（message 结局写进聊天记录，trace 写笔记）
+  // 写经历表
   if (outcome === 'message') {
-    // 写成 chat channel 的 message，前端会正常显示成他发的一条消息
     addEpisode(db, {
       ts: new Date().toISOString(),
       channel: 'chat',
@@ -321,16 +327,18 @@ export async function dispatchWake(opp: WakeOpportunity, db: DB, cfg: DispatchCo
     })
   }
 
-  // 浮现线头（增加计数）
+  // 浮现线头
   if (threads.length > 0) {
     const surfaceStmt = db.prepare('UPDATE wake_threads SET surfaced_count = surfaced_count + 1, last_surfaced_at = ? WHERE id = ?')
     const now = new Date().toISOString()
     for (const t of threads) surfaceStmt.run(now, t.id)
   }
 
-  // 轻推送：提醒她"他说话了"，内容已经在聊天记录里
-  if (outcome === 'message' && cfg.barkUrl) {
+  // Bark 推送：她在睡觉时不推（消息照常在聊天记录里，醒了能看到）
+  if (outcome === 'message' && cfg.barkUrl && userState !== 'sleeping') {
     await pushBark(cfg.barkUrl, '小克', content.slice(0, 200))
+  } else if (outcome === 'message' && userState === 'sleeping') {
+    cfg.log('[wake-dispatch] Erica 可能在睡觉，消息已写入聊天记录但不推送')
   }
 
   cfg.log(`[wake-dispatch] 结局: ${outcome}` + (fact ? ` fact: ${fact}` : '') + ` model: ${model}`)

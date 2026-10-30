@@ -2,14 +2,14 @@
 // 跑在 Eclipsis 后端进程内，不另起服务。
 //
 // 安全限制：
-//   - 睡眠闸：readUserState 推断 sleeping 时，不触发非精确 Wake（精确闹钟照常）
+//   - 他随时能醒——睡眠判断交给 dispatch，由他自己决定要不要发消息
 //   - 每日上限：WAKE_MAX_PER_DAY 次成功 Wake（message + trace），超过后当天不再触发非精确
 //   - 近似重复拦截：如果最近 3 次 message 内容相似度过高，降级为 trace
 //
 // 不用固定静默时段——Erica 作息不规律，靠行为推断她睡没睡。
 import type { DB } from '../db.ts'
 import { tick, loadState, saveState, loadSourceFactors, expireFrequencyMode } from './engine.ts'
-import { collectReadings, fetchXinchao, inferUserState } from './sources.ts'
+import { collectReadings, fetchXinchao } from './sources.ts'
 import type { WakeOpportunity, WakeOutcome, SourceReading } from './types.ts'
 
 export interface WakeSchedulerConfig {
@@ -29,7 +29,7 @@ export interface WakeSchedulerConfig {
 const DEFAULTS: Omit<WakeSchedulerConfig, 'onWake' | 'log'> = {
   tickIntervalMs: 60_000,
   xinchaoRefreshMs: 300_000,
-  maxPerDay: 12
+  maxPerDay: 30
 }
 
 /** 今天已触发多少次非 silent 的 Wake（北京时间） */
@@ -111,8 +111,6 @@ export class WakeScheduler {
       this.checkPreciseWakes(now)
 
       // 2. 非精确 Wake：受睡眠闸和每日上限约束
-      const userState = inferUserState(this.db, now)
-      if (userState.state === 'sleeping') return  // 她在睡觉，不打扰
       if (todayWakeCount(this.db, now) >= this.cfg.maxPerDay) return
 
       this.tickSpontaneous(now)
