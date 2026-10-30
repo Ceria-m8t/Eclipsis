@@ -3,7 +3,7 @@
 import type { DB } from '../db.ts'
 import { addEpisode } from '../db.ts'
 import type { WakeOpportunity, WakeOutcome } from './types.ts'
-import { recordOutcome } from './scheduler.ts'
+import { recordOutcome, isNearDuplicate } from './scheduler.ts'
 import { renderVitalsLine, loadPulseState } from '../pulse/index.ts'
 
 export interface DispatchConfig {
@@ -275,10 +275,19 @@ export async function dispatchWake(opp: WakeOpportunity, db: DB, cfg: DispatchCo
     return
   }
 
-  const { outcome, content } = parseOutcome(reply.content)
+  let { outcome, content } = parseOutcome(reply.content)
+
+  // 近似重复拦截：如果 message 内容跟最近几次太像，降级为 trace
+  if (outcome === 'message' && isNearDuplicate(db, content)) {
+    outcome = 'trace'
+    cfg.log(`[wake-dispatch] message 内容与近期重复，降级为 trace`)
+  }
+
   const fact = extractFact(content, outcome)
 
-  // 存结局
+
+
+
   recordOutcome(db, opp.id, outcome, fact, content)
 
   // 写经历表（message 结局写进聊天记录，trace 写笔记）

@@ -1,5 +1,10 @@
 // Wake 调度器：定时 tick 引擎，触发时 dispatch。
 // 跑在 Eclipsis 后端进程内，不另起服务。
+//
+// 安全限制（参考 Wake-Trace）：
+//   - 静默时段：WAKE_QUIET_START ~ WAKE_QUIET_END 只触发精确 Wake，不触发非精确
+//   - 每日上限：WAKE_MAX_PER_DAY 次成功 Wake（message + trace），超过后当天不再触发非精确
+//   - 近似重复拦截：如果最近 3 次 message 内容相似度过高，降级为 trace
 import type { DB } from '../db.ts'
 import { tick, loadState, saveState, loadSourceFactors, expireFrequencyMode } from './engine.ts'
 import { collectReadings, fetchXinchao } from './sources.ts'
@@ -12,6 +17,12 @@ export interface WakeSchedulerConfig {
   xinchaoUrl?: string
   /** 心潮刷新间隔（毫秒），默认 300_000（5 分钟） */
   xinchaoRefreshMs: number
+  /** 静默时段开始小时（0-23，北京时间），默认 1（凌晨 1 点） */
+  quietStart: number
+  /** 静默时段结束小时（0-23，北京时间），默认 7（早上 7 点） */
+  quietEnd: number
+  /** 每日最大 Wake 次数（message + trace），默认 12 */
+  maxPerDay: number
   /** 触发后的回调：调模型、推送等 */
   onWake: (opp: WakeOpportunity, db: DB) => Promise<void>
   log: (msg: string) => void
@@ -19,7 +30,58 @@ export interface WakeSchedulerConfig {
 
 const DEFAULTS: Omit<WakeSchedulerConfig, 'onWake' | 'log'> = {
   tickIntervalMs: 60_000,
-  xinchaoRefreshMs: 300_000
+  xinchaoRefreshMs: 300_000,
+  quietStart: 1,
+  quietEnd: 7,
+  maxPerDay: 12
+}
+
+/** 判断当前是否在静默时段（北京时间 UTC+8） */
+function isQuietHour(now: Date, start: number, end: number): boolean {
+  const hour = (now.getUTCHours() + 8) % 24
+  if (start < end) {
+    return hour >= start && hour < end
+  }
+  // 跨午夜：比如 23 → 7
+  return hour >= start || hour < end
+}
+
+/** 今天已触发多少次非 silent 的 Wake（北京时间） */
+function todayWakeCount(db: DB, now: Date): number {
+  // 北京时间今天 0 点的 UTC 时间
+  const bj = new Date(now.getTime() + 8 * 3600_000)
+  const dayStart = new Date(Date.UTC(bj.getUTCFullYear(), bj.getUTCMonth(), bj.getUTCDate()) - 8 * 3600_000)
+  const row = db.prepare(`
+    SELECT COUNT(*) as c FROM wake_opportunities
+    WHERE outcome IN ('message', 'trace')
+      AND created_at >= ?
+  `).get(dayStart.toISOString()) as { c: number }
+  return row.c
+}
+
+/** 检查最近几条 message 是否高度重复 */
+function isNearDuplicate(db: DB, newContent: string): boolean {
+  if (!newContent || newContent.length < 10) return false
+  const recent = db.prepare(`
+    SELECT content FROM wake_opportunities
+    WHERE outcome = 'message' AND content IS NOT NULL
+    ORDER BY created_at DESC LIMIT 3
+  `).all() as { content: string }[]
+
+  if (recent.length < 2) return false
+
+  // 简单的 jaccard 相似度：按字分词，交集/并集
+  const toSet = (s: string) => new Set(s.replace(/\s+/g, '').split(''))
+  const newSet = toSet(newContent)
+
+  for (const r of recent) {
+    const oldSet = toSet(r.content)
+    const intersection = [...newSet].filter(c => oldSet.has(c)).length
+    const union = new Set([...newSet, ...oldSet]).size
+    const similarity = union > 0 ? intersection / union : 0
+    if (similarity > 0.7) return true  // 70% 以上字重叠 → 太像了
+  }
+  return false
 }
 
 export class WakeScheduler {
@@ -64,10 +126,12 @@ export class WakeScheduler {
     try {
       const now = new Date()
 
-      // 1. 检查精确 Wake（到点的闹钟）
+      // 1. 精确 Wake 不受静默时段限制（闹钟就是闹钟）
       this.checkPreciseWakes(now)
 
-      // 2. 非精确 Wake tick
+      // 2. 非精确 Wake：受静默时段和每日上限约束
+      if (isQuietHour(now, this.cfg.quietStart, this.cfg.quietEnd)) return
+      if (todayWakeCount(this.db, now) >= this.cfg.maxPerDay) return
       this.tickSpontaneous(now)
     } catch (e) {
       this.cfg.log(`[wake] tick 异常: ${e}`)
@@ -112,7 +176,6 @@ export class WakeScheduler {
           'SELECT enabled FROM wake_precise_source_controls WHERE source_id = ?'
         ).get(p.source) as { enabled: number } | undefined
         if (ctrl && !ctrl.enabled) {
-          // 被他关了，不触发，标记为 policy_suppressed
           this.db.prepare("UPDATE wake_precise SET status = 'cancelled' WHERE id = ?").run(p.id)
           this.cfg.log(`[wake] 精确 Wake ${p.id} 被 source control 抑制`)
           continue
@@ -156,12 +219,6 @@ export class WakeScheduler {
     const surfacedIds = threads.map(t => t.id)
     const nowIso = new Date().toISOString()
 
-    // 更新线头浮现计数
-    for (const t of threads) {
-      this.db.prepare(`UPDATE wake_threads SET surfaced_count = surfaced_count + 1,
-        last_surfaced_at = ? WHERE id = ?`).run(nowIso, t.id)
-    }
-
     const opp: WakeOpportunity = {
       id: crypto.randomUUID(),
       origin,
@@ -203,3 +260,6 @@ export function recordOutcome(
     outcome, fact ?? null, content ?? null, new Date().toISOString(), exchangeRid ?? null, oppId
   )
 }
+
+// 导出供 dispatch 使用
+export { isNearDuplicate }
