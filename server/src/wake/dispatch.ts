@@ -4,6 +4,7 @@ import type { DB } from '../db.ts'
 import { addEpisode } from '../db.ts'
 import type { WakeOpportunity, WakeOutcome } from './types.ts'
 import { recordOutcome } from './scheduler.ts'
+import { renderVitalsLine, loadPulseState } from '../pulse/index.ts'
 
 export interface DispatchConfig {
   /** 中转站地址（复用 backend.env 的 UPSTREAM_URL） */
@@ -55,12 +56,48 @@ function parseOutcome(reply: string): { outcome: WakeOutcome; content: string } 
   return { outcome: 'message', content: trimmed }
 }
 
+// ── 读最近聊天记录 ──
+
+interface RecentMessage {
+  actor: string    // 'erica' | 'ai'
+  content: string
+  ts: string
+}
+
+function loadRecentChat(db: DB, limit: number = 20): RecentMessage[] {
+  const rows = db.prepare(`
+    SELECT actor, content, ts FROM episodes
+    WHERE retracted_at IS NULL
+      AND channel IN ('chat', 'room')
+      AND actor IN ('erica', 'ai')
+      AND kind = 'message'
+      AND content IS NOT NULL AND content != ''
+    ORDER BY ts DESC LIMIT ?
+  `).all(limit) as unknown as RecentMessage[]
+  return rows.reverse()  // 按时间正序
+}
+
+/** 把聊天记录截断到 maxChars 以内（从最近的往前数） */
+function trimChat(messages: RecentMessage[], maxChars: number): RecentMessage[] {
+  let total = 0
+  const result: RecentMessage[] = []
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const len = messages[i].content.length + 20  // 留点余量给角色标签
+    if (total + len > maxChars) break
+    total += len
+    result.unshift(messages[i])
+  }
+  return result
+}
+
 // ── 构造唤醒 prompt ──
 
 interface WakeContext {
   threads: { id: string; text: string }[]
   recentFacts: string[]
+  recentChat: RecentMessage[]
   xinchaoNow?: string
+  vitalsLine?: string
   reason: string
   origin: string
 }
@@ -75,9 +112,26 @@ function buildWakePrompt(ctx: WakeContext): string {
   parts.push('')
   parts.push(`醒来原因：${ctx.reason}`)
 
+  if (ctx.vitalsLine) {
+    parts.push(`身体状态：${ctx.vitalsLine}`)
+  }
+
   if (ctx.xinchaoNow) {
     parts.push('')
     parts.push(`当前内在状态：\n${ctx.xinchaoNow}`)
+  }
+
+  if (ctx.recentChat.length > 0) {
+    parts.push('')
+    parts.push('最近的聊天记录：')
+    for (const msg of ctx.recentChat) {
+      const name = msg.actor === 'erica' ? 'Erica' : '你'
+      // 截断单条过长的消息
+      const text = msg.content.length > 300
+        ? msg.content.slice(0, 300) + '…'
+        : msg.content
+      parts.push(`  ${name}：${text}`)
+    }
   }
 
   if (ctx.recentFacts.length > 0) {
@@ -180,6 +234,16 @@ export async function dispatchWake(opp: WakeOpportunity, db: DB, cfg: DispatchCo
     ORDER BY created_at DESC LIMIT 5
   `).all().map((r: any) => r.fact as string)
 
+  // 最近聊天记录（截断到 ~4000 字以内，避免 prompt 过长）
+  const recentChat = trimChat(loadRecentChat(db, 30), 4000)
+
+  // 身体状态
+  let vitalsLine: string | undefined
+  try {
+    const pulseState = loadPulseState(db)
+    vitalsLine = renderVitalsLine(pulseState.vitals)
+  } catch { /* pulse 未初始化就不注入 */ }
+
   // 拉心潮此刻块
   let xinchaoNow: string | undefined
   if (cfg.xinchaoUrl) {
@@ -195,12 +259,14 @@ export async function dispatchWake(opp: WakeOpportunity, db: DB, cfg: DispatchCo
   const prompt = buildWakePrompt({
     threads,
     recentFacts,
+    recentChat,
     xinchaoNow,
+    vitalsLine,
     reason: opp.reason,
     origin: opp.origin
   })
 
-  cfg.log(`[wake-dispatch] 调模型 ${model}，原因: ${opp.reason}`)
+  cfg.log(`[wake-dispatch] 调模型 ${model}，原因: ${opp.reason}，聊天记录 ${recentChat.length} 条`)
   const reply = await callModel(cfg, model, prompt)
 
   if (!reply || !reply.content.trim()) {
@@ -244,6 +310,13 @@ export async function dispatchWake(opp: WakeOpportunity, db: DB, cfg: DispatchCo
       meta: { wake_id: opp.id, origin: opp.origin, outcome: 'trace' },
       sourceRef: `wake:trace:${opp.id}`
     })
+  }
+
+  // 浮现线头（增加计数）
+  if (threads.length > 0) {
+    const surfaceStmt = db.prepare('UPDATE wake_threads SET surfaced_count = surfaced_count + 1, last_surfaced_at = ? WHERE id = ?')
+    const now = new Date().toISOString()
+    for (const t of threads) surfaceStmt.run(now, t.id)
   }
 
   // 轻推送：提醒她"他说话了"，内容已经在聊天记录里
