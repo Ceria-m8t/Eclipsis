@@ -20,6 +20,7 @@ import {
   WeatherFetcher, refreshXinchaoBridge,
   pruneHrHistory, detectFromRecentChat
 } from './pulse/index.ts'
+import { assembleSceneBlock, injectSceneBlock } from './assembler/index.ts'
 
 function bearer(req: IncomingMessage): string {
   const h = String(req.headers.authorization || '')
@@ -36,6 +37,7 @@ export interface ServerOptions {
   stripWakeHistory?: boolean  // STRIP_WAKE_HISTORY=1
   stripThinkHistory?: boolean // STRIP_THINK_HISTORY=1
   stripOldImages?: boolean     // STRIP_OLD_IMAGES=1
+  assembler?: boolean          // ASSEMBLER_ENABLED=1
   log?: (m: string, e?: unknown) => void
 }
 
@@ -106,6 +108,18 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
           changed = true
         }
       }
+      // 组装器 v1：注入现场状态（时间+脉+天气）到 system message 末尾
+      if (opts.assembler && Array.isArray(out.messages)) {
+        try {
+          const scene = assembleSceneBlock(db)
+          const injected = injectSceneBlock(out.messages, scene.sceneBlock)
+          if (injected.injected) {
+            out = { ...out, messages: injected.messages }
+            transforms.assembler_v1 = scene.meta
+            changed = true
+          }
+        } catch { /* assembler error should not block request */ }
+      }
       if (!changed) return { rid, linked: false, body: raw }
       return {
         rid, linked: !!linkedRid, body: Buffer.from(JSON.stringify(out)), json: out,
@@ -125,7 +139,8 @@ function main() {
     linkRid: process.env.LINK_RID === '1',
     stripWakeHistory: process.env.STRIP_WAKE_HISTORY === '1',
     stripThinkHistory: process.env.STRIP_THINK_HISTORY === '1',
-    stripOldImages: process.env.STRIP_OLD_IMAGES === '1'
+    stripOldImages: process.env.STRIP_OLD_IMAGES === '1',
+    assembler: process.env.ASSEMBLER_ENABLED === '1'
   })
   front.listen(cfg.frontPort, '127.0.0.1', () => console.log(`[eclipsis] front  127.0.0.1:${cfg.frontPort} → ${cfg.dylanUrl}`))
   tap.listen(cfg.tapPort, '127.0.0.1', () => console.log(`[eclipsis] tap    127.0.0.1:${cfg.tapPort} → ${cfg.upstreamUrl || '(未配置)'}` +
