@@ -2,7 +2,8 @@
 //
 // v1 策略：不替换 xiaoke 的 system message，在末尾追加「此刻」块。
 // xiaoke 的提示词、记忆规则、时间树、梗百科全部保留，
-// 我们只增加脉状态、北京时间、天气。
+// 我们只增加脉状态、北京时间、天气，以及心潮自己写的「此刻」（驱力、情绪）。
+// 心潮那段每轮自动带上，他不用调工具也知道自己现在的状态。
 // v2 再逐步替换 xiaoke 的各段。
 
 import type { DB } from '../db.ts'
@@ -16,7 +17,23 @@ export interface AssembleResult {
     timeBeijing: string
     weather: string | null
     xinchaoEmotion: string | null
+    xinchaoLines: number
   }
+}
+
+/** 心潮的「此刻」文字超过这个时间没刷新就不注入（过期的状态比没有更误导） */
+const XINCHAO_TEXT_MAX_AGE_MS = 10 * 60_000
+
+/**
+ * 把心潮 /v1/now 的文字整理成注入用的几行。
+ * 心潮自带一行「身体：心跳 xx」，和脉的心跳是两套数——脉在的时候去掉这一行，只认脉。
+ */
+export function renderXinchaoLines(nowText: string | null, opts: { hasPulseVitals: boolean }): string[] {
+  if (!nowText) return []
+  return nowText.split('\n')
+    .map(l => l.trim())
+    .filter(Boolean)
+    .filter(l => !(opts.hasPulseVitals && /^身体[：:]/.test(l)))
 }
 
 function beijingTime(now: Date): string {
@@ -32,8 +49,7 @@ function beijingTime(now: Date): string {
 }
 
 /** 生成现场状态块 */
-export function assembleSceneBlock(db: DB): AssembleResult {
-  const now = new Date()
+export function assembleSceneBlock(db: DB, now: Date = new Date()): AssembleResult {
   const timeStr = beijingTime(now)
 
   let vitalsLine: string | null = null
@@ -47,9 +63,13 @@ export function assembleSceneBlock(db: DB): AssembleResult {
   } catch { /* pulse 未初始化 */ }
 
   let xinchaoEmotion: string | null = null
+  let xinchaoLines: string[] = []
   const bridge = getXinchaoBridgeCache()
-  if (bridge && (Date.now() - bridge.fetchedAt) < 30 * 60_000) {
+  if (bridge && (now.getTime() - bridge.fetchedAt) < 30 * 60_000) {
     xinchaoEmotion = bridge.inferredEmotion
+  }
+  if (bridge && (now.getTime() - bridge.fetchedAt) < XINCHAO_TEXT_MAX_AGE_MS) {
+    xinchaoLines = renderXinchaoLines(bridge.nowText, { hasPulseVitals: !!vitalsLine })
   }
 
   const parts: string[] = []
@@ -59,10 +79,14 @@ export function assembleSceneBlock(db: DB): AssembleResult {
   parts.push(`现在是 ${timeStr}`)
   if (vitalsLine) parts.push(`身体：${vitalsLine}`)
   if (weatherDesc) parts.push(`上海天气：${weatherDesc}`)
+  if (xinchaoLines.length) {
+    parts.push('')
+    parts.push(...xinchaoLines)
+  }
 
   return {
     sceneBlock: parts.join('\n'),
-    meta: { vitalsLine, timeBeijing: timeStr, weather: weatherDesc, xinchaoEmotion }
+    meta: { vitalsLine, timeBeijing: timeStr, weather: weatherDesc, xinchaoEmotion, xinchaoLines: xinchaoLines.length }
   }
 }
 

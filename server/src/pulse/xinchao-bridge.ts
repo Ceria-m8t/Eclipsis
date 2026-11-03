@@ -3,7 +3,7 @@
 // 两者可以叠加：聊天内容触发的情绪优先级更高（来自她说的话），心潮驱力作为底层漂移。
 
 import type { Emotion } from './types.ts'
-import { fetchXinchaoDrives } from '../xinchao-client.ts'
+import { fetchXinchaoDrives, fetchXinchaoNowText } from '../xinchao-client.ts'
 
 /** 从心潮的驱力向量推断一个底层情绪倾向。
  *  驱力名是心潮 4.2 实际用的 11 股：
@@ -45,6 +45,8 @@ export interface XinchaoBridgeState {
   inferredEmotion: Emotion | null
   /** 原始驱力快照 */
   drives: Record<string, number>
+  /** 心潮自己写的「此刻」文字块（/v1/now），给组装器每轮注入 */
+  nowText: string | null
   /** 拉取时间 */
   fetchedAt: number
 }
@@ -54,11 +56,14 @@ let _cache: XinchaoBridgeState | null = null
 export function getXinchaoBridgeCache(): XinchaoBridgeState | null { return _cache }
 
 export async function refreshXinchaoBridge(xinchaoUrl: string): Promise<XinchaoBridgeState | null> {
-  const drives = await fetchXinchaoDrives(xinchaoUrl)
-  if (!drives) return null
-  _cache = { inferredEmotion: drivesToEmotion(drives), drives, fetchedAt: Date.now() }
+  const [drives, nowText] = await Promise.all([fetchXinchaoDrives(xinchaoUrl), fetchXinchaoNowText(xinchaoUrl)])
+  if (!drives && !nowText) return null
+  _cache = { inferredEmotion: drives ? drivesToEmotion(drives) : null, drives: drives ?? {}, nowText, fetchedAt: Date.now() }
   return _cache
 }
+
+/** 测试用：直接设缓存 */
+export function setXinchaoBridgeCacheForTest(state: XinchaoBridgeState | null): void { _cache = state }
 
 /** 心潮数据是否还新鲜（30 分钟内） */
 export function isBridgeFresh(maxAgeMs: number = 30 * 60_000): boolean {

@@ -146,7 +146,14 @@ function main() {
     assembler: process.env.ASSEMBLER_ENABLED === '1',
     onEricaMessage: (() => {
       const url = (process.env.XINCHAO_URL || '').trim()
-      return url ? (text: string) => { void notifyXinchaoPresence(url, text) } : undefined
+      // 通知完立刻刷新心潮缓存，下一轮的「此刻」就是醒着的状态（不用等 2 分钟定时刷新）
+      return url ? (text: string) => {
+        void notifyXinchaoPresence(url, text).then(async sent => {
+          if (!sent) return
+          const r = await refreshXinchaoBridge(url)
+          if (r?.inferredEmotion) setXinchaoEmotion(r.inferredEmotion)
+        }).catch(() => {})
+      } : undefined
     })()
   })
   front.listen(cfg.frontPort, '127.0.0.1', () => console.log(`[eclipsis] front  127.0.0.1:${cfg.frontPort} → ${cfg.dylanUrl}`))
