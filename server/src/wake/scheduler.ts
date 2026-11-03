@@ -8,7 +8,8 @@
 //
 // 不用固定静默时段——Erica 作息不规律，靠行为推断她睡没睡。
 import type { DB } from '../db.ts'
-import { tick, loadState, saveState, loadSourceFactors, expireFrequencyMode } from './engine.ts'
+import { createHash } from 'node:crypto'
+import { tick, loadState, saveState, loadSourceFactors, expireFrequencyMode, drawTheta } from './engine.ts'
 import { collectReadings, fetchXinchao } from './sources.ts'
 import type { WakeOpportunity, WakeOutcome, SourceReading } from './types.ts'
 
@@ -19,8 +20,11 @@ export interface WakeSchedulerConfig {
   xinchaoUrl?: string
   /** 心潮刷新间隔（毫秒），默认 300_000（5 分钟） */
   xinchaoRefreshMs: number
-  /** 每日最大 Wake 次数（message + trace），默认 12 */
+  /** 每日最大 Wake 次数（message + trace），默认 30 */
   maxPerDay: number
+  /** 最长间隔（分钟）：距离上次说话/上次醒来超过这个就一定醒。在 [min, max] 之间随机，默认 150–180 */
+  maxGapMinMinutes: number
+  maxGapMaxMinutes: number
   /** 触发后的回调：调模型、推送等 */
   onWake: (opp: WakeOpportunity, db: DB) => Promise<void>
   log: (msg: string) => void
@@ -29,7 +33,32 @@ export interface WakeSchedulerConfig {
 const DEFAULTS: Omit<WakeSchedulerConfig, 'onWake' | 'log'> = {
   tickIntervalMs: 60_000,
   xinchaoRefreshMs: 300_000,
-  maxPerDay: 30
+  maxPerDay: 30,
+  maxGapMinMinutes: 150,
+  maxGapMaxMinutes: 180
+}
+
+// ── 最长间隔（2026-11-03 Erica：最长不超过三小时）──
+// 锚点 = 最后一次聊天消息（她或他）和最后一次醒来（含失败）里较晚的那个。
+// 截止时间在 [min, max] 分钟之间随机，但同一个锚点永远抽到同一个数——
+// 每分钟重抽会让它几乎总是落在下限附近。
+// 失败的醒来也算锚点，这样中转站挂了不会每分钟重试一次。
+
+/** 同一个锚点 → 同一个截止时间 */
+export function maxGapDeadline(anchor: Date, minMinutes: number, maxMinutes: number): Date {
+  const h = createHash('sha256').update(anchor.toISOString()).digest()
+  const u = h.readUInt32BE(0) / 0x1_0000_0000
+  const minutes = minMinutes + u * Math.max(0, maxMinutes - minMinutes)
+  return new Date(anchor.getTime() + minutes * 60_000)
+}
+
+/** 最后一次聊天消息或醒来的时间；都没有返回 null */
+export function lastActivityAt(db: DB): Date | null {
+  const chat = db.prepare(`SELECT MAX(ts) AS t FROM episodes
+    WHERE retracted_at IS NULL AND channel IN ('chat', 'room') AND actor IN ('erica', 'ai') AND kind = 'message'`).get() as { t: string | null }
+  const wake = db.prepare('SELECT MAX(created_at) AS t FROM wake_opportunities').get() as { t: string | null }
+  const times = [chat?.t, wake?.t].filter((t): t is string => !!t).map(t => new Date(t).getTime()).filter(Number.isFinite)
+  return times.length ? new Date(Math.max(...times)) : null
 }
 
 /** 今天已触发多少次非 silent 的 Wake（北京时间） */
@@ -136,7 +165,19 @@ export class WakeScheduler {
         result.contributions.filter(c => c.weighted > 0).map(c => `${c.sourceId}:${c.weighted.toFixed(2)}`)
       )}`)
       this.dispatch('spontaneous', readings, '非精确 Wake：累积达到阈值', undefined)
+      return
     }
+
+    // 最长间隔兜底。他自己选了 low_frequency（或上面已经 return 的 silent）时不生效：那是他自己的决定
+    if (state.frequencyMode === 'low_frequency') return
+    const anchor = lastActivityAt(this.db)
+    if (!anchor) return
+    const deadline = maxGapDeadline(anchor, this.cfg.maxGapMinMinutes, this.cfg.maxGapMaxMinutes)
+    if (now < deadline) return
+    const mins = Math.round((now.getTime() - anchor.getTime()) / 60_000)
+    saveState(this.db, { ...result.state, H: 0, theta: drawTheta(), lastWakeAt: now.toISOString() })
+    this.cfg.log(`[wake] 最长间隔到了：距离上次说话/醒来 ${mins} 分钟`)
+    this.dispatch('spontaneous', readings, `距离你们上次说话或你上次醒来已经 ${mins} 分钟了`, undefined)
   }
 
   private checkPreciseWakes(now: Date): void {

@@ -147,7 +147,8 @@ export function readThreads(db: DB, now: Date): SourceReading {
   const active = threads.filter(t => !t.expires_at || t.expires_at > nowIso)
 
   if (active.length === 0) {
-    return { sourceId: 'threads', value: 0, stale: false, label: '无活跃线头' }
+    // 没有线头是"没有数据"，不是"不想醒"：标 stale，不参与平均
+    return { sourceId: 'threads', value: 0, stale: true, label: '无活跃线头（不参与）' }
   }
 
   // 1 根 = 0.3，2 根 = 0.5，3 根 = 0.65，5 根 = 0.8

@@ -232,7 +232,9 @@ function main() {
 
       wakeScheduler = new WakeScheduler(db, {
         tickIntervalMs: tickMs,
-        maxPerDay: Number(process.env.WAKE_MAX_PER_DAY) || 12,
+        maxPerDay: Number(process.env.WAKE_MAX_PER_DAY) || 30,
+        maxGapMinMinutes: Number(process.env.WAKE_MAX_GAP_MIN_MINUTES) || 150,
+        maxGapMaxMinutes: Number(process.env.WAKE_MAX_GAP_MAX_MINUTES) || 180,
         xinchaoUrl,
         xinchaoRefreshMs: Number(process.env.WAKE_XINCHAO_REFRESH_MS) || 300_000,
         log,
