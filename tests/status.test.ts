@@ -1,10 +1,13 @@
 // @vitest-environment happy-dom
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { localToolDefinitions, isLocalTool, runLocalTool } from '../src/local-tools'
 import { aiStatus, setStatus } from '../src/status'
 import { loadPrompt, savePrompt, loadHistory, upgradeFeatures, defaultPrompt, STATUS_SECTION } from '../src/prompt-store'
 
 beforeEach(() => { localStorage.clear(); setStatus(null) })
+
+// savePrompt 会把改动推到后端；这里只测本地行为
+beforeEach(() => { vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 }))) })
 
 describe('eclipsis_set_status', () => {
   it('作为 function 工具暴露给模型', () => {

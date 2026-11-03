@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { getSettings, saveSettings, apiUrl, apiHeaders } from '../settings'
 import { loadMcpServers, saveMcpServers, discoverTools, type McpServer } from '../mcp'
 import { compressImage } from '../image'
+import { queueWorldbookPush } from '../prompt-store'
 import { isViewportDebug, setViewportDebug } from '../viewport'
 import { theme, THEME_PRESETS, DEFAULT_THEME } from '../theme'
 import { fontName, setFontFile, clearFont } from '../font'
@@ -132,6 +133,7 @@ function loadWorldbook() {
 function saveWorldbook() {
   localStorage.setItem(WORLDBOOK_KEY, JSON.stringify(worldbook.value))
   localStorage.setItem(GROUPS_KEY, JSON.stringify(groupStates.value))
+  queueWorldbookPush()
 }
 
 // Groups

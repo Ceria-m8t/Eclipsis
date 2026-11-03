@@ -6,12 +6,13 @@ import { startViewportTracking } from './viewport'
 import { installAuthGuard } from './auth-guard'
 import { startTheme } from './theme'
 import { startFont } from './font'
-import { upgradeFeatures } from './prompt-store'
+import { upgradeFeatures, syncPromptsFromServer } from './prompt-store'
 
 installAuthGuard()
 startViewportTracking()
 startTheme()
 startFont()
-upgradeFeatures()
+// 先和后端同步，再做一次性的功能说明升级（升级要在最新的那份上改）
+void syncPromptsFromServer().finally(upgradeFeatures)
 
 createApp(App).use(router).mount('#app')

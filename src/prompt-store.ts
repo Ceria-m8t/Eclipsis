@@ -1,5 +1,9 @@
 // 系统提示词存储：可在设置里编辑，保留最近的历史版本，随时恢复。
-// 代码里的 SYSTEM_PROMPT 只作为"出厂默认"，用户改过之后以本地保存的为准。
+// 代码里的 SYSTEM_PROMPT 只作为"出厂默认"，用户改过之后以保存的为准。
+//
+// 真正的那一份在后端（/api/eclipsis/prompts），聊天和 Wake 都从那里读。
+// localStorage 只是缓存：启动时从后端拉一次（syncPromptsFromServer），chat-engine 照旧同步读缓存。
+// 保存时先写缓存再推后端；推失败就记一笔"未同步"，下次启动先推上去再拉。
 import { SYSTEM_PROMPT } from './system-prompt'
 
 export interface PromptData {
@@ -93,13 +97,119 @@ function pushHistory(v: PromptVersion) {
   localStorage.removeItem(HISTORY_KEY)
 }
 
-// 保存前把当前版本放进历史，这样任何一次改动都能找回
-export function savePrompt(next: Omit<PromptData, 'updatedAt'>, note = '修改前的版本') {
+// 保存前把当前版本放进历史，这样任何一次改动都能找回。
+// 返回 true = 已存到后端；false = 只存在了这个浏览器（下次启动会自动补推）
+export async function savePrompt(next: Omit<PromptData, 'updatedAt'>, note = '修改前的版本'): Promise<boolean> {
   const cur = loadPrompt()
   const changed = cur.main !== next.main || cur.features !== next.features || cur.featuresEnabled !== next.featuresEnabled
-  if (!changed) return
-  pushHistory({ ...cur, note: cur.updatedAt ? note : '出厂默认' })
-  localStorage.setItem(KEY, JSON.stringify({ ...next, updatedAt: Date.now() }))
+  if (!changed) return true
+  const historyNote = cur.updatedAt ? note : '出厂默认'
+  pushHistory({ ...cur, note: historyNote })
+  const value = { ...next, updatedAt: Date.now() }
+  localStorage.setItem(KEY, JSON.stringify(value))
+  return pushDoc('prompt', value, historyNote)
+}
+
+// ===== 和后端同步 =====
+
+const API = '/api/eclipsis/prompts'
+const DIRTY_KEY = 'eclipsis-prompts-unsynced'   // 改了但还没推到后端的 key
+type DocKey = 'prompt' | 'worldbook' | 'worldbookGroups'
+const LOCAL_KEY: Record<DocKey, string> = { prompt: KEY, worldbook: 'worldbook', worldbookGroups: 'worldbook-groups' }
+
+function readLocal(k: DocKey): unknown {
+  try { const raw = localStorage.getItem(LOCAL_KEY[k]); return raw ? JSON.parse(raw) : null } catch { return null }
+}
+function dirtyKeys(): DocKey[] {
+  try { return JSON.parse(localStorage.getItem(DIRTY_KEY) || '[]') } catch { return [] }
+}
+function setDirty(k: DocKey, dirty: boolean) {
+  const set = new Set(dirtyKeys())
+  dirty ? set.add(k) : set.delete(k)
+  localStorage.setItem(DIRTY_KEY, JSON.stringify([...set]))
+}
+
+async function pushDoc(k: DocKey, value: unknown, note?: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${API}/${k}`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ value, note })
+    })
+    setDirty(k, !res.ok)
+    return res.ok
+  } catch {
+    setDirty(k, true)
+    return false
+  }
+}
+
+// 世界书面板每改一下都会存，这里合并成一次推送
+let wbTimer: ReturnType<typeof setTimeout> | null = null
+export function queueWorldbookPush() {
+  setDirty('worldbook', true)
+  setDirty('worldbookGroups', true)
+  if (wbTimer) clearTimeout(wbTimer)
+  wbTimer = setTimeout(() => {
+    wbTimer = null
+    void pushDoc('worldbook', readLocal('worldbook') ?? [])
+    void pushDoc('worldbookGroups', readLocal('worldbookGroups') ?? {})
+  }, 1500)
+}
+
+export type SyncResult = 'synced' | 'imported' | 'offline'
+
+/**
+ * 启动时调用一次：
+ * 1. 后端没有的 → 把浏览器里的传上去（第一次搬家；主 prompt 连同历史版本一起）
+ * 2. 浏览器里有没推上去的修改 → 先推
+ * 3. 其余以后端为准，写回缓存
+ */
+export async function syncPromptsFromServer(): Promise<SyncResult> {
+  try {
+    const res = await fetch(API)
+    if (!res.ok) return 'offline'
+    const { docs } = await res.json() as { docs: Record<DocKey, { value: unknown } | null> }
+    const keys: DocKey[] = ['prompt', 'worldbook', 'worldbookGroups']
+
+    const toImport: Partial<Record<DocKey, unknown>> = {}
+    for (const k of keys) {
+      if (docs[k]) continue
+      if (k === 'prompt' && !isCustomized()) continue   // 没改过的出厂默认不用传
+      const local = readLocal(k)
+      if (local !== null) toImport[k] = local
+    }
+    let imported = false
+    if (Object.keys(toImport).length) {
+      const r = await fetch(`${API}/import`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ docs: toImport, history: toImport.prompt ? loadHistory() : [] })
+      })
+      imported = r.ok
+    }
+
+    // 本机有没推上去的修改：先推。推了的（不管成没成功）都不能再用上面拉到的旧快照覆盖
+    const keepLocal = new Set<DocKey>()
+    for (const k of dirtyKeys()) {
+      keepLocal.add(k)
+      if (k in toImport) { setDirty(k, false); continue }
+      const local = readLocal(k)
+      if (local !== null) await pushDoc(k, local, k === 'prompt' ? '另一台设备上的版本' : undefined)
+    }
+
+    // 以后端为准刷新缓存（刚导入/刚推上去的和本地一样，不用写）
+    for (const k of keys) {
+      const doc = docs[k]
+      if (!doc || k in toImport || keepLocal.has(k)) continue
+      localStorage.setItem(LOCAL_KEY[k], JSON.stringify(doc.value))
+    }
+    const h = await fetch(`${API}/history`)
+    if (h.ok) {
+      const { history } = await h.json() as { history: { value: PromptData; note: string | null }[] }
+      if (history.length) localStorage.setItem(HISTORY_KEY, JSON.stringify(history.map(e => ({ ...e.value, note: e.note ?? '' }))))
+    }
+    return imported ? 'imported' : 'synced'
+  } catch {
+    return 'offline'
+  }
 }
 
 export function isCustomized(): boolean {

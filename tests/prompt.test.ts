@@ -1,10 +1,14 @@
 // @vitest-environment happy-dom
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { loadPrompt, savePrompt, loadHistory, composePrompt, isCustomized, defaultPrompt } from '../src/prompt-store'
 import { buildSystemPrompt } from '../src/chat-engine'
 import { SYSTEM_PROMPT } from '../src/system-prompt'
 
-beforeEach(() => localStorage.clear())
+beforeEach(() => {
+  localStorage.clear()
+  // savePrompt 会把改动推到后端；这里只测本地行为
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })))
+})
 
 describe('prompt-store', () => {
   it('没改过时用代码里的默认提示词，并带上功能说明', () => {

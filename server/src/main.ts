@@ -22,6 +22,7 @@ import {
 } from './pulse/index.ts'
 import { assembleSceneBlock, injectSceneBlock } from './assembler/index.ts'
 import { notifyXinchaoPresence } from './xinchao-client.ts'
+import { ensurePromptSchema, handlePromptApi } from './prompts.ts'
 
 function bearer(req: IncomingMessage): string {
   const h = String(req.headers.authorization || '')
@@ -45,6 +46,7 @@ export interface ServerOptions {
 }
 
 export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { front: Server; tap: Server } {
+  ensurePromptSchema(db)
   const blobs = new BlobStore(db, cfg.blobDir)
   const recorder = new Recorder(db, blobs, { onEricaMessage: opts.onEricaMessage })
 
@@ -54,6 +56,7 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
     api: async (req, res) => {
       if (await handleWakeApi(db, req, res)) return true
       if (await handlePulseApi(db, req, res)) return true
+      if (await handlePromptApi(db, req, res)) return true
       return handleApi(db, req, res)
     },
     authorize: () => true,

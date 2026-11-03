@@ -30,10 +30,11 @@ const tokens = computed(() => ({
 // 含世界书在内、实际发给他的总量（按已保存的内容算）
 const totalSaved = ref(estimateTokens(buildSystemPrompt()))
 
-function save() {
+async function save() {
   if (!main.value.trim()) { toast('主提示词不能为空'); return }
+  let onServer: boolean
   try {
-    savePrompt({ main: main.value, features: features.value, featuresEnabled: featuresEnabled.value })
+    onServer = await savePrompt({ main: main.value, features: features.value, featuresEnabled: featuresEnabled.value })
   } catch {
     toast('保存失败：存储空间不够')
     return
@@ -41,7 +42,7 @@ function save() {
   saved.value = loadPrompt()
   customized.value = true
   totalSaved.value = estimateTokens(buildSystemPrompt())
-  toast('已保存，下一条消息开始生效')
+  toast(onServer ? '已保存，下一条消息开始生效' : '已存在本机，服务器暂时连不上，下次打开会自动同步')
 }
 
 function discard() {
