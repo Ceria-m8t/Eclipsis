@@ -4,7 +4,6 @@ import { useRouter } from 'vue-router'
 
 const router = useRouter()
 
-// 拖拽滑动逻辑
 const container = ref<HTMLElement | null>(null)
 let isDragging = false
 let startX = 0
@@ -36,7 +35,6 @@ function onHotspot(path: string) {
   }
 }
 
-// 初始居中
 onMounted(() => {
   if (container.value) {
     const el = container.value
@@ -56,32 +54,29 @@ onMounted(() => {
       @pointercancel="onPointerUp"
     >
       <div class="room-canvas">
-        <!-- 底图层 -->
         <img
-          src="/assets/rooms/livingroom-base.png"
+          src="/assets/rooms/livingroom/base-night.jpg"
           alt="客厅"
           class="room-base"
           draggable="false"
         />
 
-        <!-- 家具层 -->
-        <div class="furniture-layer">
-        </div>
+        <div class="furniture-layer"></div>
+        <div class="animation-layer"></div>
+        <div class="people-layer"></div>
 
-        <!-- 动画层 -->
-        <div class="animation-layer">
-        </div>
-
-        <!-- 交互热区层 -->
         <div class="hotspot-layer">
-          <button class="hotspot bedroom-door" @click.stop="onHotspot('/bedroom')">
-            <span class="hotspot-label glass">🌙 卧室</span>
-          </button>
+          <!-- 厨房拱门 -->
           <button class="hotspot kitchen-door" @click.stop="onHotspot('/kitchen')">
             <span class="hotspot-label glass">🍳 厨房</span>
           </button>
-          <button class="hotspot study-door" @click.stop="onHotspot('/study')">
-            <span class="hotspot-label glass">📚 书房</span>
+          <!-- 走廊口 -->
+          <button class="hotspot hallway-door" @click.stop="onHotspot('/hallway')">
+            <span class="hotspot-label glass">🚪 走廊</span>
+          </button>
+          <!-- 鱼缸 -->
+          <button class="hotspot aquarium" @click.stop="onHotspot('')">
+            <span class="hotspot-label glass">🐙 鱼缸</span>
           </button>
         </div>
       </div>
@@ -90,17 +85,16 @@ onMounted(() => {
 </template>
 
 <style scoped>
-/* 房间缩小显示：画面占页面区高度的 --room-scale，上下居中，左右仍可滑动。
-   底图透明处先透出页面背景，以后换成氛围层 */
 .room {
-  --room-scale: 0.78;
+  --room-scale: 0.82;
   background: transparent;
 }
 
 .room-scroll {
   height: 100%;
   display: flex;
-  align-items: center;
+  align-items: flex-end;
+  padding-bottom: 28px;
   overflow-x: auto;
   overflow-y: hidden;
   cursor: grab;
@@ -109,50 +103,41 @@ onMounted(() => {
   touch-action: pan-x;
 }
 
-.room-scroll::-webkit-scrollbar {
-  display: none;
-}
+.room-scroll::-webkit-scrollbar { display: none; }
+.room-scroll:active { cursor: grabbing; }
 
-.room-scroll:active {
-  cursor: grabbing;
-}
-
+/* 客厅底图 1669×890 */
 .room-canvas {
   position: relative;
   flex-shrink: 0;
   height: calc(100% * var(--room-scale));
-  /* 窄屏时左右留点边，宽屏（图比屏幕窄）时居中 */
+  aspect-ratio: 1669 / 890;
   margin: 0 auto;
-  padding: 0 12px;
 }
 
 .room-base {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
   height: 100%;
   border-radius: 18px;
-  filter: drop-shadow(0 10px 24px rgba(60, 72, 110, 0.18));
-  width: auto;
-  display: block;
-  image-rendering: pixelated;
+  filter: drop-shadow(0 10px 24px rgba(20, 28, 60, 0.28));
   user-select: none;
   -webkit-user-drag: none;
 }
 
 .furniture-layer,
 .animation-layer,
+.people-layer,
 .hotspot-layer {
   position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
+  inset: 0;
   pointer-events: none;
 }
 
-.hotspot-layer {
-  pointer-events: auto;
-}
+.hotspot-layer { pointer-events: auto; }
 
-/* 热区按钮 */
 .hotspot {
   position: absolute;
   background: none;
@@ -162,7 +147,6 @@ onMounted(() => {
   z-index: 5;
 }
 
-/* 热区标签：浅色玻璃（用全局 .glass） */
 .hotspot-label {
   display: inline-block;
   padding: 6px 14px;
@@ -178,19 +162,8 @@ onMounted(() => {
   transition-duration: 0.08s;
 }
 
-/* 热区位置 — 先占位，以后对齐底图里的门 */
-.hotspot.bedroom-door {
-  bottom: 15%;
-  left: 20%;
-}
-
-.hotspot.kitchen-door {
-  top: 30%;
-  right: 5%;
-}
-
-.hotspot.study-door {
-  top: 30%;
-  left: 5%;
-}
+/* ---- 热区位置 ---- */
+.hotspot.kitchen-door { bottom: 28%; left: 3%; }
+.hotspot.hallway-door { top: 25%; left: 22%; }
+.hotspot.aquarium { top: 18%; left: 50%; }
 </style>

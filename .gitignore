@@ -29,8 +29,8 @@ dist-ssr
 
 # 美术素材（私人图片，不进公开仓库）
 art/
-# 卧室和小人的图（私人美术素材，构建时带进 dist，但不进公开仓库）
-public/assets/rooms/bedroom/
+# 各房间底图和小人的图（私人美术素材，构建时带进 dist，但不进公开仓库）
+public/assets/rooms/*/
 
 # 私人设计存档（后端方案、参考资料），不进公开仓库
 docs/backend/

@@ -9,14 +9,15 @@ const router = createRouter({
       children: [
         { path: '', redirect: '/living-room' },
         { path: 'living-room', component: () => import('./views/rooms/LivingRoom.vue') },
+        { path: 'hallway', component: () => import('./views/rooms/Hallway.vue') },
         { path: 'bedroom', component: () => import('./views/rooms/Bedroom.vue') },
         { path: 'kitchen', component: () => import('./views/rooms/Kitchen.vue') },
         { path: 'study', component: () => import('./views/rooms/Study.vue') },
         { path: 'bathroom', component: () => import('./views/rooms/Bathroom.vue') },
+        { path: 'greenhouse', component: () => import('./views/rooms/Greenhouse.vue') },
         { path: 'rooftop', component: () => import('./views/rooms/Rooftop.vue') },
         { path: 'basement', component: () => import('./views/rooms/Basement.vue') },
         { path: 'settings', component: () => import('./views/Settings.vue') },
-        // 聊天、提示词编辑也在外壳里，底栏常驻
         { path: 'chat', component: () => import('./views/Chat.vue') },
         { path: 'settings/prompt', component: () => import('./views/PromptEditor.vue') },
       ]

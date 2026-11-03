@@ -1,16 +1,13 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import Icon from '../../components/Icon.vue'
 
 const router = useRouter()
 const BASE = '/assets/rooms/bedroom/'
 
 // ---- 人物 ----
-// x、y 是脚点在底图上的位置（百分比）；height 是站在最前面时占画面高度的百分比（定稿：女 29、男 31.5）。
-// 往里站按透视缩小：depthScale 按脚点 y 在"后墙脚 → 画面底"之间插值
-const WALL_Y = 58      // 后墙和地板交界大约在画面高度 58%
-const FAR_SCALE = 0.8  // 站在墙脚时的缩放
+const WALL_Y = 58
+const FAR_SCALE = 0.8
 type View = 'front' | 'side' | 'back'
 interface Person { key: 'girl' | 'boy'; name: string; height: number; x: number; y: number; view: View; flip: boolean }
 
@@ -29,7 +26,6 @@ function spriteStyle(p: Person) {
     left: p.x + '%',
     top: p.y + '%',
     height: h + '%',
-    // 越靠前越在上层
     zIndex: Math.round(p.y * 10)
   }
 }
@@ -38,29 +34,37 @@ function shadowStyle(p: Person) {
   return {
     left: p.x + '%',
     top: p.y + '%',
-    // 底图 3:2，宽度百分比要按宽算
     width: (h * 0.4 * 2 / 3) + '%',
     height: (h * 0.08) + '%',
     zIndex: Math.round(p.y * 10) - 1
   }
 }
 
-// ---- 横向拖动（和客厅一样） ----
+// ---- 横向拖动 ----
 const container = ref<HTMLElement | null>(null)
-let dragging = false
+let isDragging = false
 let startX = 0
 let scrollStart = 0
+let hasMoved = false
+
 function onPointerDown(e: PointerEvent) {
   if (!container.value) return
-  dragging = true
+  isDragging = true
+  hasMoved = false
   startX = e.clientX
   scrollStart = container.value.scrollLeft
 }
 function onPointerMove(e: PointerEvent) {
-  if (!dragging || !container.value) return
-  container.value.scrollLeft = scrollStart - (e.clientX - startX)
+  if (!isDragging || !container.value) return
+  const dx = e.clientX - startX
+  if (Math.abs(dx) > 5) hasMoved = true
+  container.value.scrollLeft = scrollStart - dx
 }
-function onPointerUp() { dragging = false }
+function onPointerUp() { isDragging = false }
+
+function onHotspot(path: string) {
+  if (!hasMoved && path) router.push(path)
+}
 
 onMounted(() => {
   const el = container.value
@@ -70,11 +74,6 @@ onMounted(() => {
 
 <template>
   <div class="room bedroom shell-page">
-    <button class="room-back glass press" aria-label="回客厅" @click="router.push('/living-room')">
-      <Icon name="chevron" :size="18" class="back-icon" />
-      <span>客厅</span>
-    </button>
-
     <div
       ref="container"
       class="room-scroll"
@@ -86,7 +85,7 @@ onMounted(() => {
       <div class="room-canvas">
         <img :src="BASE + 'base-night.webp'" alt="卧室" class="room-base" draggable="false" />
 
-        <!-- 人物层：按脚点 y 排前后 -->
+        <!-- 人物层 -->
         <div class="people-layer">
           <template v-for="p in people" :key="p.key">
             <div class="person-shadow" :style="shadowStyle(p)" aria-hidden="true"></div>
@@ -99,6 +98,13 @@ onMounted(() => {
             />
           </template>
         </div>
+
+        <!-- 热区层 -->
+        <div class="hotspot-layer">
+          <button class="hotspot door-hallway" @click.stop="onHotspot('/hallway')">
+            <span class="hotspot-label glass">🚪 走廊</span>
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -106,27 +112,10 @@ onMounted(() => {
 
 <style scoped>
 .room {
-  /* 房间占页面区高度的比例；底边贴着底栏上方留一点空（按 iPhone 实测调的） */
   --room-scale: 0.82;
   --room-bottom-gap: 28px;
-  /* 定位由 .shell-page（absolute 铺满）负责，这里不要再写 position */
   background: transparent;
 }
-
-.room-back {
-  position: absolute;
-  top: calc(var(--safe-top) + 10px);
-  left: 12px;
-  z-index: 10;
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  padding: 7px 14px 7px 8px;
-  border-radius: 999px;
-  font-size: 14px;
-  color: var(--text);
-}
-.back-icon { transform: scaleX(-1); }
 
 .room-scroll {
   height: 100%;
@@ -140,16 +129,16 @@ onMounted(() => {
 }
 .room-scroll::-webkit-scrollbar { display: none; }
 
+/* 卧室底图 1536×1024 */
 .room-canvas {
   position: relative;
   flex-shrink: 0;
   height: calc(100% * var(--room-scale));
-  aspect-ratio: 3 / 2;
+  aspect-ratio: 1536 / 1024;
   margin: 0 auto;
 }
 
 .room-base {
-  /* 绝对定位：不让图片原始尺寸把画布撑大，画布大小只由高度和 3:2 决定 */
   position: absolute;
   inset: 0;
   display: block;
@@ -161,11 +150,14 @@ onMounted(() => {
   -webkit-user-drag: none;
 }
 
-.people-layer {
+.people-layer,
+.hotspot-layer {
   position: absolute;
   inset: 0;
   pointer-events: none;
 }
+.hotspot-layer { pointer-events: auto; }
+
 .person {
   position: absolute;
   transform: translate(-50%, -100%);
@@ -179,4 +171,30 @@ onMounted(() => {
   border-radius: 50%;
   background: radial-gradient(closest-side, rgba(0, 0, 0, 0.45), rgba(0, 0, 0, 0));
 }
+
+.hotspot {
+  position: absolute;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  z-index: 5;
+}
+.hotspot-label {
+  display: inline-block;
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-size: 13px;
+  color: var(--text);
+  letter-spacing: 1px;
+  white-space: nowrap;
+  transition: transform 0.35s var(--spring);
+}
+.hotspot:active .hotspot-label {
+  transform: scale(var(--press-scale));
+  transition-duration: 0.08s;
+}
+
+/* ---- 热区位置 ---- */
+.hotspot.door-hallway { bottom: 20%; right: 6%; }
 </style>
