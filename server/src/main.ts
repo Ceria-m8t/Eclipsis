@@ -240,9 +240,8 @@ function main() {
           upstreamUrl: cfg.upstreamUrl,
           upstreamKey: cfg.upstreamKey,
           model: wakeModel,
-          xinchaoUrl,
           barkUrl,
-          maxTokens: Number(process.env.WAKE_MAX_TOKENS) || 800,
+          maxTokens: Number(process.env.WAKE_MAX_TOKENS) || 2000,
           log
         })
       })

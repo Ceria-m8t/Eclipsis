@@ -92,7 +92,8 @@ export interface LifeThread {
 
 // ── Wake 机会与结局 ──
 
-export type WakeOutcome = 'silent' | 'trace' | 'message'
+// error：调模型失败、超时、空回复、被截断——不是他选的，不算进每日次数，也不当成他的笔记
+export type WakeOutcome = 'silent' | 'trace' | 'message' | 'error'
 export type WakeOrigin = 'spontaneous' | 'precise_self' | 'precise_external'
 
 /** 一次 Wake 机会 */
