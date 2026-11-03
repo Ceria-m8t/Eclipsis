@@ -207,40 +207,42 @@ describe('weather (unit)', () => {
 import { drivesToEmotion } from '../src/pulse/xinchao-bridge.ts'
 
 describe('drivesToEmotion', () => {
-  it('高 retreat → lonely', () => {
-    assert.equal(drivesToEmotion({ retreat: 0.7, connect: 0.3 }), 'lonely')
-  })
+  // 心潮 4.2 的默认底色大约 0.5，所以"中性"的样本放在 0.5 附近
+  const base = { possess: 0.5, monitor: 0.5, share: 0.5, libido: 0.5, curiosity: 0.5, boredom: 0.5, duty: 0.45, reflection: 0.42, grieve: 0, anger: 0, favored: 0 }
 
-  it('高 rest → sleepy', () => {
-    assert.equal(drivesToEmotion({ rest: 0.7, retreat: 0.2 }), 'sleepy')
+  it('高 grieve 失落 → sad（负面优先）', () => {
+    assert.equal(drivesToEmotion({ ...base, grieve: 0.7, possess: 0.9 }), 'sad')
   })
-
-  it('高 connect + nurture → tender', () => {
-    assert.equal(drivesToEmotion({ connect: 0.6, nurture: 0.5, retreat: 0.1 }), 'tender')
+  it('高 favored 被晾着 → lonely', () => {
+    assert.equal(drivesToEmotion({ ...base, favored: 0.7 }), 'lonely')
   })
-
-  it('高 play → playful', () => {
-    assert.equal(drivesToEmotion({ play: 0.7, connect: 0.3 }), 'playful')
+  it('高 anger 生气 → nervous', () => {
+    assert.equal(drivesToEmotion({ ...base, anger: 0.7 }), 'nervous')
   })
-
-  it('高 connect alone → intimate', () => {
-    assert.equal(drivesToEmotion({ connect: 0.7, nurture: 0.2 }), 'intimate')
+  it('高 libido → aroused', () => {
+    assert.equal(drivesToEmotion({ ...base, libido: 0.8 }), 'aroused')
   })
-
-  it('高 explore → focused', () => {
-    assert.equal(drivesToEmotion({ explore: 0.7 }), 'focused')
+  it('高 possess 想她 → intimate', () => {
+    assert.equal(drivesToEmotion({ ...base, possess: 0.82, monitor: 0.78 }), 'intimate')
   })
-
+  it('高 monitor 牵挂（高于想她）→ tender', () => {
+    assert.equal(drivesToEmotion({ ...base, possess: 0.6, monitor: 0.8 }), 'tender')
+  })
   it('高 share → happy', () => {
-    assert.equal(drivesToEmotion({ share: 0.6 }), 'happy')
+    assert.equal(drivesToEmotion({ ...base, share: 0.75 }), 'happy')
   })
-
-  it('高 assert → excited', () => {
-    assert.equal(drivesToEmotion({ assert: 0.7 }), 'excited')
+  it('高 curiosity 或 duty → focused', () => {
+    assert.equal(drivesToEmotion({ ...base, curiosity: 0.75 }), 'focused')
+    assert.equal(drivesToEmotion({ ...base, duty: 0.75 }), 'focused')
   })
-
-  it('所有都低 → null', () => {
-    assert.equal(drivesToEmotion({ connect: 0.2, share: 0.2, rest: 0.3 }), null)
+  it('高 boredom → playful', () => {
+    assert.equal(drivesToEmotion({ ...base, boredom: 0.75 }), 'playful')
+  })
+  it('都在底色附近 → null', () => {
+    assert.equal(drivesToEmotion(base), null)
+  })
+  it('空对象 → null', () => {
+    assert.equal(drivesToEmotion({}), null)
   })
 })
 

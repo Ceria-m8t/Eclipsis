@@ -87,9 +87,13 @@ export class Recorder {
   db: DB
   blobs: BlobStore
 
-  constructor(db: DB, blobs: BlobStore) {
+  /** 经历表里新写入了她的消息时调用（事务提交之后；重复/重新生成不会触发）。异常不影响记录 */
+  onEricaMessage?: (text: string) => void
+
+  constructor(db: DB, blobs: BlobStore, opts: { onEricaMessage?: (text: string) => void } = {}) {
     this.db = db
     this.blobs = blobs
+    this.onEricaMessage = opts.onEricaMessage
   }
 
   start(input: StartInput): ExchangeCtx {
@@ -114,6 +118,7 @@ export class Recorder {
       id: 0, tap: input.tap, rid: input.rid, linked: input.linked,
       scene, conversation, turn, version, startedAt: now.toISOString(), startMs: now.getTime(), wake, derive
     }
+    let newErica: string[] = []
     tx(this.db, () => {
       const r = this.db.prepare(`INSERT INTO exchanges(rid, tap, started_at, status, path, scene, conversation, turn, version, model, stream, message_hashes, options_hash, transforms)
         VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
@@ -123,16 +128,21 @@ export class Recorder {
         input.transforms ? JSON.stringify(input.transforms) : null
       )
       ctx.id = Number(r.lastInsertRowid)
-      if (derive) this.startEpisodes(ctx, stored)
+      if (derive) newErica = this.startEpisodes(ctx, stored)
     })
+    if (newErica.length && this.onEricaMessage) {
+      try { this.onEricaMessage(newErica.join('\n')) } catch { /* 通知失败不影响记录 */ }
+    }
     return ctx
   }
 
   // 前端出口：本轮新增的 user 消息、上一轮工具的结果
-  private startEpisodes(ctx: ExchangeCtx, stored: { hash: string; message: any; images: string[] }[]) {
+  // 返回本次新写入的她的消息正文（已存在的不算）
+  private startEpisodes(ctx: ExchangeCtx, stored: { hash: string; message: any; images: string[] }[]): string[] {
     const { channel, scope } = sceneInfo(ctx.scene)
     const last = stored[stored.length - 1]
-    if (!last) return
+    const inserted: string[] = []
+    if (!last) return inserted
     if (last.message?.role === 'user') {
       // 她这一次发送的所有话：结尾连在一起的 user（回车分条发、最后才点发送的几句），每句一条经历
       let first = stored.length - 1
@@ -150,12 +160,13 @@ export class Recorder {
         const meta: Record<string, unknown> = {}
         if (m.images.length) meta.images = m.images
         if (ctx.tap === 'upstream') meta.via = 'upstream'
-        addEpisode(this.db, {
+        const added = addEpisode(this.db, {
           ts: ctx.startedAt, channel, scope, actor: 'erica', kind: 'message', content: text,
           meta: Object.keys(meta).length ? meta : null, sourceRef: back ? `${base}-${back}` : base
         })
+        if (added) inserted.push(text)
       }
-      return
+      return inserted
     }
     // 结尾是一串 tool 消息：上一轮工具调用的结果
     for (let i = stored.length - 1; i >= 0 && stored[i].message?.role === 'tool'; i--) {
@@ -166,6 +177,7 @@ export class Recorder {
         content: textOf(m.content), meta: { tool_call_id: callId }, sourceRef: `${ctx.tap}:tool_result:${callId}`
       })
     }
+    return inserted
   }
 
   finish(ctx: ExchangeCtx, input: FinishInput): Reply | null {

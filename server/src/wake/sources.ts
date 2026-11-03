@@ -4,6 +4,7 @@ import type { DB } from "../db.ts"
 import type { SourceReading } from './types.ts'
 import { loadPulseState } from '../pulse/store.ts'
 import type { PulseState } from '../pulse/types.ts'
+import { fetchXinchaoDrives } from '../xinchao-client.ts'
 
 // ── 来源 1：沉默时长 ──
 // 最基本的信号：距离上一次任何一方说话过了多久。
@@ -160,7 +161,7 @@ export function readThreads(db: DB, now: Date): SourceReading {
 }
 
 // ── 来源 4：心潮驱力 ──
-// 从心潮 /v1/now 读当前驱力状态。
+// 从心潮 /v1/state 读当前驱力状态（需要 XINCHAO_TOKEN）。
 // 数据超过 30 分钟标记为 stale，权重自动降为 0。
 
 export interface XinchaoNow {
@@ -173,15 +174,10 @@ export interface XinchaoNow {
 let xinchaoCache: XinchaoNow | null = null
 
 export async function fetchXinchao(xinchaoUrl: string): Promise<XinchaoNow | null> {
-  try {
-    const res = await fetch(`${xinchaoUrl}/v1/now`, { signal: AbortSignal.timeout(5000) })
-    if (!res.ok) return null
-    const data = await res.json() as any
-    xinchaoCache = { drives: data.drives, pulse: data.pulse, fetchedAt: Date.now() }
-    return xinchaoCache
-  } catch {
-    return null
-  }
+  const drives = await fetchXinchaoDrives(xinchaoUrl)
+  if (!drives) return null
+  xinchaoCache = { drives, fetchedAt: Date.now() }
+  return xinchaoCache
 }
 
 export function readXinchao(now: Date): SourceReading {
@@ -196,13 +192,11 @@ export function readXinchao(now: Date): SourceReading {
 
   // 从驱力里取跟"想联系"相关的维度
   const drives = xinchaoCache.drives || {}
-  // 心潮 4.2 的 11 股驱力（Erica 的配置）：
-  // connect（连接）、share（分享）、possess（占有）、explore（探索）、
-  // create（创造）、nurture（照料）、play（玩耍）、rest（休息）、
-  // retreat（退避）、assert（主张）、favored（偏爱）
+  // 心潮 4.2 实际的 11 股驱力：possess 想她、monitor 牵挂、share 分享欲、libido 身体想要、
+  // curiosity 好奇、boredom 无聊、duty 野心、reflection 反思、grieve 失落、anger 生气、favored 被晾着
   //
-  // 跟"想醒来联系她"最相关的：connect, share, possess, nurture
-  const relevant = ['connect', 'share', 'possess', 'nurture']
+  // 跟"想醒来联系她"最相关的：想她、牵挂、分享欲、被晾着
+  const relevant = ['possess', 'monitor', 'share', 'favored']
   const vals = relevant.map(k => drives[k] ?? 0).filter(v => typeof v === 'number')
 
   if (vals.length === 0) {

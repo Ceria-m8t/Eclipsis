@@ -6,6 +6,7 @@ import type { WakeOpportunity, WakeOutcome } from './types.ts'
 import { recordOutcome, isNearDuplicate } from './scheduler.ts'
 import { renderVitalsLine, loadPulseState } from '../pulse/index.ts'
 import { inferUserState, type UserState } from './sources.ts'
+import { fetchXinchaoNowText } from '../xinchao-client.ts'
 
 export interface DispatchConfig {
   /** 中转站地址（复用 backend.env 的 UPSTREAM_URL） */
@@ -257,13 +258,7 @@ export async function dispatchWake(opp: WakeOpportunity, db: DB, cfg: DispatchCo
   // 心潮此刻块
   let xinchaoNow: string | undefined
   if (cfg.xinchaoUrl) {
-    try {
-      const res = await fetch(`${cfg.xinchaoUrl}/v1/now`, { signal: AbortSignal.timeout(5000) })
-      if (res.ok) {
-        const data = await res.json() as any
-        xinchaoNow = data.text || data.now || JSON.stringify(data).slice(0, 500)
-      }
-    } catch { /* 心潮不可用就不注入 */ }
+    xinchaoNow = (await fetchXinchaoNowText(cfg.xinchaoUrl)) ?? undefined
   }
 
   const prompt = buildWakePrompt({

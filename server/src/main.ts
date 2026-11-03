@@ -21,6 +21,7 @@ import {
   pruneHrHistory, detectFromRecentChat
 } from './pulse/index.ts'
 import { assembleSceneBlock, injectSceneBlock } from './assembler/index.ts'
+import { notifyXinchaoPresence } from './xinchao-client.ts'
 
 function bearer(req: IncomingMessage): string {
   const h = String(req.headers.authorization || '')
@@ -38,12 +39,14 @@ export interface ServerOptions {
   stripThinkHistory?: boolean // STRIP_THINK_HISTORY=1
   stripOldImages?: boolean     // STRIP_OLD_IMAGES=1
   assembler?: boolean          // ASSEMBLER_ENABLED=1
+  /** 她每发一条新消息时调用（用来通知心潮"她来了"） */
+  onEricaMessage?: (text: string) => void
   log?: (m: string, e?: unknown) => void
 }
 
 export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { front: Server; tap: Server } {
   const blobs = new BlobStore(db, cfg.blobDir)
-  const recorder = new Recorder(db, blobs)
+  const recorder = new Recorder(db, blobs, { onEricaMessage: opts.onEricaMessage })
 
   // 前端出口：鉴权交给 Dylan（nginx 注入的网关 key 原样带过去）；本端口只监听 127.0.0.1
   const front = createTap({
@@ -140,7 +143,11 @@ function main() {
     stripWakeHistory: process.env.STRIP_WAKE_HISTORY === '1',
     stripThinkHistory: process.env.STRIP_THINK_HISTORY === '1',
     stripOldImages: process.env.STRIP_OLD_IMAGES === '1',
-    assembler: process.env.ASSEMBLER_ENABLED === '1'
+    assembler: process.env.ASSEMBLER_ENABLED === '1',
+    onEricaMessage: (() => {
+      const url = (process.env.XINCHAO_URL || '').trim()
+      return url ? (text: string) => { void notifyXinchaoPresence(url, text) } : undefined
+    })()
   })
   front.listen(cfg.frontPort, '127.0.0.1', () => console.log(`[eclipsis] front  127.0.0.1:${cfg.frontPort} → ${cfg.dylanUrl}`))
   tap.listen(cfg.tapPort, '127.0.0.1', () => console.log(`[eclipsis] tap    127.0.0.1:${cfg.tapPort} → ${cfg.upstreamUrl || '(未配置)'}` +
