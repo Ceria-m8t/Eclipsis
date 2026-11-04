@@ -49,75 +49,12 @@ export function readSilence(db: DB, now: Date): SourceReading {
 }
 
 // ── 来源 2：用户状态推断 ──
-// 参考 Revive Companion 的贝叶斯思路，简化版：
-// 从最近的交互模式推断她现在大概在干嘛，输出"适不适合打扰"。
-
-export type UserState = 'chatting' | 'idle' | 'busy' | 'sleeping' | 'away' | 'needs_care'
-
-interface UserStateEstimate {
-  state: UserState
-  /** 这个状态下的发送适宜度 [0, 1] */
-  suitability: number
-}
-
-const STATE_SUITABILITY: Record<UserState, number> = {
-  chatting: 0.15,     // 正在聊 → 别用 wake 打断，她已经在了
-  idle: 0.7,          // 闲着 → 好时机
-  busy: 0.1,          // 忙 → 别打扰
-  sleeping: 0.0,      // 睡了 → 不发
-  away: 0.3,          // 离开 → 再等等
-  needs_care: 0.9     // 可能需要关心 → 主动联系
-}
-
-export function inferUserState(db: DB, now: Date): UserStateEstimate {
-  const nowMs = now.getTime()
-
-  // 最近 3 条她的消息，看间隔和时间
-  const recentErica = db.prepare(`
-    SELECT ts FROM episodes
-    WHERE retracted_at IS NULL AND actor = 'erica' AND kind = 'message'
-    ORDER BY ts DESC LIMIT 3
-  `).all() as { ts: string }[]
-
-  if (recentErica.length === 0) {
-    return { state: 'away', suitability: STATE_SUITABILITY.away }
-  }
-
-  const lastEricaMs = new Date(recentErica[0].ts).getTime()
-  const sinceLast = (nowMs - lastEricaMs) / 60_000
-
-  // 5 分钟内有消息 → 正在聊天
-  if (sinceLast < 5) {
-    return { state: 'chatting', suitability: STATE_SUITABILITY.chatting }
-  }
-
-  // 30 分钟内有消息 → 可能还在附近但不聊天
-  if (sinceLast < 30) {
-    return { state: 'idle', suitability: STATE_SUITABILITY.idle }
-  }
-
-  // 超过 6 小时没消息 → 大概率在睡或不在
-  if (sinceLast > 360) {
-    return { state: 'sleeping', suitability: STATE_SUITABILITY.sleeping }
-  }
-
-  // 30 分钟 - 6 小时：看最近几条的间隔模式
-  if (recentErica.length >= 2) {
-    const gaps = []
-    for (let i = 0; i < recentErica.length - 1; i++) {
-      gaps.push(new Date(recentErica[i].ts).getTime() - new Date(recentErica[i + 1].ts).getTime())
-    }
-    const avgGapMin = gaps.reduce((a, b) => a + b, 0) / gaps.length / 60_000
-
-    // 之前的消息间隔很密（< 5 分钟），但突然断了 → 可能去忙了
-    if (avgGapMin < 5 && sinceLast > 30) {
-      return { state: 'busy', suitability: STATE_SUITABILITY.busy }
-    }
-  }
-
-  // 默认：离开状态
-  return { state: 'away', suitability: STATE_SUITABILITY.away }
-}
+// 实现搬到 user-state.ts（信号：她说的话 / 作息曲线 / 沉默时长）。
+// 这里只保留来源封装；类型与推断从 user-state.ts 导入并 re-export，
+// dispatch 通过 sources 用 inferUserState。
+export type { UserState, UserStateEstimate } from './user-state.ts'
+export { inferUserState } from './user-state.ts'
+import { inferUserState } from './user-state.ts'
 
 export function readUserState(db: DB, now: Date): SourceReading {
   const est = inferUserState(db, now)
@@ -125,7 +62,7 @@ export function readUserState(db: DB, now: Date): SourceReading {
     sourceId: 'user_state',
     value: est.suitability,
     stale: false,
-    label: `推断状态: ${est.state}`
+    label: `推断状态: ${est.state} (适宜度 ${est.suitability.toFixed(2)})`
   }
 }
 

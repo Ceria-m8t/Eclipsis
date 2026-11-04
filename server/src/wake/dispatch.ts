@@ -115,6 +115,8 @@ export interface WakeContext {
   recentFacts: string[]
   recentChat: RecentMessage[]
   userState: UserState
+  /** 一句给他看的、对她当前状态的判断（user-state.ts 产出）。没有就退回 USER_STATE_DESC */
+  userEvidence?: string
   reason: string
 }
 
@@ -127,7 +129,7 @@ export function buildWakePrompt(ctx: WakeContext): string {
   parts.push('3. 直接写给她的话 → 发出去，推送到她手机上。')
   parts.push('')
   parts.push(`醒来原因：${ctx.reason}`)
-  parts.push(`她现在：${USER_STATE_DESC[ctx.userState]}`)
+  parts.push(`她现在：${ctx.userEvidence ?? USER_STATE_DESC[ctx.userState]}`)
 
   if (ctx.recentChat.length > 0) {
     parts.push('')
@@ -231,7 +233,8 @@ export async function dispatchWake(opp: WakeOpportunity, db: DB, cfg: DispatchCo
     return
   }
 
-  const userState = inferUserState(db, new Date()).state
+  const uEst = inferUserState(db, new Date())
+  const userState = uEst.state
 
   const threads = db.prepare(`
     SELECT id, text FROM wake_threads WHERE status = 'active'
@@ -246,9 +249,9 @@ export async function dispatchWake(opp: WakeOpportunity, db: DB, cfg: DispatchCo
 
   const recentChat = trimChat(loadRecentChat(db, 30), 4000)
   const { system, hasMainPrompt } = buildWakeSystem(db)
-  const prompt = buildWakePrompt({ threads, recentFacts, recentChat, userState, reason: opp.reason })
+  const prompt = buildWakePrompt({ threads, recentFacts, recentChat, userState, userEvidence: uEst.evidence, reason: opp.reason })
 
-  cfg.log(`[wake-dispatch] 调模型 ${model}，原因: ${opp.reason}，Erica: ${userState}，聊天 ${recentChat.length} 条，主 prompt: ${hasMainPrompt ? '有' : '无'}`)
+  cfg.log(`[wake-dispatch] 调模型 ${model}，原因: ${opp.reason}，Erica: ${userState} (P睡=${uEst.pSleeping.toFixed(2)}) ${uEst.evidence}，聊天 ${recentChat.length} 条，主 prompt: ${hasMainPrompt ? '有' : '无'}`)
   const reply = await callModel(cfg, model, system, prompt)
 
   if (!reply.ok) {
@@ -293,7 +296,7 @@ export async function dispatchWake(opp: WakeOpportunity, db: DB, cfg: DispatchCo
   }
 
   // 2026-11-03 Erica：她睡着也要推（她不会被吵醒）；可能在睡时用静默级别
-  if (outcome === 'message') await pushBark(cfg, content, userState === 'sleeping')
+  if (outcome === 'message') await pushBark(cfg, content, uEst.pSleeping > 0.5)
 
   cfg.log(`[wake-dispatch] 结局: ${outcome}` + (fact ? ` fact: ${fact}` : '') + ` model: ${model}`)
 }

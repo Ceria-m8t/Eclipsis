@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { openDb, type DB } from '../src/db.ts'
 import { ensureWakeSchema } from '../src/wake/schema.ts'
 import { tick, drawTheta, loadState, saveState, DEFAULT_PARAMS } from '../src/wake/engine.ts'
-import { readSilence, readUserState, readThreads } from '../src/wake/sources.ts'
+import { readSilence, readUserState, readThreads, inferUserState } from '../src/wake/sources.ts'
 import { recordOutcome } from '../src/wake/scheduler.ts'
 import {
   setFrequency, setSourceFactor, setAlarm, cancelAlarm,
@@ -204,13 +204,17 @@ describe('readUserState', () => {
     assert.ok(r.value <= 0.2, `chatting suitability should be low: ${r.value}`)
   })
 
-  it('6小时没消息 → sleeping (适宜度 0)', () => {
+  it('7小时没消息 + "晚安" → sleeping（适宜度非 0，她要睡着也能收到）', () => {
+    // 11:00Z = 北京 19:00 说"晚安"；18:00Z = 北京 02:00 判断
     const now = new Date('2026-10-29T18:00:00Z')
     db.prepare(`INSERT INTO episodes(ts, channel, scope, actor, kind, content, source_ref)
       VALUES (?, 'chat', 'daily', 'erica', 'message', '晚安', 'test:us2')`).run('2026-10-29T11:00:00Z')
-    
+
+    const est = inferUserState(db, now)
+    assert.equal(est.state, 'sleeping', `应判为 sleeping: ${est.state}`)
+    assert.ok(est.pSleeping > 0.5, `P(睡) 应高: ${est.pSleeping}`)
     const r = readUserState(db, now)
-    assert.equal(r.value, 0, 'sleeping → 0')
+    assert.ok(r.value > 0.2 && r.value < 0.5, `sleeping 适宜度非 0 但不高: ${r.value}`)
   })
 })
 
