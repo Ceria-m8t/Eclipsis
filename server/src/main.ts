@@ -23,6 +23,7 @@ import {
 import { assembleSceneBlock, injectSceneBlock } from './assembler/index.ts'
 import { notifyXinchaoPresence } from './xinchao-client.ts'
 import { ensurePromptSchema, handlePromptApi } from './prompts.ts'
+import { handleLetoApi, loadAgents, type LetoApiDeps } from './leto/index.ts'
 
 function bearer(req: IncomingMessage): string {
   const h = String(req.headers.authorization || '')
@@ -42,6 +43,8 @@ export interface ServerOptions {
   assembler?: boolean          // ASSEMBLER_ENABLED=1
   /** 她每发一条新消息时调用（用来通知心潮"她来了"） */
   onEricaMessage?: (text: string) => void
+  /** Leto 入站端点依赖（未启用则为 null，端点会返回 503） */
+  letoApi?: LetoApiDeps | null
   log?: (m: string, e?: unknown) => void
 }
 
@@ -57,6 +60,7 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
       if (await handleWakeApi(db, req, res)) return true
       if (await handlePulseApi(db, req, res)) return true
       if (await handlePromptApi(db, req, res)) return true
+      if (await handleLetoApi(opts.letoApi ?? null, db, req, res)) return true
       return handleApi(db, req, res)
     },
     authorize: () => true,
@@ -141,7 +145,38 @@ function main() {
   if (!cfg.tapKey) console.warn('[eclipsis] TAP_KEY 未设置：上游入口会拒绝所有请求')
   if (!cfg.upstreamUrl) console.warn('[eclipsis] UPSTREAM_URL 未设置：上游入口返回 503')
   const db = openDb(cfg.dbPath)
+
+  // ── Leto 入站（默认关，LETO_ENABLED=1 才建）──
+  let letoApi: LetoApiDeps | null = null
+  if (process.env.LETO_ENABLED === '1') {
+    const ingestKey = (process.env.LETO_INGEST_KEY || '').trim()
+    const letoBaseUrl = (process.env.LETO_BASE_URL || 'https://leto.sarl').trim()
+    const agents = loadAgents()
+    if (!ingestKey) console.warn('[eclipsis] LETO_ENABLED=1 但缺 LETO_INGEST_KEY，Leto 入站会拒绝所有请求')
+    else if (!cfg.upstreamUrl || !cfg.upstreamKey) console.warn('[eclipsis] LETO_ENABLED=1 但缺 UPSTREAM_URL/KEY，Leto 不启用')
+    else if (agents.length === 0) console.warn('[eclipsis] LETO_ENABLED=1 但没有配置任何 Agent 令牌（LETO_TOKEN_XIAOKE 等），Leto 不启用')
+    else {
+      letoApi = {
+        agents,
+        ingestKey,
+        dispatchConfig: {
+          letoBaseUrl,
+          upstreamUrl: cfg.upstreamUrl,
+          upstreamKey: cfg.upstreamKey,
+          fallbackModel: (process.env.LETO_MODEL || '').trim() || undefined,
+          maxTokens: Number(process.env.LETO_MAX_TOKENS) || 2000,
+          maxToolCalls: Number(process.env.LETO_MAX_TOOL_CALLS) || 12,
+          maxModelTurns: Number(process.env.LETO_MAX_MODEL_TURNS) || 8,
+          log: (m: string) => console.log(m)
+        },
+        log: (m: string) => console.log(m)
+      }
+      console.log(`[eclipsis] Leto 入站启用  agents=[${agents.map(a => a.id).join(', ')}]  leto=${letoBaseUrl}`)
+    }
+  }
+
   const { front, tap } = buildServers(cfg, db, {
+    letoApi,
     linkRid: process.env.LINK_RID === '1',
     stripWakeHistory: process.env.STRIP_WAKE_HISTORY === '1',
     stripThinkHistory: process.env.STRIP_THINK_HISTORY === '1',
