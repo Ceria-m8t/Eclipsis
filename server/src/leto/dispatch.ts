@@ -25,7 +25,7 @@ export interface LetoDispatchConfig {
 }
 
 function resolveModel(db: DB, agent: LetoAgent, cfg: LetoDispatchConfig): string | null {
-  if (agent.model) return agent.model
+  if (agent.upstream?.model) return agent.upstream.model
   const row = db.prepare(`
     SELECT model FROM exchanges
     WHERE status = 'ok' AND model IS NOT NULL AND model != ''
@@ -55,12 +55,15 @@ export async function dispatchLetoWake(
 
   const mcp: LetoMcpConfig = { baseUrl: cfg.letoBaseUrl, token: agent.token }
   const tools = await getTools(agent, mcp)
-  const system = agent.buildSystem(db)
+  const system = await agent.buildSystem(db)
+  const upstreamUrl = agent.upstream?.url || cfg.upstreamUrl
+  const upstreamKey = agent.upstream?.key || cfg.upstreamKey
+  if (!upstreamUrl || !upstreamKey) throw new Error(`${agent.name} 没有可用上游（agent.upstream 和 backend 默认都空）`)
   const callModel = makeCallModel({
-    upstreamUrl: cfg.upstreamUrl, upstreamKey: cfg.upstreamKey, model, maxTokens: cfg.maxTokens, log: cfg.log
+    upstreamUrl, upstreamKey, model, maxTokens: cfg.maxTokens, log: cfg.log
   })
 
-  cfg.log(`[leto-dispatch] ${agent.name} 醒来：${env.reason}，模型 ${model}，工具 ${tools.length}`)
+  cfg.log(`[leto-dispatch] ${agent.name} 醒来：${env.reason}，模型 ${model}，站点 ${upstreamUrl}，工具 ${tools.length}`)
 
   // 记一条"入站唤醒"经历（原始信封），当成群聊线上的外部事件。
   // 解析是谁 @ 的他，便于以后读时间线区分来源。
