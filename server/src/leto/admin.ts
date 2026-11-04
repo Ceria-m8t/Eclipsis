@@ -200,9 +200,10 @@ function refreshFiles(){
  for(const f of files){const o=document.createElement('option');o.value=f;o.textContent=f;sel.appendChild(o)}
 }
 async function loadFile(){
- const path=document.getElementById('fileSel').value;if(!path)return
+ const path=document.getElementById('fileSel').value;if(!path){msg('先在下拉里选一个文件',false);return}
  const r=await fetch(B+'/file?path='+encodeURIComponent(path));const d=await r.json()
- if(r.ok)document.getElementById('fileBody').value=d.content||'';else msg(d.error||'读失败',false)
+ if(r.ok){const c=d.content||'';document.getElementById('fileBody').value=c;msg(c.length?('已载入 '+c.length+' 字：'+path):('这个文件是空的（还没写过内容）：'+path),true)}
+ else msg(d.error||'读失败',false)
 }
 async function saveFile(){
  const path=document.getElementById('fileSel').value;if(!path)return
