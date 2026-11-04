@@ -91,3 +91,37 @@ describe('makePersonaBuildSystem', () => {
     assert.match(sys, /人格文件读不到/)
   })
 })
+
+import { renderRecentDailyChat, buildXiaokeSystem } from '../src/leto/agent.ts'
+import { openDb as openDb2, addEpisode as addEp2 } from '../src/db.ts'
+import { ensurePromptSchema as ensurePS } from '../src/prompts.ts'
+
+describe('renderRecentDailyChat（Leto 唤醒带近期私下对话）', () => {
+  it('带上 chat/daily 的她和他、剥时间壳、附别外传提示', () => {
+    const db = openDb2(':memory:')
+    addEp2(db, { ts: '2026-11-05T01:00:00Z', channel: 'chat', scope: 'daily', actor: 'erica', kind: 'message', content: '你在吗 <current_time>Wed</current_time>', sourceRef: 'a' })
+    addEp2(db, { ts: '2026-11-05T01:01:00Z', channel: 'chat', scope: 'daily', actor: 'ai', kind: 'message', content: '<think>想</think>在的', sourceRef: 'b' })
+    const block = renderRecentDailyChat(db)
+    assert.match(block, /别在 Leto 群里对别人讲/)
+    assert.match(block, /Erica：你在吗/)
+    assert.doesNotMatch(block, /current_time/)
+    assert.match(block, /你：在的/)
+    assert.doesNotMatch(block, /<think>/)
+  })
+
+  it('不带群聊线和创作（只 daily）', () => {
+    const db = openDb2(':memory:')
+    addEp2(db, { ts: '2026-11-05T01:00:00Z', channel: 'group', scope: 'group', actor: 'ai', kind: 'message', content: '群里的话', sourceRef: 'g' })
+    addEp2(db, { ts: '2026-11-05T01:01:00Z', channel: 'chat', scope: 'daily', actor: 'erica', kind: 'message', content: '日常私话', sourceRef: 'd' })
+    const block = renderRecentDailyChat(db)
+    assert.doesNotMatch(block, /群里的话/)
+    assert.match(block, /日常私话/)
+  })
+
+  it('无对话时为空；buildXiaokeSystem 不报错', () => {
+    const db = openDb2(':memory:')
+    ensurePS(db)
+    assert.equal(renderRecentDailyChat(db), '')
+    assert.doesNotThrow(() => buildXiaokeSystem(db))
+  })
+})

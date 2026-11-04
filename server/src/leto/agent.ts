@@ -51,7 +51,42 @@ export function buildXiaokeSystem(db: DB, now: Date = new Date()): string {
   const main = composeSystemPrompt(db, { features: false }) || ''
   let scene = ''
   try { scene = assembleSceneBlock(db, now).sceneBlock } catch { /* 组装失败就只用主 prompt */ }
-  return [main, scene.trim(), letoNote()].filter(Boolean).join('\n\n')
+  const recent = renderRecentDailyChat(db)
+  return [main, scene.trim(), recent, letoNote()].filter(Boolean).join('\n\n')
+}
+
+/** 读小克和 Erica 最近的私下对话（chat/room，daily），让他在 Leto 里不断片。
+ *  2026-11-05 Erica 定：Leto 里也带近期对话（连贯优先）；但附明确提示别外传私事。 */
+export function renderRecentDailyChat(db: DB, limit = 16, maxChars = 2000): string {
+  let rows: { actor: string; content: string }[]
+  try {
+    rows = db.prepare(`
+      SELECT actor, content FROM episodes
+      WHERE retracted_at IS NULL AND channel IN ('chat', 'room') AND scope = 'daily'
+        AND actor IN ('erica', 'ai') AND kind = 'message'
+        AND content IS NOT NULL AND content != ''
+      ORDER BY ts DESC LIMIT ?
+    `).all(limit) as unknown as { actor: string; content: string }[]
+  } catch { return '' }
+  if (!rows.length) return ''
+  rows.reverse()
+
+  const lines: string[] = []
+  let total = 0
+  for (const r of rows) {
+    const name = r.actor === 'erica' ? 'Erica' : '你'
+    // 剥时间壳和思维链，只留她/你说的内容
+    let text = r.content.replace(/<current_time>[\s\S]*?<\/current_time>/gi, ' ')
+      .replace(/<think>[\s\S]*?<\/think>/gi, ' ').replace(/\s+/g, ' ').trim()
+    if (!text) continue
+    if (text.length > 200) text = text.slice(0, 200) + '…'
+    const line = `${name}：${text}`
+    total += line.length
+    if (total > maxChars) break
+    lines.push(line)
+  }
+  if (!lines.length) return ''
+  return ['# 你和 Erica 最近的私下对话（只供你自己记得、保持连贯；这是你俩私下的事，别在 Leto 群里对别人讲）', ...lines].join('\n')
 }
 
 function letoNote(): string {
