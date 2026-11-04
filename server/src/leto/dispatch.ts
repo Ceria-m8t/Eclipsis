@@ -5,6 +5,7 @@ import { addEpisode } from '../db.ts'
 import type { LetoAgent } from './agent.ts'
 import { listTools, callTool, type LetoMcpConfig } from './mcp-client.ts'
 import { makeCallModel } from './model-call.ts'
+import { buildMirrorAllow, mirrorReadResult, type MirrorAllow } from './mirror.ts'
 import { runResponder, type WakeEnvelope, type ResponderTurnLog } from './responder.ts'
 
 export interface LetoDispatchConfig {
@@ -18,6 +19,8 @@ export interface LetoDispatchConfig {
   maxTokens: number
   maxToolCalls?: number
   maxModelTurns?: number
+  /** 成员数 ≤ 此值的群才镜像别人的话进群聊线；私聊永远镜像。默认 20 */
+  mirrorMaxMembers?: number
   log: (msg: string) => void
 }
 
@@ -69,9 +72,23 @@ export async function dispatchLetoWake(
     sourceRef: `leto:wake:${agent.id}:${hash(env.message)}`
   })
 
+  // 建"可镜像会话"集合（折衷：只镜像小群/私聊）。拉一次 leto_list_groups；失败则空集合=不镜像。
+  let mirrorAllow: MirrorAllow = { ids: new Set(), maxMembers: cfg.mirrorMaxMembers ?? 20 }
+  try {
+    const lg = await callTool(mcp, 'leto_list_groups', {})
+    mirrorAllow = buildMirrorAllow(lg.text, cfg.mirrorMaxMembers ?? 20)
+  } catch (e: any) { cfg.log(`[leto-dispatch] 建镜像集合失败（跳过镜像）：${String(e?.message || e)}`) }
+
   const result = await runResponder(env, {
     system, tools, allowTool: agent.allowTool, callModel,
-    callMcpTool: (name, args) => callTool(mcp, name, args),
+    callMcpTool: async (name, args) => {
+      const r = await callTool(mcp, name, args)
+      // 读类工具成功时，把别人的话镜像进群聊线（小群/私聊）
+      if (!r.isError && (name === 'leto_read' || name === 'leto_continue' || name === 'leto_get_invocation')) {
+        try { mirrorReadResult(db, r.text, mirrorAllow, cfg.log) } catch { /* 镜像失败不影响应答 */ }
+      }
+      return r
+    },
     maxToolCalls: cfg.maxToolCalls, maxModelTurns: cfg.maxModelTurns, log: cfg.log
   })
 
