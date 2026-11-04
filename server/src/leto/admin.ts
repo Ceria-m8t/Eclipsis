@@ -1,0 +1,221 @@
+// Leto 管理面板后端：让 Erica 自己在网页上改 Agent 配置、人格、世界书，存了就生效。
+// 挂在前端出口 /v1/eclipsis/leto-admin/（已有 nginx 登录保护 + 只听 127.0.0.1）。
+//
+// 安全：只允许读写配置文件本身 + 配置里声明过的 persona/worldbook 文件，且路径必须在 /etc/eclipsis/ 下。
+// 不接受任意路径，防越权读写服务器其它文件。
+import type { IncomingMessage, ServerResponse } from 'node:http'
+import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync } from 'node:fs'
+import { resolve, dirname } from 'node:path'
+import { loadAgentFile } from './agent.ts'
+import { probeStation } from './station-check.ts'
+
+const CONFIG_PATH = (process.env.LETO_AGENTS_FILE || '/etc/eclipsis/leto-agents.json').trim()
+/** 允许读写的根目录：persona/worldbook/config 都必须在这下面 */
+const ALLOWED_ROOT = '/etc/eclipsis/'
+
+function json(res: ServerResponse, status: number, body: unknown) {
+  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+  res.end(JSON.stringify(body))
+}
+function readBody(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve2, reject) => {
+    const chunks: Buffer[] = []
+    let size = 0
+    req.on('data', c => { size += c.length; if (size > 1_000_000) { reject(new Error('body 过大')); req.destroy() } else chunks.push(c) })
+    req.on('end', () => resolve2(Buffer.concat(chunks).toString('utf8')))
+    req.on('error', reject)
+  })
+}
+
+/** 路径必须解析到 ALLOWED_ROOT 下才放行 */
+function safePath(p: string): string | null {
+  const abs = resolve(p)
+  return abs.startsWith(ALLOWED_ROOT) ? abs : null
+}
+
+/** 备份后写入 */
+function writeWithBackup(absPath: string, content: string) {
+  const dir = dirname(absPath)
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 })
+  if (existsSync(absPath)) {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    try { copyFileSync(absPath, `${absPath}.bak-${stamp}`) } catch { /* 备份失败不阻断 */ }
+  }
+  writeFileSync(absPath, content, { mode: 0o600 })
+}
+
+/** 收集配置里声明过的、允许编辑的文件路径（persona/worldbook） */
+function declaredFiles(): Set<string> {
+  const set = new Set<string>()
+  const entries = loadAgentFile(CONFIG_PATH) || []
+  for (const e of entries) {
+    const id: any = (e as any).identity
+    if (id && typeof id === 'object') {
+      if (id.personaFile) { const s = safePath(id.personaFile); if (s) set.add(s) }
+      if (id.worldbookFile) { const s = safePath(id.worldbookFile); if (s) set.add(s) }
+    }
+  }
+  return set
+}
+
+/** 返回 true 表示这里处理了。路径前缀 /v1/eclipsis/leto-admin/ */
+export async function handleLetoAdmin(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+  const url = new URL(req.url || '/', 'http://local')
+  const path = url.pathname
+  const BASE = '/v1/eclipsis/leto-admin'
+  if (path !== BASE && !path.startsWith(BASE + '/')) return false
+  const route = path.slice(BASE.length).replace(/^\//, '')
+
+  try {
+    // 面板页面
+    if (route === '' || route === 'ui') {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
+      res.end(PANEL_HTML)
+      return true
+    }
+
+    // 读配置
+    if (route === 'config' && req.method === 'GET') {
+      const text = existsSync(CONFIG_PATH) ? readFileSync(CONFIG_PATH, 'utf8') : '{"agents":[]}'
+      json(res, 200, { path: CONFIG_PATH, content: text })
+      return true
+    }
+    // 写配置（校验 JSON）
+    if (route === 'config' && req.method === 'PUT') {
+      const body = JSON.parse(await readBody(req))
+      const content = String(body.content ?? '')
+      try { JSON.parse(content) } catch (e: any) { json(res, 400, { error: `JSON 不合法：${e.message}` }); return true }
+      writeWithBackup(CONFIG_PATH, content)
+      json(res, 200, { ok: true, saved: CONFIG_PATH })
+      return true
+    }
+
+    // 读某个声明过的文件（persona/worldbook）
+    if (route === 'file' && req.method === 'GET') {
+      const target = url.searchParams.get('path') || ''
+      const abs = safePath(target)
+      if (!abs || !declaredFiles().has(abs)) { json(res, 403, { error: '该文件不在配置声明的 persona/worldbook 里，不能读' }); return true }
+      const content = existsSync(abs) ? readFileSync(abs, 'utf8') : ''
+      json(res, 200, { path: abs, content })
+      return true
+    }
+    // 写某个声明过的文件
+    if (route === 'file' && req.method === 'PUT') {
+      const body = JSON.parse(await readBody(req))
+      const abs = safePath(String(body.path || ''))
+      if (!abs || !declaredFiles().has(abs)) { json(res, 403, { error: '该文件不在配置声明的 persona/worldbook 里，不能写' }); return true }
+      writeWithBackup(abs, String(body.content ?? ''))
+      json(res, 200, { ok: true, saved: abs })
+      return true
+    }
+
+    // 站点自检
+    if (route === 'station-check' && req.method === 'POST') {
+      const body = JSON.parse(await readBody(req))
+      const { url: u, key, model } = body
+      if (!u || !key || !model) { json(res, 400, { error: '需要 url / key / model' }); return true }
+      const r = await probeStation(String(u), String(key), String(model))
+      json(res, 200, r)
+      return true
+    }
+
+    json(res, 404, { error: 'not found' })
+    return true
+  } catch (e: any) {
+    json(res, 500, { error: String(e?.message || e) })
+    return true
+  }
+}
+
+// ── 面板页面（单文件，无构建）──
+const PANEL_HTML = `<!doctype html><html lang="zh"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Leto Agent 面板</title>
+<style>
+ body{font-family:-apple-system,system-ui,sans-serif;max-width:860px;margin:0 auto;padding:16px;background:#faf8f5;color:#2a2a2a}
+ h1{font-size:18px} h2{font-size:15px;margin-top:24px}
+ textarea{width:100%;box-sizing:border-box;font-family:ui-monospace,Menlo,monospace;font-size:13px;line-height:1.5;border:1px solid #d8d2c8;border-radius:8px;padding:10px;background:#fff}
+ .config{height:320px} .file{height:260px}
+ button{font-size:14px;padding:8px 16px;border:0;border-radius:8px;background:#7a6a55;color:#fff;cursor:pointer;margin:4px 4px 4px 0}
+ button.ghost{background:#e8e2d8;color:#5a5048}
+ .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0}
+ input{font-size:13px;padding:6px 8px;border:1px solid #d8d2c8;border-radius:6px}
+ .msg{padding:8px 12px;border-radius:8px;margin:8px 0;font-size:13px;display:none}
+ .ok{background:#e6f0e0;color:#2d5016} .err{background:#f3e0e0;color:#7a1f1f}
+ .hint{color:#8a8178;font-size:12px;line-height:1.6}
+ select{font-size:13px;padding:6px;border-radius:6px;border:1px solid #d8d2c8}
+</style></head><body>
+<h1>Leto Agent 面板</h1>
+<p class="hint">改完点保存就生效（应答器每次醒来重读）。会自动备份旧版（.bak-时间）。令牌和站点密钥只在这个登录后的页面显示。</p>
+<div id="msg" class="msg"></div>
+
+<h2>1. Agent 配置（leto-agents.json）</h2>
+<p class="hint">每个 AI 的 token、站点(upstream)、人格文件、世界书文件、enabled、工具。改完保存。</p>
+<textarea id="config" class="config" spellcheck="false"></textarea>
+<div class="row"><button onclick="loadConfig()">重新载入</button><button onclick="saveConfig()">保存配置</button></div>
+
+<h2>2. 人格 / 世界书文件</h2>
+<p class="hint">选配置里声明过的文件来改（personaFile / worldbookFile）。</p>
+<div class="row">
+ <select id="fileSel"></select>
+ <button class="ghost" onclick="loadFile()">载入</button>
+ <button onclick="saveFile()">保存文件</button>
+</div>
+<textarea id="fileBody" class="file" spellcheck="false"></textarea>
+
+<h2>3. 站点自检</h2>
+<p class="hint">换站后验：连得上 / 模型在 / 转不转工具。转工具才能给 Leto 用。</p>
+<div class="row">
+ <input id="su" placeholder="站点 url，如 https://xxx/v1" size="34">
+ <input id="sk" placeholder="密钥" size="20">
+ <input id="sm" placeholder="模型名" size="20">
+ <button onclick="check()">自检</button>
+</div>
+<div id="checkout" class="hint"></div>
+
+<script>
+const B='/api/eclipsis/leto-admin'
+const msg=(t,ok)=>{const m=document.getElementById('msg');m.textContent=t;m.className='msg '+(ok?'ok':'err');m.style.display='block';setTimeout(()=>m.style.display='none',4000)}
+async function loadConfig(){
+ const r=await fetch(B+'/config');const d=await r.json()
+ document.getElementById('config').value=d.content||''
+ refreshFiles()
+}
+async function saveConfig(){
+ const content=document.getElementById('config').value
+ const r=await fetch(B+'/config',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({content})})
+ const d=await r.json()
+ if(r.ok){msg('配置已保存',true);refreshFiles()}else msg(d.error||'保存失败',false)
+}
+function refreshFiles(){
+ let files=[]
+ try{
+  const c=JSON.parse(document.getElementById('config').value)
+  for(const a of (c.agents||[])){const id=a.identity
+   if(id&&typeof id==='object'){if(id.personaFile)files.push(id.personaFile);if(id.worldbookFile)files.push(id.worldbookFile)}}
+ }catch(e){}
+ const sel=document.getElementById('fileSel');sel.innerHTML=''
+ for(const f of files){const o=document.createElement('option');o.value=f;o.textContent=f;sel.appendChild(o)}
+}
+async function loadFile(){
+ const path=document.getElementById('fileSel').value;if(!path)return
+ const r=await fetch(B+'/file?path='+encodeURIComponent(path));const d=await r.json()
+ if(r.ok)document.getElementById('fileBody').value=d.content||'';else msg(d.error||'读失败',false)
+}
+async function saveFile(){
+ const path=document.getElementById('fileSel').value;if(!path)return
+ const content=document.getElementById('fileBody').value
+ const r=await fetch(B+'/file',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({path,content})})
+ const d=await r.json()
+ if(r.ok)msg('文件已保存：'+path,true);else msg(d.error||'保存失败',false)
+}
+async function check(){
+ const url=document.getElementById('su').value,key=document.getElementById('sk').value,model=document.getElementById('sm').value
+ document.getElementById('checkout').textContent='自检中…'
+ const r=await fetch(B+'/station-check',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({url,key,model})})
+ const d=await r.json()
+ if(!r.ok){document.getElementById('checkout').textContent=d.error||'失败';return}
+ document.getElementById('checkout').innerHTML='连得上: '+(d.reachable?'是':'否')+' ｜ 模型在: '+(d.modelOk?'是':'否')+' ｜ 转工具: '+(d.toolsOk?'是':'否')+'<br>'+(d.ok?'✅ 可用':'❌ '+d.detail)
+}
+loadConfig()
+</script></body></html>`

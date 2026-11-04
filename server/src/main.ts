@@ -23,7 +23,7 @@ import {
 import { assembleSceneBlock, injectSceneBlock } from './assembler/index.ts'
 import { notifyXinchaoPresence } from './xinchao-client.ts'
 import { ensurePromptSchema, handlePromptApi } from './prompts.ts'
-import { handleLetoApi, loadAgents, type LetoApiDeps } from './leto/index.ts'
+import { handleLetoApi, handleLetoAdmin, loadAgents, type LetoApiDeps } from './leto/index.ts'
 
 function bearer(req: IncomingMessage): string {
   const h = String(req.headers.authorization || '')
@@ -61,6 +61,7 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
       if (await handlePulseApi(db, req, res)) return true
       if (await handlePromptApi(db, req, res)) return true
       if (await handleLetoApi(opts.letoApi ?? null, db, req, res)) return true
+      if (process.env.LETO_ADMIN_ENABLED === '1' && await handleLetoAdmin(req, res)) return true
       return handleApi(db, req, res)
     },
     authorize: () => true,

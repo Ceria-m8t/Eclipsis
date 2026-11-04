@@ -65,6 +65,8 @@ function letoNote(): string {
 export interface PersonaIdentity {
   /** 人格提示词文件绝对路径 */
   personaFile: string
+  /** 可选：世界书文件绝对路径（拼在人格之后） */
+  worldbookFile?: string
   /** 可选：dudulove 简报 */
   dudulove?: DuduloveConfig & { query?: string }
 }
@@ -75,12 +77,18 @@ export function makePersonaBuildSystem(identity: PersonaIdentity): (db: DB, now?
     try { persona = readFileSync(identity.personaFile, 'utf8').trim() }
     catch { persona = '（人格文件读不到，先用空身份。请检查 personaFile 路径。）' }
 
+    let worldbook = ''
+    if (identity.worldbookFile) {
+      try { const wb = readFileSync(identity.worldbookFile, 'utf8').trim(); if (wb) worldbook = `# 世界书\n${wb}` }
+      catch { /* 世界书读不到就不带 */ }
+    }
+
     let memory = ''
     if (identity.dudulove) {
       const brief = await fetchBriefing(identity.dudulove, identity.dudulove.query || '最近和 Erica、群里发生的事；我是谁')
       if (brief) memory = `# 你的记忆（来自记忆库，只读参考）\n${brief}`
     }
-    return [persona, memory, letoNote()].filter(Boolean).join('\n\n')
+    return [persona, worldbook, memory, letoNote()].filter(Boolean).join('\n\n')
   }
 }
 
@@ -91,7 +99,7 @@ interface AgentFileEntry {
   name: string
   enabled?: boolean
   token?: string                 // 不填则从 LETO_TOKEN_<ID> 读
-  identity: 'eclipsis' | { personaFile: string; dudulove?: DuduloveConfig & { query?: string } }
+  identity: 'eclipsis' | { personaFile: string; worldbookFile?: string; dudulove?: DuduloveConfig & { query?: string } }
   upstream?: AgentUpstream
   tools?: string[]               // 不填=核心；["*"]=全开；否则白名单
 }
