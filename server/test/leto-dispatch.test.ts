@@ -6,6 +6,7 @@ import { openDb, type DB } from '../src/db.ts'
 import { ensurePromptSchema } from '../src/prompts.ts'
 import { handleLetoApi, type LetoApiDeps } from '../src/leto/index.ts'
 import { buildXiaokeSystem, coreToolsOnly, type LetoAgent } from '../src/leto/agent.ts'
+import { parseMentionedBy } from '../src/leto/dispatch.ts'
 import { listen, close } from './helpers.ts'
 
 // 一个假的"上游中转站 + Leto MCP"二合一服务：按路径分流
@@ -147,7 +148,7 @@ describe('Leto 端到端 读→回→写经历', () => {
       assert.ok(!sentTools.includes('leto_moment_post'), '朋友圈工具不该暴露')
 
       // 经历：一条入站唤醒(system/leto_wake) + 一条回复(ai/message)，都在 group
-      const eps = db.prepare(`SELECT channel, scope, actor, kind, content FROM episodes ORDER BY seq`).all() as any[]
+      const eps = db.prepare(`SELECT channel, scope, actor, kind, content, meta FROM episodes ORDER BY seq`).all() as any[]
       const wake = eps.find(e => e.kind === 'leto_wake')
       const reply = eps.find(e => e.kind === 'message' && e.actor === 'ai')
       assert.ok(wake, '应记入站唤醒')
@@ -156,6 +157,12 @@ describe('Leto 端到端 读→回→写经历', () => {
       assert.equal(reply.channel, 'group')
       assert.equal(reply.scope, 'group')
       assert.equal(reply.content, '在的，刚看到')
+      // 群聊线每条都要能区分说话人
+      const replyMeta = JSON.parse(reply.meta)
+      assert.equal(replyMeta.speaker, '小克')
+      assert.equal(replyMeta.agent, 'xiaoke')
+      const wakeMeta = JSON.parse(wake.meta)
+      assert.equal(wakeMeta.mentioned_by, '林澄')
     } finally { await close(svc.server); await close(apiSvc) }
   })
 
@@ -170,5 +177,14 @@ describe('Leto 端到端 读→回→写经历', () => {
       assert.equal(r.status, 502)
       assert.equal(r.json.ok, false)
     } finally { await close(svc); await close(apiSvc) }
+  })
+})
+
+describe('parseMentionedBy', () => {
+  it('从信封抠出 @ 他的人（带/不带性别括注）', () => {
+    assert.equal(parseMentionedBy('[Leto] 你在「桌」被 林澄 @ 了：「在吗」\n调用编号：inv_x'), '林澄')
+    assert.equal(parseMentionedBy('[Leto] 你在「机机如律令」被 Erica（女） @ 了：「测试」'), 'Erica')
+    assert.equal(parseMentionedBy('[Leto] 林澄 拍了拍你'.replace('林澄 拍','被 林澄 拍')), '林澄')
+    assert.equal(parseMentionedBy('没有匹配的文案'), null)
   })
 })

@@ -59,11 +59,13 @@ export async function dispatchLetoWake(
 
   cfg.log(`[leto-dispatch] ${agent.name} 醒来：${env.reason}，模型 ${model}，工具 ${tools.length}`)
 
-  // 记一条"入站唤醒"经历（原始信封），当成群聊线上的外部事件
+  // 记一条"入站唤醒"经历（原始信封），当成群聊线上的外部事件。
+  // 解析是谁 @ 的他，便于以后读时间线区分来源。
+  const mentionedBy = parseMentionedBy(env.message)
   addEpisode(db, {
     ts: new Date().toISOString(), channel: 'group', scope: 'group', actor: 'system', kind: 'leto_wake',
     content: env.message,
-    meta: { agent: agent.id, reason: env.reason },
+    meta: { agent: agent.id, speaker: 'Leto', reason: env.reason, ...(mentionedBy ? { mentioned_by: mentionedBy } : {}) },
     sourceRef: `leto:wake:${agent.id}:${hash(env.message)}`
   })
 
@@ -84,7 +86,8 @@ export async function dispatchLetoWake(
             addEpisode(db, {
               ts: new Date().toISOString(), channel: 'group', scope: 'group', actor: 'ai', kind: 'message',
               content: text,
-              meta: { agent: agent.id, via: tc.function.name, source: 'leto' },
+              // speaker = 这条是哪个 AI 说的（区分小克/哈基米/ds）；agent = 稳定 id
+              meta: { agent: agent.id, speaker: agent.name, via: tc.function.name, source: 'leto' },
               sourceRef: `leto:reply:${agent.id}:${tc.id}`
             })
           }
@@ -95,6 +98,13 @@ export async function dispatchLetoWake(
 
   cfg.log(`[leto-dispatch] ${agent.name} 完成：${result.modelTurns} 轮、工具 [${result.toolsCalled.join(', ')}]${result.truncated ? '（截断）' : ''}`)
   return result
+}
+
+/** 从唤醒信封里抠出是谁 @ 的他（Leto 文案：被 X @ 了 / 拍了拍你 等）。抠不出返回 null。 */
+export function parseMentionedBy(message: string): string | null {
+  const m = message.match(/被\s*(.+?)(?:（[^）]*）)?\s*(?:@|拍了拍|私聊|请你)/)
+  if (m && m[1]) return m[1].trim()
+  return null
 }
 
 function hash(s: string): string {
