@@ -35,7 +35,7 @@ export function buildMirrorAllow(listGroupsText: string, maxMembers = DEFAULT_MI
  * 只在会话属于 allow 集合时才镜像；只记别人的话（is_self=false）；按消息 id 去重（source_ref）。
  * 返回镜像了几条。
  */
-export function mirrorReadResult(db: DB, readText: string, allow: MirrorAllow, log?: (m: string) => void): number {
+export function mirrorReadResult(db: DB, readText: string, allow: MirrorAllow, ourLetoNames?: Set<string>, log?: (m: string) => void): number {
   let parsed: any
   try { parsed = JSON.parse(readText) } catch { return 0 }
 
@@ -48,6 +48,8 @@ export function mirrorReadResult(db: DB, readText: string, allow: MirrorAllow, l
   let n = 0
   for (const m of msgs) {
     if (m?.is_self) continue                       // 自己的话由回复那条记，不重复
+    const authorName = String(m?.author?.display_name || '')
+    if (ourLetoNames && ourLetoNames.has(authorName)) continue   // 我们自己三个的话 dispatch 已用我们的名字记了，不重复镜像
     const id = typeof m?.id === 'string' ? m.id : null
     const text = typeof m?.text === 'string' ? m.text : ''
     if (!id || !text.trim()) continue

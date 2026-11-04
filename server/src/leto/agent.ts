@@ -22,6 +22,8 @@ export interface AgentUpstream {
 export interface LetoAgent {
   id: string
   name: string
+  /** 这个 AI 在 Leto 上的显示名（Claude/Gemini/DeepSeek），镜像去重用 */
+  letoName?: string
   token: string
   upstream?: AgentUpstream
   /** 造该 Agent 的身份 system prompt（可异步：要拉 dudulove 简报） */
@@ -104,6 +106,7 @@ export function makePersonaBuildSystem(identity: PersonaIdentity): (db: DB, now?
 interface AgentFileEntry {
   id: string
   name: string
+  letoName?: string
   enabled?: boolean
   token?: string                 // 不填则从 LETO_TOKEN_<ID> 读
   identity: 'eclipsis' | { personaFile: string; worldbookFile?: string | string[]; dudulove?: DuduloveConfig & { query?: string } }
@@ -133,7 +136,7 @@ function entryToAgent(e: AgentFileEntry, env: NodeJS.ProcessEnv): LetoAgent | nu
     ? buildXiaokeSystem
     : makePersonaBuildSystem(e.identity)
   return {
-    id: e.id, name: e.name, token,
+    id: e.id, name: e.name, letoName: e.letoName, token,
     upstream: e.upstream,
     buildSystem,
     allowTool: makeAllow(e.tools)
@@ -154,7 +157,7 @@ export function loadAgents(env = process.env): LetoAgent[] {
   const xiaokeToken = readAgentToken('xiaoke', env)
   if (!xiaokeToken) return []
   return [{
-    id: 'xiaoke', name: '小克', token: xiaokeToken,
+    id: 'xiaoke', name: '小克', letoName: 'Claude', token: xiaokeToken,
     upstream: { model: (env.LETO_MODEL_XIAOKE || '').trim() || undefined },
     buildSystem: buildXiaokeSystem,
     allowTool: coreToolsOnly

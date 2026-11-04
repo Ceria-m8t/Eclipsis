@@ -21,6 +21,8 @@ export interface LetoDispatchConfig {
   maxModelTurns?: number
   /** 成员数 ≤ 此值的群才镜像别人的话进群聊线；私聊永远镜像。默认 20 */
   mirrorMaxMembers?: number
+  /** 我们自己几个 AI 在 Leto 上的显示名，镜像时跳过（它们的话 dispatch 已记） */
+  ourLetoNames?: string[]
   log: (msg: string) => void
 }
 
@@ -88,7 +90,7 @@ export async function dispatchLetoWake(
       const r = await callTool(mcp, name, args)
       // 读类工具成功时，把别人的话镜像进群聊线（小群/私聊）
       if (!r.isError && (name === 'leto_read' || name === 'leto_continue' || name === 'leto_get_invocation')) {
-        try { mirrorReadResult(db, r.text, mirrorAllow, cfg.log) } catch { /* 镜像失败不影响应答 */ }
+        try { mirrorReadResult(db, r.text, mirrorAllow, new Set(cfg.ourLetoNames ?? []), cfg.log) } catch { /* 镜像失败不影响应答 */ }
       }
       return r
     },

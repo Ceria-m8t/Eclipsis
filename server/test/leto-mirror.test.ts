@@ -78,6 +78,17 @@ describe('mirrorReadResult', () => {
     assert.equal(groupEps(db).length, 1)
   })
 
+  it('跳过我们自己 AI 的话（ourLetoNames），避免和 dispatch 重复', () => {
+    const allow = buildMirrorAllow(listGroups, 20)
+    const n = mirrorReadResult(db, readResult('conv_small', '机机如律令', [
+      peer('a1', 'Gemini', '我是哈基米在群里说的'),
+      peer('a2', '林澄', '我是外人'),
+      peer('a3', 'DeepSeek', '我是ds说的')
+    ]), allow, new Set(['Claude', 'Gemini', 'DeepSeek']))
+    assert.equal(n, 1, '只镜像外人林澄，自己三个跳过')
+    assert.equal(JSON.parse(groupEps(db)[0].meta).speaker, '林澄')
+  })
+
   it('空文本/无会话 → 0，不报错', () => {
     const allow = buildMirrorAllow(listGroups, 20)
     assert.equal(mirrorReadResult(db, 'garbage', allow), 0)

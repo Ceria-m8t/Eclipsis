@@ -170,6 +170,7 @@ function main() {
           maxToolCalls: Number(process.env.LETO_MAX_TOOL_CALLS) || 12,
           maxModelTurns: Number(process.env.LETO_MAX_MODEL_TURNS) || 8,
           mirrorMaxMembers: Number(process.env.LETO_MIRROR_MAX_MEMBERS) || 20,
+          ourLetoNames: agents.map(a => a.letoName).filter((n): n is string => !!n),
           log: (m: string) => console.log(m)
         },
         log: (m: string) => console.log(m)
