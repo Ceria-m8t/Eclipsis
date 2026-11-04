@@ -65,8 +65,8 @@ function letoNote(): string {
 export interface PersonaIdentity {
   /** 人格提示词文件绝对路径 */
   personaFile: string
-  /** 可选：世界书文件绝对路径（拼在人格之后） */
-  worldbookFile?: string
+  /** 可选：世界书文件绝对路径。可一本（字符串）或多本（数组，按顺序拼） */
+  worldbookFile?: string | string[]
   /** 可选：dudulove 简报 */
   dudulove?: DuduloveConfig & { query?: string }
 }
@@ -78,9 +78,16 @@ export function makePersonaBuildSystem(identity: PersonaIdentity): (db: DB, now?
     catch { persona = '（人格文件读不到，先用空身份。请检查 personaFile 路径。）' }
 
     let worldbook = ''
-    if (identity.worldbookFile) {
-      try { const wb = readFileSync(identity.worldbookFile, 'utf8').trim(); if (wb) worldbook = `# 世界书\n${wb}` }
-      catch { /* 世界书读不到就不带 */ }
+    const wbFiles = Array.isArray(identity.worldbookFile)
+      ? identity.worldbookFile
+      : (identity.worldbookFile ? [identity.worldbookFile] : [])
+    if (wbFiles.length > 0) {
+      const books: string[] = []
+      for (const f of wbFiles) {
+        try { const wb = readFileSync(f, 'utf8').trim(); if (wb) books.push(wb) }
+        catch { /* 某本读不到就跳过，不影响其它本 */ }
+      }
+      if (books.length > 0) worldbook = `# 世界书\n${books.join('\n\n')}`
     }
 
     let memory = ''
@@ -99,7 +106,7 @@ interface AgentFileEntry {
   name: string
   enabled?: boolean
   token?: string                 // 不填则从 LETO_TOKEN_<ID> 读
-  identity: 'eclipsis' | { personaFile: string; worldbookFile?: string; dudulove?: DuduloveConfig & { query?: string } }
+  identity: 'eclipsis' | { personaFile: string; worldbookFile?: string | string[]; dudulove?: DuduloveConfig & { query?: string } }
   upstream?: AgentUpstream
   tools?: string[]               // 不填=核心；["*"]=全开；否则白名单
 }

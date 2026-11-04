@@ -52,7 +52,8 @@ function declaredFiles(): Set<string> {
     const id: any = (e as any).identity
     if (id && typeof id === 'object') {
       if (id.personaFile) { const s = safePath(id.personaFile); if (s) set.add(s) }
-      if (id.worldbookFile) { const s = safePath(id.worldbookFile); if (s) set.add(s) }
+      const wb = Array.isArray(id.worldbookFile) ? id.worldbookFile : (id.worldbookFile ? [id.worldbookFile] : [])
+      for (const f of wb) { const s = safePath(f); if (s) set.add(s) }
     }
   }
   return set
@@ -192,7 +193,8 @@ function refreshFiles(){
  try{
   const c=JSON.parse(document.getElementById('config').value)
   for(const a of (c.agents||[])){const id=a.identity
-   if(id&&typeof id==='object'){if(id.personaFile)files.push(id.personaFile);if(id.worldbookFile)files.push(id.worldbookFile)}}
+   if(id&&typeof id==='object'){if(id.personaFile)files.push(id.personaFile);
+    const wb=Array.isArray(id.worldbookFile)?id.worldbookFile:(id.worldbookFile?[id.worldbookFile]:[]);for(const f of wb)files.push(f)}}
  }catch(e){}
  const sel=document.getElementById('fileSel');sel.innerHTML=''
  for(const f of files){const o=document.createElement('option');o.value=f;o.textContent=f;sel.appendChild(o)}

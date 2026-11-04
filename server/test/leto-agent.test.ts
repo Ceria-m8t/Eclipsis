@@ -70,6 +70,21 @@ describe('makePersonaBuildSystem', () => {
     assert.doesNotMatch(sys, /记忆（来自记忆库/)
   })
 
+  it('多本世界书：数组按顺序拼，缺一本不影响其它', async () => {
+    const d = mkdtempSync(join(tmpdir(), 'wb-'))
+    const pf = join(d, 'p.md'); writeFileSync(pf, '我是哈基米')
+    const w1 = join(d, 'w1.md'); writeFileSync(w1, '世界书一：设定A')
+    const w2 = join(d, 'w2.md'); writeFileSync(w2, '世界书二：设定B')
+    const build = makePersonaBuildSystem({ personaFile: pf, worldbookFile: [w1, '/缺/的.md', w2] })
+    const sys = await build({} as any)
+    assert.match(sys, /我是哈基米/)
+    assert.match(sys, /# 世界书/)
+    assert.match(sys, /设定A/)
+    assert.match(sys, /设定B/)
+    // 顺序：A 在 B 前
+    assert.ok(sys.indexOf('设定A') < sys.indexOf('设定B'))
+  })
+
   it('人格文件读不到 → 用占位，不抛错', async () => {
     const build = makePersonaBuildSystem({ personaFile: '/nope/persona.md' })
     const sys = await build({} as any)
