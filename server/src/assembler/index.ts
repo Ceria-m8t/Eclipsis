@@ -112,3 +112,38 @@ export function injectSceneBlock(
   result.unshift({ role: 'system', content: sceneBlock })
   return { messages: result, injected: true }
 }
+
+// ── 最近群聊块（只给小克的 Eclipsis 聊天注入）──
+// 把统一群聊线 channel=group 最近几条带说话人拼成一段，让小克聊天时顺带知道群里/别的线发生了什么。
+// 不进 Wake、不进 Leto 应答器（应答器在 Leto 里已经 leto_read 实时读了，不重复）。
+
+interface GroupRow { actor: string; content: string; meta: string | null; ts: string }
+
+export function renderRecentGroupBlock(db: DB, limit = 12, maxChars = 1500): string {
+  let rows: GroupRow[]
+  try {
+    rows = db.prepare(`
+      SELECT actor, content, meta, ts FROM episodes
+      WHERE retracted_at IS NULL AND channel = 'group' AND kind = 'message'
+        AND content IS NOT NULL AND content != ''
+      ORDER BY ts DESC LIMIT ?
+    `).all(limit) as unknown as GroupRow[]
+  } catch { return '' }
+  if (!rows.length) return ''
+
+  rows.reverse()
+  const lines: string[] = []
+  let total = 0
+  for (const r of rows) {
+    let speaker = r.actor === 'ai' ? '某AI' : r.actor === 'peer' ? '群友' : r.actor
+    try { const m = r.meta ? JSON.parse(r.meta) : null; if (m?.speaker) speaker = m.speaker } catch { /* ignore */ }
+    const text = r.content.length > 200 ? r.content.slice(0, 200) + '…' : r.content
+    const line = `${speaker}：${text}`
+    total += line.length
+    if (total > maxChars) break
+    lines.push(line)
+  }
+  if (!lines.length) return ''
+
+  return ['', '---', '# 最近群聊（你和别的 AI、朋友在一起的地方）', ...lines].join('\n')
+}

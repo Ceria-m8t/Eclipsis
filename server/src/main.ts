@@ -20,7 +20,7 @@ import {
   WeatherFetcher, refreshXinchaoBridge,
   pruneHrHistory, detectFromRecentChat
 } from './pulse/index.ts'
-import { assembleSceneBlock, injectSceneBlock } from './assembler/index.ts'
+import { assembleSceneBlock, injectSceneBlock, renderRecentGroupBlock } from './assembler/index.ts'
 import { notifyXinchaoPresence } from './xinchao-client.ts'
 import { ensurePromptSchema, handlePromptApi } from './prompts.ts'
 import { handleLetoApi, handleLetoAdmin, loadAgents, type LetoApiDeps } from './leto/index.ts'
@@ -123,7 +123,8 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
       if (opts.assembler && Array.isArray(out.messages)) {
         try {
           const scene = assembleSceneBlock(db)
-          const injected = injectSceneBlock(out.messages, scene.sceneBlock)
+          const groupBlock = process.env.CHAT_GROUP_BLOCK === '1' ? renderRecentGroupBlock(db) : ''
+          const injected = injectSceneBlock(out.messages, scene.sceneBlock + (groupBlock ? '\n' + groupBlock : ''))
           if (injected.injected) {
             out = { ...out, messages: injected.messages }
             transforms.assembler_v1 = scene.meta
