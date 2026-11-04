@@ -50,14 +50,22 @@ test('关联之前就删了 / 失败没进 xiaoke：宽限期内等着，过了�
   assert.deepEqual(state(db).map(e => e.retract_reason), ['not_in_xiaoke', null])
 })
 
-test('导入的旧记录：按 id 判断；唤醒的回复也能关联', () => {
+test('导入的旧记录：按 id 判断；Wake/Leto 经历不参与对账（它们不经 xiaoke）', () => {
   const db = openDb(':memory:')
   ep(db, { ago: 9 * 86_400_000, actor: 'erica', content: '很久以前', ref: 'xiaoke:X1', xiaokeId: 'X1' })
   ep(db, { ago: 9 * 86_400_000, actor: 'ai', content: '嗯', ref: 'xiaoke:X2', xiaokeId: 'X2' })
-  addEpisode(db, { ts: iso(10 * MIN), channel: 'wake', scope: 'daily', actor: 'ai', kind: 'wake', content: '[NO_ACTION]', sourceRef: 'wake:r' })
-  const r = reconcile(db, [x('X1', 'user', 0, null), x('W', 'assistant', 10 * MIN, '[NO_ACTION]')], NOW)
-  assert.equal(r.linked, 1)
-  assert.deepEqual(state(db).map(e => [e.xiaoke_id, e.retract_reason]), [['X1', null], ['X2', 'xiaoke_deleted'], ['W', null]])
+  // Wake 自主消息：我们后端自己写的、不经 xiaoke，不该被对账撤回
+  addEpisode(db, { ts: iso(10 * MIN), channel: 'chat', scope: 'daily', actor: 'ai', kind: 'message', content: '到家没', sourceRef: 'wake:msg:r1' })
+  // Leto 群聊回复：同理不该被对账碰
+  addEpisode(db, { ts: iso(11 * MIN), channel: 'group', scope: 'group', actor: 'ai', kind: 'message', content: '收到', sourceRef: 'leto:reply:xiaoke:t1' })
+  const r = reconcile(db, [x('X1', 'user', 0, null)], NOW)
+  assert.equal(r.linked, 0, 'wake/leto 不参与关联')
+  // X2 之前关联过、现在导出里没了 → xiaoke_deleted；wake/leto 两条保持 retracted_at=NULL
+  const st = state(db)
+  const wake = st.find(e => e.source_ref === 'wake:msg:r1')
+  const leto = st.find(e => e.source_ref === 'leto:reply:xiaoke:t1')
+  assert.equal(wake.retract_reason, null, 'wake 消息不被撤回')
+  assert.equal(leto.retract_reason, null, 'leto 回复不被撤回')
 })
 
 test('导出明显不对（远少于已关联的）：不处理，报错', () => {

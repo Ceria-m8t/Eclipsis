@@ -52,7 +52,9 @@ export function reconcile(db: DB, rows: XiaokeRow[], now = Date.now(), opts: { d
     }
     const candidates = db.prepare(`SELECT seq, ts, actor, content FROM episodes
       WHERE xiaoke_id IS NULL AND retracted_at IS NULL AND kind IN ('message', 'wake') AND actor IN ('erica', 'ai')
-        AND (source_ref IS NULL OR source_ref NOT LIKE 'xiaoke:%') AND ts >= ?`).all(new Date(contentFrom).toISOString()) as
+        AND channel IN ('chat', 'room')
+        AND (source_ref IS NULL OR (source_ref NOT LIKE 'xiaoke:%' AND source_ref NOT LIKE 'leto:%' AND source_ref NOT LIKE 'wake:%'))
+        AND ts >= ?`).all(new Date(contentFrom).toISOString()) as
       { seq: number; ts: string; actor: string; content: string }[]
     // 先列出所有可能的配对，按时间差从小到大分配，一条 xiaoke 记录只配一次
     const pairs: { seq: number; id: string; dt: number }[] = []
