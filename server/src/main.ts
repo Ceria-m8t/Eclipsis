@@ -125,6 +125,7 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
           const scene = assembleSceneBlock(db)
           const groupBlock = process.env.CHAT_GROUP_BLOCK === '1' ? renderRecentGroupBlock(db) : ''
           const injected = injectSceneBlock(out.messages, scene.sceneBlock + (groupBlock ? '\n' + groupBlock : ''))
+          if (groupBlock) transforms.group_block = { chars: groupBlock.length }
           if (injected.injected) {
             out = { ...out, messages: injected.messages }
             transforms.assembler_v1 = scene.meta
