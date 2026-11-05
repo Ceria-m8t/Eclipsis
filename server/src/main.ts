@@ -21,6 +21,7 @@ import {
   pruneHrHistory, detectFromRecentChat
 } from './pulse/index.ts'
 import { assembleSceneBlock, injectSceneBlock, renderRecentGroupBlock } from './assembler/index.ts'
+import { renderRecentWakeBlock } from './wake/chat-block.ts'
 import { notifyXinchaoPresence } from './xinchao-client.ts'
 import { ensurePromptSchema, handlePromptApi } from './prompts.ts'
 import { handleLetoApi, handleLetoAdmin, loadAgents, type LetoApiDeps } from './leto/index.ts'
@@ -124,8 +125,14 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
         try {
           const scene = assembleSceneBlock(db)
           const groupBlock = process.env.CHAT_GROUP_BLOCK === '1' ? renderRecentGroupBlock(db) : ''
-          const injected = injectSceneBlock(out.messages, scene.sceneBlock + (groupBlock ? '\n' + groupBlock : ''))
+          // 他醒来时发的消息和念头（默认开，CHAT_WAKE_BLOCK=0 关）
+          let wakeBlock = ''
+          if (process.env.CHAT_WAKE_BLOCK !== '0') {
+            try { wakeBlock = renderRecentWakeBlock(db, { hours: Number(process.env.CHAT_WAKE_BLOCK_HOURS) || 24 }) } catch { /* 不影响请求 */ }
+          }
+          const injected = injectSceneBlock(out.messages, scene.sceneBlock + (groupBlock ? '\n' + groupBlock : '') + (wakeBlock ? '\n\n' + wakeBlock : ''))
           if (groupBlock) transforms.group_block = { chars: groupBlock.length }
+          if (wakeBlock) transforms.wake_block = { chars: wakeBlock.length }
           if (injected.injected) {
             out = { ...out, messages: injected.messages }
             transforms.assembler_v1 = scene.meta

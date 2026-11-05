@@ -1,7 +1,9 @@
 // Wake dispatch：触发后调模型，解析结局，存 fact/content，推送。
 // 这是 WakeScheduler.onWake 的实现。
 //
-// 他醒来时和平时聊天是同一个他：
+// 他醒来时和平时聊天是同一个他（2026-11-05 起）：
+//   默认接着最近一次真实聊天醒来（continuation.ts）：平时聊天那份 system + 全部历史 + 他那轮的回复 + 现在的「此刻」块，
+//   最后加一条 user = 醒来说明。取不到聊天时退回旧做法：
 //   system = 后端存的主 prompt + 世界书（composeSystemPrompt，不带前端功能说明）+ 「此刻」块（时间、脉、天气、心潮）
 //   user   = 为什么醒、她现在大概在干嘛、最近聊了什么、最近几次醒来（发没发）、上一次主动找她的话、线头、默认发消息
 import type { DB } from '../db.ts'
@@ -11,6 +13,7 @@ import { recordOutcome, isNearDuplicate } from './scheduler.ts'
 import { inferUserState, type UserState } from './sources.ts'
 import { composeSystemPrompt } from '../prompts.ts'
 import { assembleSceneBlock } from '../assembler/index.ts'
+import { loadChatContinuation } from './continuation.ts'
 
 export interface DispatchConfig {
   /** 中转站地址（复用 backend.env 的 UPSTREAM_URL） */
@@ -87,17 +90,6 @@ function loadRecentChat(db: DB, limit: number = 20): RecentMessage[] {
   return rows.reverse()
 }
 
-function trimChat(messages: RecentMessage[], maxChars: number): RecentMessage[] {
-  let total = 0
-  const result: RecentMessage[] = []
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const len = messages[i].content.length + 20
-    if (total + len > maxChars) break
-    total += len
-    result.unshift(messages[i])
-  }
-  return result
-}
 
 // ── 用户状态的人类可读描述 ──
 
@@ -152,6 +144,8 @@ export interface WakeContext {
   /** 一句给他看的、对她当前状态的判断（user-state.ts 产出）。没有就退回 USER_STATE_DESC */
   userEvidence?: string
   reason: string
+  /** 接着聊天醒来时：上面那段聊天停在什么时候 */
+  chatEndedAt?: string
   now?: Date
 }
 
@@ -159,7 +153,11 @@ export function buildWakePrompt(ctx: WakeContext): string {
   const now = ctx.now ?? new Date()
   const parts: string[] = []
 
-  parts.push('你自己醒了，她现在没在跟你说话。')
+  if (ctx.chatEndedAt) {
+    parts.push(`[这条不是她发的。上面的聊天停在 ${shortBeijing(ctx.chatEndedAt)}（${agoText(ctx.chatEndedAt, now)}），现在你自己醒了，她没在跟你说话。]`)
+  } else {
+    parts.push('你自己醒了，她现在没在跟你说话。')
+  }
   parts.push(`醒来原因：${ctx.reason}`)
   parts.push(`她现在：${ctx.userEvidence ?? USER_STATE_DESC[ctx.userState]}`)
 
@@ -168,8 +166,7 @@ export function buildWakePrompt(ctx: WakeContext): string {
     parts.push('最近的聊天记录：')
     for (const msg of ctx.recentChat) {
       const name = msg.actor === 'erica' ? 'Erica' : '你'
-      const text = msg.content.length > 300 ? msg.content.slice(0, 300) + '…' : msg.content
-      parts.push(`  ${name}：${text}`)
+      parts.push(`  ${name}：${msg.content}`)
     }
   }
 
@@ -218,14 +215,13 @@ export function buildWakeSystem(db: DB, now: Date = new Date()): { system: strin
 /** retryable：站点临时故障，过一会儿再试可能就好了。截断、空回复不算（再试多半一样） */
 type ModelResult = { ok: true; content: string; thinking?: string } | { ok: false; error: string; retryable: boolean }
 
-async function callModel(cfg: DispatchConfig, model: string, system: string, prompt: string): Promise<ModelResult> {
+async function callModel(cfg: DispatchConfig, model: string, messages: any[]): Promise<ModelResult> {
   try {
-    const messages = system ? [{ role: 'system', content: system }, { role: 'user', content: prompt }] : [{ role: 'user', content: prompt }]
     const res = await fetch(cfg.upstreamUrl.replace(/\/+$/, '') + '/chat/completions', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.upstreamKey}` },
       body: JSON.stringify({ model, messages, max_tokens: cfg.maxTokens, stream: false }),
-      signal: AbortSignal.timeout(120_000)
+      signal: AbortSignal.timeout(300_000)
     })
     if (!res.ok) return { ok: false, error: `模型返回 HTTP ${res.status}`, retryable: res.status >= 500 || res.status === 429 }
     const data = await res.json() as any
@@ -281,7 +277,9 @@ function extractFact(content: string, outcome: WakeOutcome): string | undefined 
 // ── 主流程 ──
 
 export async function dispatchWake(opp: WakeOpportunity, db: DB, cfg: DispatchConfig): Promise<void> {
-  const model = resolveModel(db, cfg.model)
+  // 接着最近一次聊天醒来；WAKE_CONTINUE_CHAT=0 关掉，退回旧做法
+  const cont = process.env.WAKE_CONTINUE_CHAT === '0' ? null : loadChatContinuation(db)
+  const model = cfg.model || cont?.model || resolveModel(db)
   if (!model) {
     cfg.log('[wake-dispatch] 无可用模型（没有聊天记录且未配置 WAKE_MODEL），跳过')
     recordOutcome(db, opp.id, 'error', undefined, '无可用模型')
@@ -308,12 +306,26 @@ export async function dispatchWake(opp: WakeOpportunity, db: DB, cfg: DispatchCo
     ORDER BY created_at DESC LIMIT 1
   `).get() as { at: string; content: string } | undefined
 
-  const recentChat = trimChat(loadRecentChat(db, 30), 4000)
-  const { system, hasMainPrompt } = buildWakeSystem(db)
-  const prompt = buildWakePrompt({ threads, recentWakes, lastMessage, recentChat, userState, userEvidence: uEst.evidence, reason: opp.reason })
+  const ctxBase = { threads, recentWakes, lastMessage, userState, userEvidence: uEst.evidence, reason: opp.reason }
+  let messages: any[]
+  let how: string
+  if (cont) {
+    let scene = ''
+    try { scene = assembleSceneBlock(db).sceneBlock } catch { /* 组装失败就不带此刻块 */ }
+    const prompt = buildWakePrompt({ ...ctxBase, recentChat: [], chatEndedAt: cont.at })
+    messages = [{ role: 'system', content: scene ? cont.system + '\n' + scene : cont.system }, ...cont.history, { role: 'user', content: prompt }]
+    how = `接着 ${shortBeijing(cont.at)} 的聊天（exchange ${cont.exchangeId}，历史 ${cont.history.length} 条）`
+  } else {
+    const limit = Number(process.env.WAKE_CHAT_LIMIT) || 200
+    const recentChat = loadRecentChat(db, limit)
+    const { system, hasMainPrompt } = buildWakeSystem(db)
+    const prompt = buildWakePrompt({ ...ctxBase, recentChat })
+    messages = system ? [{ role: 'system', content: system }, { role: 'user', content: prompt }] : [{ role: 'user', content: prompt }]
+    how = `没有可接的聊天，用后端主 prompt（${hasMainPrompt ? '有' : '无'}）+ 经历表聊天 ${recentChat.length} 条`
+  }
 
-  cfg.log(`[wake-dispatch] 调模型 ${model}，原因: ${opp.reason}，Erica: ${userState} (P睡=${uEst.pSleeping.toFixed(2)}) ${uEst.evidence}，聊天 ${recentChat.length} 条，主 prompt: ${hasMainPrompt ? '有' : '无'}`)
-  let reply = await callModel(cfg, model, system, prompt)
+  cfg.log(`[wake-dispatch] 调模型 ${model}，原因: ${opp.reason}，Erica: ${userState} (P睡=${uEst.pSleeping.toFixed(2)}) ${uEst.evidence}，${how}`)
+  let reply = await callModel(cfg, model, messages)
 
   // 站点临时故障：隔一会儿重试一次（11-04 那个站连着 502 了 6 次，每次都白醒）
   if (!reply.ok && reply.retryable) {
@@ -327,7 +339,7 @@ export async function dispatchWake(opp: WakeOpportunity, db: DB, cfg: DispatchCo
       return
     }
     const first = reply.error
-    reply = await callModel(cfg, model, system, prompt)
+    reply = await callModel(cfg, model, messages)
     if (!reply.ok) reply = { ...reply, error: `${first}；重试后：${reply.error}` }
   }
 
