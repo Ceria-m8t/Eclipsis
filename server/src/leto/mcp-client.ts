@@ -19,37 +19,42 @@ export interface McpCallResult {
 }
 
 export interface LetoMcpConfig {
-  /** Leto 基址，如 https://leto.sarl */
+  /** Leto 基址，如 https://leto.sarl（会拼上 /mcp） */
   baseUrl: string
-  /** 该 Agent 的机器令牌 lmt_… */
+  /** 该 Agent 的机器令牌 lmt_…；为空就不带 Authorization（比如心潮用路径里的令牌） */
   token: string
+  /** 完整的 MCP 地址；给了就不用 baseUrl 拼（Wake 连记忆库、心潮用） */
+  url?: string
+  /** 报错里显示的名字，默认 Leto */
+  label?: string
   /** 单次请求超时（毫秒），默认 20000 */
   timeoutMs?: number
 }
 
 const JSONRPC = '2.0'
 
-function endpoint(baseUrl: string): string {
-  return baseUrl.replace(/\/+$/, '') + '/mcp'
+function endpoint(cfg: LetoMcpConfig): string {
+  return cfg.url || cfg.baseUrl.replace(/\/+$/, '') + '/mcp'
 }
 
 async function rpc(cfg: LetoMcpConfig, method: string, params: Record<string, unknown>): Promise<any> {
   const body = JSON.stringify({ jsonrpc: JSONRPC, id: 1, method, params })
-  const res = await fetch(endpoint(cfg.baseUrl), {
+  const label = cfg.label ?? 'Leto'
+  const res = await fetch(endpoint(cfg), {
     method: 'POST',
     headers: {
-      authorization: `Bearer ${cfg.token}`,
+      ...(cfg.token ? { authorization: `Bearer ${cfg.token}` } : {}),
       'content-type': 'application/json',
       accept: 'application/json, text/event-stream'
     },
     body,
     signal: AbortSignal.timeout(cfg.timeoutMs ?? 20_000)
   })
-  if (!res.ok) throw new Error(`Leto MCP ${method}: HTTP ${res.status}`)
+  if (!res.ok) throw new Error(`${label} MCP ${method}: HTTP ${res.status}`)
   const text = await res.text()
   // Leto 回 JSON；个别实现会用 SSE 包一层 data:，这里都兜住
   const parsed = parseJsonOrSse(text)
-  if (parsed.error) throw new Error(`Leto MCP ${method}: ${parsed.error.message ?? JSON.stringify(parsed.error)}`)
+  if (parsed.error) throw new Error(`${label} MCP ${method}: ${parsed.error.message ?? JSON.stringify(parsed.error)}`)
   return parsed.result
 }
 

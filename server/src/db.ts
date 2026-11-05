@@ -90,7 +90,7 @@ export function openDb(path: string): DB {
 }
 
 // 旧库补列，返回新加的列名
-function addColumns(db: DB, table: string, cols: Record<string, string>): string[] {
+export function addColumns(db: DB, table: string, cols: Record<string, string>): string[] {
   const have = new Set((db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map(c => c.name))
   const added: string[] = []
   for (const [name, type] of Object.entries(cols)) {

@@ -1,5 +1,6 @@
 // Wake 模块 SQLite schema（追加到现有库，用 addColumns 兼容旧库）
 import type { DB } from '../db.ts'
+import { addColumns } from '../db.ts'
 
 const WAKE_SCHEMA = `
 -- 非精确 Wake 引擎状态（单行）
@@ -77,6 +78,12 @@ CREATE INDEX IF NOT EXISTS idx_wake_opp_created ON wake_opportunities(created_at
 
 export function ensureWakeSchema(db: DB): void {
   db.exec(WAKE_SCHEMA)
+  // 2026-11-06 醒来带工具：一次醒来可以发几条、也可以同时留念头、做了哪些事
+  addColumns(db, 'wake_opportunities', {
+    sent_messages: 'TEXT',   // JSON: string[]，这次发给她的每一条
+    trace: 'TEXT',           // 只留在心里的那段
+    tools_used: 'TEXT'       // JSON: string[]，调过的工具名（按顺序）
+  })
   // 初始化单行状态（不存在时插入）
   const row = db.prepare('SELECT id FROM wake_state WHERE id = 1').get()
   if (!row) {
