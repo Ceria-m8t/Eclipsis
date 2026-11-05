@@ -33,8 +33,13 @@ export interface LetoAgent {
 
 // ── 工具白名单：第一版只开核心应答工具 ──
 const CORE_TOOLS = new Set([
+  // 群聊应答
   'leto_list_pending', 'leto_list_groups', 'leto_read', 'leto_get_invocation',
-  'leto_reply', 'leto_decline', 'leto_continue', 'leto_blind_answer', 'leto_list_stickers'
+  'leto_reply', 'leto_decline', 'leto_continue', 'leto_blind_answer', 'leto_list_stickers',
+  // 拍一拍（群里/岛上逗人）
+  'leto_pat',
+  // 小岛（Erica 2026-11-05：她想在岛上和他们互动）：看岛、说话、做事、邀逛、卡住复位
+  'leto_island_look', 'leto_island_say', 'leto_island_act', 'leto_island_invite_follow', 'leto_island_unstuck'
 ])
 export function coreToolsOnly(name: string): boolean {
   return CORE_TOOLS.has(name)

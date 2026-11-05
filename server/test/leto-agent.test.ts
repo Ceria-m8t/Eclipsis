@@ -33,6 +33,8 @@ describe('loadAgents 配置文件', () => {
     assert.equal(h.allowTool, undefined, 'tools=["*"] → 全开（allowTool undefined）')
     const x = agents.find(a => a.id === 'xiaoke')!
     assert.equal(x.allowTool, coreToolsOnly, '不填 tools → 核心白名单')
+    assert.ok(coreToolsOnly('leto_island_say') && coreToolsOnly('leto_pat'), '岛/拍一拍在核心白名单')
+    assert.ok(!coreToolsOnly('leto_moment_post'), '朋友圈仍不在核心白名单')
   })
 
   it('token 不填则从环境 LETO_TOKEN_<ID> 读；没 token 跳过', () => {
