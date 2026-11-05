@@ -69,7 +69,7 @@ beforeEach(() => { db = openDb(':memory:'); ensurePromptSchema(db) })
 function deps(port: number, ingestKey = 'local-secret'): LetoApiDeps {
   const agent: LetoAgent = {
     id: 'xiaoke', name: '小克', token: 'lmt_fake',
-    buildSystem: buildXiaokeSystem, allowTool: coreToolsOnly, model: 'test-model'
+    buildSystem: buildXiaokeSystem, allowTool: coreToolsOnly, upstream: { model: 'test-model' }
   }
   return {
     agents: [agent],
