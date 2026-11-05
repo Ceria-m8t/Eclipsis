@@ -80,7 +80,9 @@ export function setAlarm(db: DB, input: SetAlarmInput): { ok: true; id: string; 
   let wakeAt: string
 
   if (input.at) {
-    wakeAt = input.at
+    const d = new Date(input.at)
+    if (Number.isNaN(d.getTime())) throw new Error('at 看不懂')
+    wakeAt = d.toISOString()
   } else if (input.afterMinutes && input.afterMinutes > 0) {
     wakeAt = new Date(now.getTime() + input.afterMinutes * 60_000).toISOString()
   } else {

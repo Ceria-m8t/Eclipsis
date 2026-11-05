@@ -97,6 +97,9 @@ function isNearDuplicate(db: DB, newContent: string): boolean {
   return false
 }
 
+/** 精确闹钟到点后多久之内还算准时（超过就记 missed） */
+export const PRECISE_GRACE_MS = 10 * 60_000
+
 export class WakeScheduler {
   private db: DB
   private cfg: WakeSchedulerConfig
@@ -182,6 +185,11 @@ export class WakeScheduler {
 
   private checkPreciseWakes(now: Date): void {
     const nowIso = now.toISOString()
+    // 到点时没能执行（后端没在跑）超过宽限的，记 missed，不补醒；下次醒来告诉他（Wake 2.0：补的是知情权，不是 Wake）。
+    // 2026-11-06 修：以前和 datetime() 的 "YYYY-MM-DD HH:MM:SS" 比，ISO 的 "T" 永远更大，同一天的永远记不上 missed
+    const graceIso = new Date(now.getTime() - PRECISE_GRACE_MS).toISOString()
+    this.db.prepare(`UPDATE wake_precise SET status = 'missed' WHERE status = 'pending' AND wake_at < ?`).run(graceIso)
+
     const pending = this.db.prepare(`
       SELECT * FROM wake_precise
       WHERE status = 'pending' AND wake_at <= ?
@@ -212,11 +220,6 @@ export class WakeScheduler {
         p.id
       )
     }
-
-    this.db.prepare(`
-      UPDATE wake_precise SET status = 'missed'
-      WHERE status = 'pending' AND wake_at < datetime(?, '-10 minutes')
-    `).run(nowIso)
   }
 
   private async dispatch(

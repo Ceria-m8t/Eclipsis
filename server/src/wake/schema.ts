@@ -84,6 +84,8 @@ export function ensureWakeSchema(db: DB): void {
     trace: 'TEXT',           // 只留在心里的那段
     tools_used: 'TEXT'       // JSON: string[]，调过的工具名（按顺序）
   })
+  // 错过的自设闹钟，下次醒来告诉过他就记上时间，只告诉一次
+  addColumns(db, 'wake_precise', { missed_notified_at: 'TEXT' })
   // 初始化单行状态（不存在时插入）
   const row = db.prepare('SELECT id FROM wake_state WHERE id = 1').get()
   if (!row) {

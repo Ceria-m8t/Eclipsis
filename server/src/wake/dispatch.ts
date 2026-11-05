@@ -128,12 +128,36 @@ export function shortBeijing(iso: string): string {
 /** 压成一行（笔记和消息里的换行会把列表打乱） */
 const oneLine = (t: string) => t.replace(/\s*\n+\s*/g, ' ').trim()
 
-function agoText(fromIso: string, now: Date): string {
-  const mins = Math.max(0, Math.round((now.getTime() - new Date(fromIso).getTime()) / 60_000))
-  if (mins < 60) return `${mins} 分钟前`
+/** 一段时长：35 分钟 / 2.3 小时 / 3 天 */
+function durationText(ms: number): string {
+  const mins = Math.max(0, Math.round(ms / 60_000))
+  if (mins < 60) return `${mins} 分钟`
   const hours = mins / 60
-  if (hours < 48) return `${hours < 10 ? hours.toFixed(1) : Math.round(hours)} 小时前`
-  return `${Math.round(hours / 24)} 天前`
+  if (hours < 48) return `${hours < 10 ? hours.toFixed(1) : Math.round(hours)} 小时`
+  return `${Math.round(hours / 24)} 天`
+}
+
+function agoText(fromIso: string, now: Date): string {
+  return durationText(now.getTime() - new Date(fromIso).getTime()) + '前'
+}
+
+// ── 错过的闹钟 ──
+
+export interface MissedAlarm { id: string; wakeAt: string; note?: string }
+
+/** 他自己定的、错过了、还没告诉过他的闹钟 */
+export function loadMissedAlarms(db: DB): MissedAlarm[] {
+  return (db.prepare(`
+    SELECT id, wake_at, note FROM wake_precise
+    WHERE source = 'self' AND status = 'missed' AND missed_notified_at IS NULL
+    ORDER BY wake_at ASC
+  `).all() as any[]).map(r => ({ id: r.id, wakeAt: r.wake_at, note: r.note ?? undefined }))
+}
+
+function markMissedNotified(db: DB, alarms: MissedAlarm[]): void {
+  const stmt = db.prepare('UPDATE wake_precise SET missed_notified_at = ? WHERE id = ?')
+  const at = new Date().toISOString()
+  for (const a of alarms) stmt.run(at, a.id)
 }
 
 // ── 构造醒来说明（user 消息）──
@@ -155,6 +179,8 @@ export interface WakeContext {
   toolBoxes?: string[]
   /** 他自己改过的醒来设置（不是默认值时才有） */
   controlNote?: string
+  /** 错过了、还没告诉过他的自设闹钟 */
+  missedAlarms?: MissedAlarm[]
   now?: Date
 }
 
@@ -169,6 +195,15 @@ export function buildWakePrompt(ctx: WakeContext): string {
   }
   parts.push(`醒来原因：${ctx.reason}`)
   parts.push(`她现在：${ctx.userEvidence ?? USER_STATE_DESC[ctx.userState]}`)
+
+  if (ctx.missedAlarms?.length) {
+    parts.push('')
+    parts.push(`你错过了 ${ctx.missedAlarms.length} 个自己定的闹钟（到点的时候系统没在运行，没能叫醒你）：`)
+    for (const a of ctx.missedAlarms) {
+      const late = durationText(now.getTime() - new Date(a.wakeAt).getTime())
+      parts.push(`  · 原定 ${shortBeijing(a.wakeAt)}，到现在晚了 ${late}${a.note ? `：「${oneLine(a.note)}」` : ''}`)
+    }
+  }
 
   if (ctx.recentChat.length > 0) {
     parts.push('')
@@ -387,9 +422,11 @@ export async function dispatchWake(opp: WakeOpportunity, db: DB, cfg: DispatchCo
 
   const withTools = process.env.WAKE_TOOLS !== '0'
   const boxes = withTools ? buildWakeBoxes(db) : []
+  const missedAlarms = loadMissedAlarms(db)
   const ctxBase = {
     threads, recentWakes, lastMessage, userState, userEvidence: uEst.evidence, reason: opp.reason,
     controlNote: controlNote(db),
+    missedAlarms,
     ...(withTools ? { toolBoxes: boxes.map(b => BOX_LABEL[b.id] ?? b.id) } : {})
   }
   let messages: any[]
@@ -413,7 +450,8 @@ export async function dispatchWake(opp: WakeOpportunity, db: DB, cfg: DispatchCo
     (withTools ? `，带工具（${boxes.map(b => b.id).join('/')}）` : ''))
 
   if (withTools) {
-    await runWithTools(opp, db, cfg, model, messages, boxes, uEst.pSleeping > 0.5, threads)
+    const outcome = await runWithTools(opp, db, cfg, model, messages, boxes, uEst.pSleeping > 0.5, threads)
+    if (outcome !== 'error') markMissedNotified(db, missedAlarms)
     return
   }
 
@@ -455,6 +493,7 @@ export async function dispatchWake(opp: WakeOpportunity, db: DB, cfg: DispatchCo
 
   const fact = extractFact(content, outcome)
   recordOutcome(db, opp.id, outcome, fact, content)
+  markMissedNotified(db, missedAlarms)
 
   if (outcome === 'message') {
     addEpisode(db, {
@@ -487,7 +526,7 @@ export async function dispatchWake(opp: WakeOpportunity, db: DB, cfg: DispatchCo
 async function runWithTools(
   opp: WakeOpportunity, db: DB, cfg: DispatchConfig, model: string, messages: ChatMessage[],
   boxes: ReturnType<typeof buildWakeBoxes>, sleeping: boolean, threads: { id: string; text: string }[]
-): Promise<void> {
+): Promise<WakeOutcome> {
   const sent: string[] = []
 
   const callModelT = async (msgs: ChatMessage[], tools: any[]) => {
@@ -570,4 +609,5 @@ async function runWithTools(
 
   cfg.log(`[wake-dispatch] 结局: ${outcome}，发了 ${sent.length} 条，工具 ${res.toolsUsed.length} 次（${res.toolsUsed.join(',') || '无'}），模型 ${res.modelTurns} 轮` +
     (res.truncated ? '，到上限' : '') + (error ? `，出错: ${error}` : '') + ` model: ${model}`)
+  return outcome
 }
