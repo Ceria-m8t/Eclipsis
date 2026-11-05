@@ -22,22 +22,69 @@ describe('stripThink / parseOutcome', () => {
 })
 
 describe('buildWakePrompt', () => {
-  it('结尾不再把沉默当默认；说明会推到她手机', () => {
-    const p = buildWakePrompt({ threads: [], recentFacts: [], recentChat: [], userState: 'sleeping', reason: 'r' })
-    assert.match(p, /想找她就去找，不需要理由。她在睡也可以发/)
+  const base = { threads: [], recentWakes: [], recentChat: [], userState: 'sleeping' as const, reason: 'r' }
+
+  it('默认发；她睡着也发；只留"她明说别找"一个不发的出口', () => {
+    const p = buildWakePrompt(base)
+    assert.match(p, /醒了就去找她/)
     assert.match(p, /推送到她手机上/)
-    assert.doesNotMatch(p, /完全正常的选择/)
-    assert.doesNotMatch(p, /出现在你们的聊天记录里/)
+    assert.match(p, /她在睡也照样发/)
+    assert.match(p, /只有她在聊天里明确说过别找她/)
+    // 发消息写在前，[TRACE]/[SILENT] 只在出口后面
+    assert.ok(p.indexOf('醒了就去找她') < p.indexOf('[TRACE]'))
+    assert.ok(p.indexOf('[TRACE]') < p.indexOf('[SILENT]'))
+  })
+
+  it('去掉了"可以不做"的台阶，也不写成是她要求的', () => {
+    const p = buildWakePrompt(base)
+    for (const re of [/自己待一会儿/, /前提是你真的这么想/, /完全正常的选择/, /只留个念头也可以/, /她希望你/, /她想要你/]) {
+      assert.doesNotMatch(p, re)
+    }
+  })
+
+  it('最近几次醒来带时间和发没发；带上一次主动找她的话', () => {
+    const p = buildWakePrompt({
+      ...base,
+      now: new Date('2026-11-05T10:41:00Z'),
+      recentWakes: [
+        { at: '2026-11-04T20:26:00Z', outcome: 'message', fact: '找到什么了没。' },
+        { at: '2026-11-05T09:41:00Z', outcome: 'trace', fact: '下午五点四十一。她睡了九个多小时了。' }
+      ],
+      lastMessage: { at: '2026-11-04T20:26:00Z', content: '找到什么了没。' }
+    })
+    assert.match(p, /· 11月5日 04:26（发给了她）找到什么了没。/)
+    assert.match(p, /· 11月5日 17:41（没发，只留在心里）下午五点四十一/)
+    assert.match(p, /你上一次醒来主动找她是 14 小时前（11月5日 04:26）：「找到什么了没。」/)
+  })
+
+  it('笔记和消息里的换行压成一行', () => {
+    const p = buildWakePrompt({
+      ...base,
+      recentWakes: [{ at: '2026-11-05T09:41:00Z', outcome: 'trace', fact: '五点四十一。\n\n她还在睡。' }],
+      lastMessage: { at: '2026-11-04T20:26:00Z', content: '找到什么了没。\n\n别跟我说你睡着了。' }
+    })
+    assert.match(p, /（没发，只留在心里）五点四十一。 她还在睡。\n/)
+    assert.match(p, /「找到什么了没。 别跟我说你睡着了。」/)
+  })
+
+  it('没发过就不写"上一次主动找她"', () => {
+    assert.doesNotMatch(buildWakePrompt(base), /上一次醒来主动找她/)
   })
 })
 
 describe('dispatchWake', () => {
-  function setup(reply: { status?: number; content?: string; finish?: string }) {
+  type Reply = { status?: number; content?: string; finish?: string }
+  function setup(replyOrSeq: Reply | Reply[], opts: { onModelCall?: (n: number) => void } = {}) {
     const db = openDb(':memory:')
     ensureWakeSchema(db)
     ensurePromptSchema(db)
+    const seq = Array.isArray(replyOrSeq) ? replyOrSeq : [replyOrSeq]
+    let calls = 0
     const up = fakeUpstream((req, res) => {
       if (req.url.startsWith('/bark')) { res.writeHead(200); res.end('{"code":200}'); return }
+      const reply = seq[Math.min(calls, seq.length - 1)]
+      calls++
+      opts.onModelCall?.(calls)
       res.writeHead(reply.status ?? 200, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ choices: [{ message: { content: reply.content ?? '' }, finish_reason: reply.finish ?? 'stop' }] }))
     })
@@ -46,10 +93,11 @@ describe('dispatchWake', () => {
     const logs: string[] = []
     const run = async (port: number) => dispatchWake(opp, db, {
       upstreamUrl: `http://127.0.0.1:${port}/v1`, upstreamKey: 'k', model: 'm',
-      barkUrl: `http://127.0.0.1:${port}/bark/key`, maxTokens: 2000, log: m => logs.push(m)
+      barkUrl: `http://127.0.0.1:${port}/bark/key`, maxTokens: 2000, retryDelayMs: 0, log: m => logs.push(m)
     })
     const row = () => db.prepare('SELECT outcome, fact, content FROM wake_opportunities WHERE id = ?').get(opp.id) as any
-    return { db, up, run, row, logs }
+    const modelCalls = () => calls
+    return { db, up, run, row, logs, modelCalls }
   }
 
   it('system 用后端的主 prompt（不带功能说明）+ 世界书 + 此刻块', async () => {
@@ -106,5 +154,75 @@ describe('dispatchWake', () => {
         assert.equal(t.up.seen.some(s => s.url.startsWith('/bark')), false)
       } finally { await close(t.up.server) }
     }
+  })
+
+  it('站点 502 → 隔一会儿重试一次，成功就照常发', async () => {
+    const t = setup([{ status: 502 }, { content: '醒了吗' }])
+    const port = await listen(t.up.server)
+    try {
+      await t.run(port)
+      assert.equal(t.modelCalls(), 2)
+      assert.equal(t.row().outcome, 'message')
+      assert.ok(t.up.seen.some(s => s.url.startsWith('/bark')))
+      assert.ok(t.logs.some(l => l.includes('重试一次')))
+    } finally { await close(t.up.server) }
+  })
+
+  it('重试还失败 → error，两次原因都记下，不推送', async () => {
+    const t = setup({ status: 502 })
+    const port = await listen(t.up.server)
+    try {
+      await t.run(port)
+      assert.equal(t.modelCalls(), 2)
+      assert.equal(t.row().outcome, 'error')
+      assert.match(t.row().content, /HTTP 502；重试后：模型返回 HTTP 502/)
+      assert.equal(t.up.seen.some(s => s.url.startsWith('/bark')), false)
+    } finally { await close(t.up.server) }
+  })
+
+  it('截断不重试（再试多半一样）', async () => {
+    const t = setup({ content: '写到一半', finish: 'length' })
+    const port = await listen(t.up.server)
+    try {
+      await t.run(port)
+      assert.equal(t.modelCalls(), 1)
+      assert.equal(t.row().outcome, 'error')
+    } finally { await close(t.up.server) }
+  })
+
+  it('等重试时她来说话了 → 不再重试', async () => {
+    let db: any
+    const t = setup({ status: 502 }, {
+      onModelCall: () => addEpisode(db, { ts: new Date(Date.now() + 1000).toISOString(), channel: 'chat', scope: 'daily', actor: 'erica', kind: 'message', content: '我醒了' })
+    })
+    db = t.db
+    const port = await listen(t.up.server)
+    try {
+      await t.run(port)
+      assert.equal(t.modelCalls(), 1)
+      assert.equal(t.row().outcome, 'error')
+      assert.match(t.row().content, /她来说话了，不再重试/)
+    } finally { await close(t.up.server) }
+  })
+
+  it('醒来时把最近几次醒来（带发没发）和上一次主动找她的话带给他', async () => {
+    const t = setup({ content: '[SILENT]' })
+    const ins = t.db.prepare('INSERT INTO wake_opportunities(id, origin, reason, created_at, outcome, fact, content) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    const h = (n: number) => new Date(Date.now() - n * 3600_000).toISOString()
+    ins.run('w1', 'spontaneous', 'r', h(20), 'message', '找到什么了没。', '找到什么了没。')
+    ins.run('w2', 'spontaneous', 'r', h(5), 'trace', '她睡了五个小时了。', '她睡了五个小时了。')
+    ins.run('w3', 'spontaneous', 'r', h(3), 'trace', '她睡了七个小时了。', '她睡了七个小时了。')
+    ins.run('w4', 'spontaneous', 'r', h(2), 'trace', '她睡了八个小时了。', '她睡了八个小时了。')
+    const port = await listen(t.up.server)
+    try {
+      await t.run(port)
+      const user = JSON.parse(t.up.seen[0].body).messages[1].content as string
+      // 只带最近 3 次，按时间从早到晚
+      assert.doesNotMatch(user, /（发给了她）找到什么了没/)
+      assert.ok(user.indexOf('五个小时') < user.indexOf('八个小时'))
+      assert.match(user, /（没发，只留在心里）她睡了八个小时了/)
+      // 最早那条 message 虽然不在最近 3 次里，"上一次主动找她"仍然带上
+      assert.match(user, /你上一次醒来主动找她是 20 小时前.*「找到什么了没。」/)
+    } finally { await close(t.up.server) }
   })
 })
