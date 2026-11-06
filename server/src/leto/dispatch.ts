@@ -1,6 +1,7 @@
 // Leto dispatch：把一条唤醒信封跑成一轮应答，并把经历写进群聊线（channel=group）。
 // 串起 agent 配置 + 模型调用 + MCP 客户端 + responder 循环。
 import type { DB } from '../db.ts'
+import { chooseModel } from '../station.ts'
 import { addEpisode } from '../db.ts'
 import type { LetoAgent } from './agent.ts'
 import { listTools, callTool, type LetoMcpConfig } from './mcp-client.ts'
@@ -28,12 +29,8 @@ export interface LetoDispatchConfig {
 
 function resolveModel(db: DB, agent: LetoAgent, cfg: LetoDispatchConfig): string | null {
   if (agent.upstream?.model) return agent.upstream.model
-  const row = db.prepare(`
-    SELECT model FROM exchanges
-    WHERE status = 'ok' AND model IS NOT NULL AND model != ''
-    ORDER BY id DESC LIMIT 1
-  `).get() as { model: string } | undefined
-  return row?.model || cfg.fallbackModel || null
+  // 跟着后端主站走的（小克）：换站后还没聊过用新站默认模型，聊过了跟着聊天
+  return chooseModel(db) || cfg.fallbackModel || null
 }
 
 /** 工具清单缓存：每 Agent 一份，~10 分钟 */

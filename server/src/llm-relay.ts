@@ -9,6 +9,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { timingSafeEqual } from 'node:crypto'
 import type { DB } from './db.ts'
+import { chooseModel } from './station.ts'
 
 export const LLM_RELAY_PATH = '/v1/eclipsis/llm/chat/completions'
 
@@ -65,7 +66,7 @@ export async function handleLlmRelay(cfg: RelayConfig, db: DB, req: IncomingMess
   if (!body || !Array.isArray(body.messages)) { json(res, 400, { error: { message: '缺 messages' } }); return true }
 
   if (!body.model || body.model === 'auto') {
-    const m = latestChatModel(db)
+    const m = chooseModel(db)
     if (!m) { json(res, 503, { error: { message: '还没有聊天记录，不知道用哪个模型' } }); return true }
     body.model = m
   }

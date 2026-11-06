@@ -8,6 +8,15 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync } from
 import { resolve, dirname } from 'node:path'
 import { loadAgentFile } from './agent.ts'
 import { probeStation } from './station-check.ts'
+import { listStations, saveStation, deleteStation, switchStation, findStation, currentStation } from '../station.ts'
+
+/** 列出站上的模型名（GET /models），帮她挑默认模型 */
+async function listStationModels(url: string, key: string): Promise<string[]> {
+  const res = await fetch(url.replace(/\/+$/, '') + '/models', { headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(20_000) })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  const d: any = await res.json()
+  return (Array.isArray(d?.data) ? d.data : []).map((m: any) => String(m?.id ?? '')).filter(Boolean).sort()
+}
 
 const CONFIG_PATH = (process.env.LETO_AGENTS_FILE || '/etc/eclipsis/leto-agents.json').trim()
 /** 允许读写的根目录：persona/worldbook/config 都必须在这下面 */
@@ -110,6 +119,47 @@ export async function handleLetoAdmin(req: IncomingMessage, res: ServerResponse)
       return true
     }
 
+    // ── 换站（2026-11-07）──
+    if (route === 'stations' && req.method === 'GET') { json(res, 200, listStations()); return true }
+    if (route === 'stations' && req.method === 'PUT') {
+      const b = JSON.parse(await readBody(req))
+      const st = saveStation({ id: b.id || undefined, name: b.name, url: b.url, key: b.key, defaultModel: b.defaultModel })
+      json(res, 200, { ok: true, id: st.id })
+      return true
+    }
+    if (route === 'stations' && req.method === 'DELETE') {
+      deleteStation(String(url.searchParams.get('id') || ''))
+      json(res, 200, { ok: true })
+      return true
+    }
+    if (route === 'stations/switch' && req.method === 'POST') {
+      const b = JSON.parse(await readBody(req))
+      const c = switchStation(String(b.id || ''))
+      json(res, 200, { ok: true, current: { name: c.name, url: c.url, defaultModel: c.defaultModel } })
+      return true
+    }
+    // 用存着的密钥自检 / 列模型（不用再输一遍密钥）
+    if ((route === 'stations/test' || route === 'stations/models') && req.method === 'POST') {
+      const b = JSON.parse(await readBody(req))
+      const st = b.id ? findStation(String(b.id)) : null
+      const u = st?.url ?? String(b.url || '')
+      const k = st?.key ?? String(b.key || '')
+      if (!u || !k) { json(res, 400, { error: '要选一个存过的站，或者填地址和密钥' }); return true }
+      if (route === 'stations/models') {
+        try { json(res, 200, { models: await listStationModels(u, k) }) } catch (e: any) { json(res, 200, { models: [], error: `拉不到模型列表：${e?.message || e}` }) }
+        return true
+      }
+      const model = String(b.model || st?.defaultModel || '')
+      if (!model) { json(res, 400, { error: '要选一个模型来自检（或者先给这个站填默认模型）' }); return true }
+      json(res, 200, await probeStation(u, k, model))
+      return true
+    }
+    if (route === 'stations/current' && req.method === 'GET') {
+      const c = currentStation()
+      json(res, 200, { name: c.name, url: c.url, defaultModel: c.defaultModel, switchedAt: c.switchedAt })
+      return true
+    }
+
     // 站点自检
     if (route === 'station-check' && req.method === 'POST') {
       const body = JSON.parse(await readBody(req))
@@ -145,10 +195,33 @@ const PANEL_HTML = `<!doctype html><html lang="zh"><head><meta charset="utf-8">
  .ok{background:#e6f0e0;color:#2d5016} .err{background:#f3e0e0;color:#7a1f1f}
  .hint{color:#8a8178;font-size:12px;line-height:1.6}
  select{font-size:13px;padding:6px;border-radius:6px;border:1px solid #d8d2c8}
+ .st{border:1px solid #e3ddd3;border-radius:10px;padding:10px 12px;margin:8px 0;background:#fff}
+ .st.on{border-color:#7a6a55;box-shadow:0 0 0 1px #7a6a55}
+ .st b{font-size:14px} .st .tag{font-size:12px;background:#7a6a55;color:#fff;border-radius:6px;padding:1px 6px;margin-left:6px}
+ .st button{font-size:13px;padding:5px 12px}
 </style></head><body>
 <h1>Leto Agent 面板</h1>
 <p class="hint">改完点保存就生效（应答器每次醒来重读）。会自动备份旧版（.bak-时间）。令牌和站点密钥只在这个登录后的页面显示。</p>
 <div id="msg" class="msg"></div>
+
+<h2>0. 换站</h2>
+<p class="hint">存几个常用的中转站，点「切过去」立刻生效，不用重启。聊天、Wake、小克的 Leto、心潮一起换；哈基米和 ds 用下面 Agent 配置里自己的站，不受影响。<br>
+切过去以后：在 Kelivo 里重新选一下模型（不同站的模型名不一样）。还没在新站聊过时，Wake / 小克 / 心潮先用这个站的「默认模型」。</p>
+<div id="stCur" class="hint"></div>
+<div id="stList"></div>
+<p class="hint" style="margin-top:12px"><b>新建 / 修改</b>（点某个站的「修改」会填到这里；密钥留空 = 不改）</p>
+<div class="row">
+ <input id="stName" placeholder="名字，如 神秘破甲" size="14">
+ <input id="stUrl" placeholder="地址，如 https://xxx/v1" size="30">
+ <input id="stKey" placeholder="密钥" size="22" autocomplete="off">
+</div>
+<div class="row">
+ <input id="stModel" placeholder="默认模型名" size="30" list="stModels"><datalist id="stModels"></datalist>
+ <button class="ghost" onclick="stFetchModels()">拉模型列表</button>
+ <button onclick="stSave()">保存这个站</button>
+ <button class="ghost" onclick="stClear()">清空</button>
+</div>
+<div id="stOut" class="hint"></div>
 
 <h2>1. Agent 配置（leto-agents.json）</h2>
 <p class="hint">每个 AI 的 token、站点(upstream)、人格文件、世界书文件、enabled、工具。改完保存。</p>
@@ -220,5 +293,60 @@ async function check(){
  if(!r.ok){document.getElementById('checkout').textContent=d.error||'失败';return}
  document.getElementById('checkout').innerHTML='连得上: '+(d.reachable?'是':'否')+' ｜ 模型在: '+(d.modelOk?'是':'否')+' ｜ 转工具: '+(d.toolsOk?'是':'否')+'<br>'+(d.ok?'✅ 可用':'❌ '+d.detail)
 }
+// ── 换站 ──
+let stEditing=''
+const esc=t=>String(t??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
+const $=id=>document.getElementById(id)
+async function stLoad(){
+ const r=await fetch(B+'/stations');const d=await r.json()
+ if(!r.ok){$('stCur').textContent=d.error||'读不到';return}
+ const c=d.current
+ $('stCur').innerHTML='现在用的：<b>'+esc(c.name)+'</b>　'+esc(c.url||'（没配）')+(c.defaultModel?'　默认模型 '+esc(c.defaultModel):'')+(d.switchedAt?'　· '+esc(new Date(d.switchedAt).toLocaleString())+' 切的':'')
+ $('stList').innerHTML=d.stations.length?d.stations.map(s=>{const on=s.id===d.active,a='data-id="'+esc(s.id)+'"'
+  return '<div class="st'+(on?' on':'')+'"><b>'+esc(s.name)+'</b>'+(on?'<span class="tag">正在用</span>':'')+
+  '<div class="hint">'+esc(s.url)+'　密钥 '+esc(s.key)+'　默认模型 '+esc(s.defaultModel||'（没填）')+'</div><div class="row">'+
+  (on?'':'<button '+a+' onclick="stSwitch(this.dataset.id)">切过去</button>')+
+  '<button class="ghost" '+a+' onclick="stTest(this.dataset.id)">自检</button><button class="ghost" '+a+' onclick="stEdit(this.dataset.id)">修改</button>'+
+  (on?'':'<button class="ghost" '+a+' onclick="stDel(this.dataset.id)">删除</button>')+'</div></div>'}).join('')
+  :'<p class="hint">还没存过站。现在用的是 backend.env 里那个；存第一个站时它会一起存进来，叫「原来的站」。</p>'
+ window._st=d.stations
+}
+function stClear(){stEditing='';for(const k of ['stName','stUrl','stKey','stModel'])$(k).value='';$('stKey').placeholder='密钥'}
+function stEdit(id){const s=(window._st||[]).find(x=>x.id===id);if(!s)return;stEditing=id;$('stName').value=s.name;$('stUrl').value=s.url;$('stKey').value='';$('stKey').placeholder='密钥（留空 = 不改）';$('stModel').value=s.defaultModel||'';$('stName').focus()}
+async function stSave(){
+ const body={id:stEditing||undefined,name:$('stName').value,url:$('stUrl').value,key:$('stKey').value,defaultModel:$('stModel').value}
+ const r=await fetch(B+'/stations',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(body)});const d=await r.json()
+ if(r.ok){msg('已保存',true);stClear();stLoad()}else msg(d.error||'保存失败',false)
+}
+async function stFetchModels(){
+ const body=($('stKey').value||!stEditing)?{url:$('stUrl').value,key:$('stKey').value}:{id:stEditing}
+ $('stOut').textContent='拉模型列表中…'
+ const r=await fetch(B+'/stations/models',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});const d=await r.json()
+ if(!r.ok||d.error){$('stOut').textContent=d.error||'失败';return}
+ $('stModels').innerHTML=d.models.map(m=>'<option value="'+esc(m)+'">').join('')
+ $('stOut').textContent='拉到 '+d.models.length+' 个模型，点「默认模型」输入框就能选。'
+}
+async function stTest(id){
+ const s=(window._st||[]).find(x=>x.id===id)
+ let model=s&&s.defaultModel
+ if(!model){model=prompt('这个站还没填默认模型。用哪个模型自检？');if(!model)return}
+ $('stOut').textContent='自检「'+(s?s.name:'')+'」中（最多 90 秒）…'
+ const r=await fetch(B+'/stations/test',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({id,model})});const d=await r.json()
+ if(!r.ok){$('stOut').textContent=d.error||'失败';return}
+ $('stOut').innerHTML='「'+esc(s?s.name:'')+'」连得上: '+(d.reachable?'是':'否')+' ｜ 模型在: '+(d.modelOk?'是':'否')+' ｜ 转工具: '+(d.toolsOk?'是':'否')+'<br>'+(d.ok?'✅ 可以用（醒来和 Leto 要转工具，这个站转）':'❌ '+esc(d.detail))
+}
+async function stSwitch(id){
+ const name=((window._st||[]).find(x=>x.id===id)||{}).name||''
+ if(!confirm('切到「'+name+'」？聊天、Wake、小克的 Leto、心潮会立刻改用这个站。'))return
+ const r=await fetch(B+'/stations/switch',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({id})});const d=await r.json()
+ if(r.ok){msg('已切到「'+name+'」。记得在 Kelivo 里重新选一下模型',true);stLoad()}else msg(d.error||'切换失败',false)
+}
+async function stDel(id){
+ const name=((window._st||[]).find(x=>x.id===id)||{}).name||''
+ if(!confirm('删掉「'+name+'」？'))return
+ const r=await fetch(B+'/stations?id='+encodeURIComponent(id),{method:'DELETE'});const d=await r.json()
+ if(r.ok){msg('已删除',true);stLoad()}else msg(d.error||'删除失败',false)
+}
+stLoad()
 loadConfig()
 </script></body></html>`

@@ -14,6 +14,7 @@ import { createTap, forwardHeaders, type Prepared } from './proxy.ts'
 import { stripWakeHistory, stripThinkHistory, stripOldImages } from './transforms.ts'
 import { handleApi } from './api.ts'
 import { handleLlmRelay } from './llm-relay.ts'
+import { initStations, bindStationToConfig } from './station.ts'
 import { ensureWakeSchema, WakeScheduler, dispatchWake, handleWakeApi } from './wake/index.ts'
 import {
   ensurePulseSchema, handlePulseApi, doTick as pulseTick,
@@ -156,6 +157,10 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
 
 function main() {
   const cfg = loadConfig()
+  // 换站：stations.json 里正在用的站优先，没有就用 backend.env；之后 cfg.upstreamUrl/Key 每次读都是现在的站
+  const st = initStations()
+  bindStationToConfig(cfg)
+  console.log(`[eclipsis] 中转站：${st.name}（${st.url || '未配置'}）${st.defaultModel ? `，默认模型 ${st.defaultModel}` : ''}`)
   if (!cfg.tapKey) console.warn('[eclipsis] TAP_KEY 未设置：上游入口会拒绝所有请求')
   if (!cfg.upstreamUrl) console.warn('[eclipsis] UPSTREAM_URL 未设置：上游入口返回 503')
   const db = openDb(cfg.dbPath)
@@ -175,8 +180,9 @@ function main() {
         ingestKey,
         dispatchConfig: {
           letoBaseUrl,
-          upstreamUrl: cfg.upstreamUrl,
-          upstreamKey: cfg.upstreamKey,
+          // 换站后立刻跟着走（不是启动时抄一份）
+          get upstreamUrl() { return cfg.upstreamUrl },
+          get upstreamKey() { return cfg.upstreamKey },
           fallbackModel: (process.env.LETO_MODEL || '').trim() || undefined,
           maxTokens: Number(process.env.LETO_MAX_TOKENS) || 2000,
           maxToolCalls: Number(process.env.LETO_MAX_TOOL_CALLS) || 12,

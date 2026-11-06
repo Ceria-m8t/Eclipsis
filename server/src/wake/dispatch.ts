@@ -14,6 +14,7 @@ import { inferUserState, type UserState } from './sources.ts'
 import { composeSystemPrompt } from '../prompts.ts'
 import { assembleSceneBlock } from '../assembler/index.ts'
 import { loadChatContinuation } from './continuation.ts'
+import { chooseModel } from '../station.ts'
 import { runWakeAgent } from './agent.ts'
 import { buildWakeBoxes } from './boxes.ts'
 import { inspectWakeControl } from './tools.ts'
@@ -393,7 +394,8 @@ function extractFact(content: string, outcome: WakeOutcome): string | undefined 
 export async function dispatchWake(opp: WakeOpportunity, db: DB, cfg: DispatchConfig): Promise<void> {
   // 接着最近一次聊天醒来；WAKE_CONTINUE_CHAT=0 关掉，退回旧做法
   const cont = process.env.WAKE_CONTINUE_CHAT === '0' ? null : loadChatContinuation(db)
-  const model = cfg.model || cont?.model || resolveModel(db)
+  // 换站后还没在新站聊过 → 新站的默认模型；聊过了就跟着聊天（station.chooseModel）
+  const model = cfg.model || chooseModel(db) || cont?.model || resolveModel(db)
   if (!model) {
     cfg.log('[wake-dispatch] 无可用模型（没有聊天记录且未配置 WAKE_MODEL），跳过')
     recordOutcome(db, opp.id, 'error', undefined, '无可用模型')
