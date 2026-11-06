@@ -523,6 +523,11 @@ export async function dispatchWake(opp: WakeOpportunity, db: DB, cfg: DispatchCo
 
 // ── 带工具的醒来（2026-11-06）──
 
+/** 去掉写在正文里的 [TRACE] / [SILENT] / [NO_ACTION] 标记 */
+export function stripMarkers(text: string): string {
+  return text.replace(/\[(TRACE|SILENT|NO_ACTION)\][ \t]*/g, '').replace(/\n{3,}/g, '\n\n').trim()
+}
+
 async function runWithTools(
   opp: WakeOpportunity, db: DB, cfg: DispatchConfig, model: string, messages: ChatMessage[],
   boxes: ReturnType<typeof buildWakeBoxes>, sleeping: boolean, threads: { id: string; text: string }[]
@@ -574,7 +579,8 @@ async function runWithTools(
     const body = stripThink(res.finalText)
     if (body === null) error = '思维链没有结束（回复被截断）'
     else if (body.startsWith(SILENT_PREFIX) || body.startsWith(NO_ACTION_PREFIX)) { /* 什么都不留 */ }
-    else if (body.startsWith(TRACE_PREFIX)) trace = body.slice(TRACE_PREFIX.length).trim() || undefined
+    // [TRACE] 写在中间也算（11-06 有一次写在一段话中间，标记被原样存进了念头）；存的时候去掉标记
+    else if (body.includes(TRACE_PREFIX)) trace = stripMarkers(body) || undefined
     else if (body) {
       if (sent.length === 0) {
         const r = await send(body)

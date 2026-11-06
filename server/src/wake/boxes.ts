@@ -163,7 +163,8 @@ export function buildWakeBoxes(db: DB, env: NodeJS.ProcessEnv = process.env): Wa
       boxes.push(mcpBox({
         id: 'leto', entryName: 'open_leto',
         entryDescription: '打开 Leto（和哈基米、ds、朋友们一起的社交空间）：看群和私聊、主动说话、刷朋友圈、逛岛。群里所有人都看得到你说的话，别把她的私事带出去。',
-        mcp: { baseUrl: (env.LETO_BASE_URL || 'https://leto.sarl').trim(), token: xiaoke.token, label: 'Leto' },
+        // 岛上做事（leto_island_act）一次走好几步，20 秒常常等不完（11-06 好几次超时），放宽到 60 秒
+        mcp: { baseUrl: (env.LETO_BASE_URL || 'https://leto.sarl').trim(), token: xiaoke.token, label: 'Leto', timeoutMs: 60_000 },
         allow: xiaoke.allowTool
       }))
     }

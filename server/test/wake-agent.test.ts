@@ -152,6 +152,14 @@ describe('dispatchWake 带工具', () => {
     assert.match(first.messages.at(-1).content, /发完这次醒来不会结束/)
   })
 
+  it('[TRACE] 写在一段话中间：整段当念头，标记去掉；没发过也不会当消息发出去', async () => {
+    const t = setup([{ content: '上一串还在跑，不重复提交了。\n\n[TRACE] 第五次醒来。镐坏了没修成。' }])
+    await t.run()
+    assert.equal(t.row().outcome, 'trace')
+    assert.equal(t.row().trace, '上一串还在跑，不重复提交了。\n\n第五次醒来。镐坏了没修成。')
+    assert.deepEqual(t.barks(), [])
+  })
+
   it('没调工具、直接写了话 → 照旧发给她', async () => {
     const t = setup([{ content: '在干嘛' }])
     await t.run()
