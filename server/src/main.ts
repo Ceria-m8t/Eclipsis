@@ -13,6 +13,7 @@ import { Recorder } from './recorder.ts'
 import { createTap, forwardHeaders, type Prepared } from './proxy.ts'
 import { stripWakeHistory, stripThinkHistory, stripOldImages } from './transforms.ts'
 import { handleApi } from './api.ts'
+import { handleLlmRelay } from './llm-relay.ts'
 import { ensureWakeSchema, WakeScheduler, dispatchWake, handleWakeApi } from './wake/index.ts'
 import {
   ensurePulseSchema, handlePulseApi, doTick as pulseTick,
@@ -22,7 +23,7 @@ import {
 } from './pulse/index.ts'
 import { assembleSceneBlock, injectSceneBlock, renderRecentGroupBlock } from './assembler/index.ts'
 import { renderRecentWakeBlock } from './wake/chat-block.ts'
-import { notifyXinchaoPresence } from './xinchao-client.ts'
+import { notifyXinchaoPresence, notifyXinchaoExchange } from './xinchao-client.ts'
 import { ensurePromptSchema, handlePromptApi } from './prompts.ts'
 import { handleLetoApi, handleLetoAdmin, loadAgents, type LetoApiDeps } from './leto/index.ts'
 
@@ -44,6 +45,8 @@ export interface ServerOptions {
   assembler?: boolean          // ASSEMBLER_ENABLED=1
   /** 她每发一条新消息时调用（用来通知心潮"她来了"） */
   onEricaMessage?: (text: string) => void
+  /** 一轮聊天说完时调用（把这一轮交给心潮判互动） */
+  onTurnComplete?: (her: string, his: string) => void
   /** Leto 入站端点依赖（未启用则为 null，端点会返回 503） */
   letoApi?: LetoApiDeps | null
   log?: (m: string, e?: unknown) => void
@@ -52,12 +55,13 @@ export interface ServerOptions {
 export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { front: Server; tap: Server } {
   ensurePromptSchema(db)
   const blobs = new BlobStore(db, cfg.blobDir)
-  const recorder = new Recorder(db, blobs, { onEricaMessage: opts.onEricaMessage })
+  const recorder = new Recorder(db, blobs, { onEricaMessage: opts.onEricaMessage, onTurnComplete: opts.onTurnComplete })
 
   // 前端出口：鉴权交给 Dylan（nginx 注入的网关 key 原样带过去）；本端口只监听 127.0.0.1
   const front = createTap({
     tap: 'front', name: 'front', recorder, headerTimeoutMs: cfg.headerTimeoutMs, log: opts.log,
     api: async (req, res) => {
+      if (await handleLlmRelay({ upstreamUrl: cfg.upstreamUrl, upstreamKey: cfg.upstreamKey, relayKey: (process.env.LLM_RELAY_KEY || '').trim() }, db, req, res, m => opts.log?.(m))) return true
       if (await handleWakeApi(db, req, res)) return true
       if (await handlePulseApi(db, req, res)) return true
       if (await handlePromptApi(db, req, res)) return true
@@ -194,6 +198,11 @@ function main() {
     stripThinkHistory: process.env.STRIP_THINK_HISTORY === '1',
     stripOldImages: process.env.STRIP_OLD_IMAGES === '1',
     assembler: process.env.ASSEMBLER_ENABLED === '1',
+    onTurnComplete: (() => {
+      const url = (process.env.XINCHAO_URL || '').trim()
+      if (!url || process.env.XINCHAO_EXCHANGE === '0') return undefined
+      return (her: string, his: string) => { void notifyXinchaoExchange(url, her, his) }
+    })(),
     onEricaMessage: (() => {
       const url = (process.env.XINCHAO_URL || '').trim()
       // 通知完立刻刷新心潮缓存，下一轮的「此刻」就是醒着的状态（不用等 2 分钟定时刷新）

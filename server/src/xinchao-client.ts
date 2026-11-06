@@ -95,4 +95,38 @@ export async function notifyXinchaoPresence(
 }
 
 /** 测试用 */
-export function resetPresenceThrottle(): void { lastPresenceAt = 0 }
+export function resetPresenceThrottle(): void { lastPresenceAt = 0; lastExchangeAt = 0 }
+
+// ── 「这一轮聊了什么」：一轮说完，把她的一句 + 他回的一段交给心潮，让心潮自己判互动类型和氛围 ──
+// （2026-11-07 Erica 定打开；心潮要 MODEL_ENABLED=true 才会判，它自己 8 分钟最多判一次，这里也按 8 分钟节流）
+// 正文只走这一跳：心潮判完即删，不落盘。
+
+let lastExchangeAt = 0
+
+export function buildExchangeText(her: string, his: string): string {
+  const flat = (s: string) => s.replace(/\s+/g, ' ').trim()
+  return `她说：${flat(her).slice(0, 500)} 他回：${flat(his).slice(0, 900)}`
+}
+
+export async function notifyXinchaoExchange(
+  baseUrl: string, her: string, his: string, opts: { minGapMs?: number; now?: number } = {}
+): Promise<boolean> {
+  const now = opts.now ?? Date.now()
+  if (now - lastExchangeAt < (opts.minGapMs ?? 8 * 60_000)) return false
+  lastExchangeAt = now
+  const token = (process.env.XINCHAO_TOKEN || '').trim()
+  const path = '/v1/conversation-event'
+  try {
+    const res = await fetch(baseUrl.replace(/\/+$/, '') + path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ event_id: `eclipsis:x:${now}`, exchange: buildExchangeText(her, his), recent: her.replace(/\s+/g, ' ').trim().slice(0, 120) }),
+      signal: AbortSignal.timeout(60_000)   // 心潮要调模型判，比"她来了"慢
+    })
+    if (!res.ok) { logFailure(path, `HTTP ${res.status}`); return false }
+    return true
+  } catch (e: any) {
+    logFailure(path, String(e?.message || e))
+    return false
+  }
+}

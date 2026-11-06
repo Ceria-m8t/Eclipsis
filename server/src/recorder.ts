@@ -44,6 +44,24 @@ export interface ExchangeCtx {
   startMs: number
   wake: boolean
   derive: boolean               // 是否从这次调用推出经历
+  /** 这一轮她说的话（最后一段连着的 user，含工具轮之前的那段），给心潮判互动用 */
+  herText?: string
+}
+
+/** 去掉 Kelivo/前端加的时间标记，只留她说的话 */
+export function cleanHerText(t: string): string {
+  return t.replace(/<current_time>[\s\S]*?<\/current_time>/g, '')
+    .replace(/^[（(]\d{4}-\d{2}-\d{2} \d{2}:\d{2}[）)]\s*/gm, '')
+    .trim()
+}
+
+/** 最后一段连着的 user 消息（工具轮时往前越过 assistant/tool 找） */
+export function lastHerTurn(messages: any[]): string {
+  let i = messages.length - 1
+  while (i >= 0 && messages[i]?.role !== 'user') i--
+  const parts: string[] = []
+  while (i >= 0 && messages[i]?.role === 'user') { parts.unshift(cleanHerText(textOf(messages[i].content))); i-- }
+  return parts.filter(Boolean).join('\n')
 }
 
 // 都是从收到请求起算的毫秒数
@@ -89,11 +107,14 @@ export class Recorder {
 
   /** 经历表里新写入了她的消息时调用（事务提交之后；重复/重新生成不会触发）。异常不影响记录 */
   onEricaMessage?: (text: string) => void
+  /** 一轮聊天正常说完（不是中途调工具）时调用：她说的、他回的。异常不影响记录 */
+  onTurnComplete?: (her: string, his: string) => void
 
-  constructor(db: DB, blobs: BlobStore, opts: { onEricaMessage?: (text: string) => void } = {}) {
+  constructor(db: DB, blobs: BlobStore, opts: { onEricaMessage?: (text: string) => void; onTurnComplete?: (her: string, his: string) => void } = {}) {
     this.db = db
     this.blobs = blobs
     this.onEricaMessage = opts.onEricaMessage
+    this.onTurnComplete = opts.onTurnComplete
   }
 
   start(input: StartInput): ExchangeCtx {
@@ -116,7 +137,8 @@ export class Recorder {
 
     const ctx: ExchangeCtx = {
       id: 0, tap: input.tap, rid: input.rid, linked: input.linked,
-      scene, conversation, turn, version, startedAt: now.toISOString(), startMs: now.getTime(), wake, derive
+      scene, conversation, turn, version, startedAt: now.toISOString(), startMs: now.getTime(), wake, derive,
+      herText: derive ? lastHerTurn(messages) : undefined
     }
     let newErica: string[] = []
     tx(this.db, () => {
@@ -215,6 +237,10 @@ export class Recorder {
         })
       }
     })
+    if (status === 'ok' && ctx.derive && ctx.herText && reply && !reply.toolCalls.length && this.onTurnComplete) {
+      const his = reply.content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
+      if (his) { try { this.onTurnComplete(ctx.herText, his) } catch { /* 通知失败不影响记录 */ } }
+    }
     return reply
   }
 
