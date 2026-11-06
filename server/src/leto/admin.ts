@@ -199,6 +199,7 @@ const PANEL_HTML = `<!doctype html><html lang="zh"><head><meta charset="utf-8">
  .st.on{border-color:#7a6a55;box-shadow:0 0 0 1px #7a6a55}
  .st b{font-size:14px} .st .tag{font-size:12px;background:#7a6a55;color:#fff;border-radius:6px;padding:1px 6px;margin-left:6px}
  .st button{font-size:13px;padding:5px 12px}
+ .row input{flex:1 1 160px;min-width:0} .row select{flex:1 1 220px;min-width:0;max-width:100%}
 </style></head><body>
 <h1>Leto Agent 面板</h1>
 <p class="hint">改完点保存就生效（应答器每次醒来重读）。会自动备份旧版（.bak-时间）。令牌和站点密钥只在这个登录后的页面显示。</p>
@@ -216,8 +217,11 @@ const PANEL_HTML = `<!doctype html><html lang="zh"><head><meta charset="utf-8">
  <input id="stKey" placeholder="密钥" size="22" autocomplete="off">
 </div>
 <div class="row">
- <input id="stModel" placeholder="默认模型名" size="30" list="stModels"><datalist id="stModels"></datalist>
+ <input id="stModel" placeholder="默认模型名（可以手打，也可以从下面选）" size="30">
  <button class="ghost" onclick="stFetchModels()">拉模型列表</button>
+</div>
+<div class="row" id="stModelRow" style="display:none">
+ <select id="stModelSel" onchange="if(this.value)document.getElementById('stModel').value=this.value"></select>
  <button onclick="stSave()">保存这个站</button>
  <button class="ghost" onclick="stClear()">清空</button>
 </div>
@@ -311,7 +315,7 @@ async function stLoad(){
   :'<p class="hint">还没存过站。现在用的是 backend.env 里那个；存第一个站时它会一起存进来，叫「原来的站」。</p>'
  window._st=d.stations
 }
-function stClear(){stEditing='';for(const k of ['stName','stUrl','stKey','stModel'])$(k).value='';$('stKey').placeholder='密钥'}
+function stClear(){stEditing='';for(const k of ['stName','stUrl','stKey','stModel'])$(k).value='';$('stKey').placeholder='密钥';$('stModelRow').style.display='none';$('stModelSel').innerHTML=''}
 function stEdit(id){const s=(window._st||[]).find(x=>x.id===id);if(!s)return;stEditing=id;$('stName').value=s.name;$('stUrl').value=s.url;$('stKey').value='';$('stKey').placeholder='密钥（留空 = 不改）';$('stModel').value=s.defaultModel||'';$('stName').focus()}
 async function stSave(){
  const body={id:stEditing||undefined,name:$('stName').value,url:$('stUrl').value,key:$('stKey').value,defaultModel:$('stModel').value}
@@ -323,8 +327,10 @@ async function stFetchModels(){
  $('stOut').textContent='拉模型列表中…'
  const r=await fetch(B+'/stations/models',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});const d=await r.json()
  if(!r.ok||d.error){$('stOut').textContent=d.error||'失败';return}
- $('stModels').innerHTML=d.models.map(m=>'<option value="'+esc(m)+'">').join('')
- $('stOut').textContent='拉到 '+d.models.length+' 个模型，点「默认模型」输入框就能选。'
+ const cur=$('stModel').value
+ $('stModelSel').innerHTML='<option value="">— 选一个模型（'+d.models.length+' 个）—</option>'+d.models.map(m=>'<option value="'+esc(m)+'"'+(m===cur?' selected':'')+'>'+esc(m)+'</option>').join('')
+ $('stModelRow').style.display=d.models.length?'flex':'none'
+ $('stOut').textContent='拉到 '+d.models.length+' 个模型，在下面的下拉框里选。'
 }
 async function stTest(id){
  const s=(window._st||[]).find(x=>x.id===id)
