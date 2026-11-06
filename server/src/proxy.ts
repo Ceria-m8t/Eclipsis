@@ -31,6 +31,8 @@ export interface TapOptions {
   prepare: (json: any | null, raw: Buffer) => Prepared
   recorder: Recorder | null
   headerTimeoutMs: number
+  /** 开始输出后连续多久没有任何字节就断开；不给 = 不限 */
+  streamIdleMs?: number
   api?: (req: IncomingMessage, res: ServerResponse) => boolean | Promise<boolean>   // 本地接口，返回 true 表示已处理，不转发
   log?: (msg: string, err?: unknown) => void
 }
@@ -179,9 +181,19 @@ export function createTap(opts: TapOptions): Server {
     const captured: Buffer[] = []
     let capturedSize = 0
     let streamError: string | undefined
+    // 2026-11-07：中转站回了响应头、吐了 232 字节就再没动静，xiaoke 只有一个 worker，被占了 10 分钟，后面的 roll 全排队超时（524）
+    let idle: ReturnType<typeof setTimeout> | undefined
+    let idleTimedOut = false
+    const armIdle = () => {
+      if (!opts.streamIdleMs) return
+      clearTimeout(idle)
+      idle = setTimeout(() => { idleTimedOut = true; ac.abort(new Error('上游流卡住')) }, opts.streamIdleMs)
+    }
     try {
       if (upstream.body) {
+        armIdle()
         for await (const chunk of upstream.body as any as AsyncIterable<Uint8Array>) {
+          armIdle()
           const buf = Buffer.from(chunk)
           if (ctx && capturedSize < MAX_CAPTURE) { captured.push(buf); capturedSize += buf.length }
           if (timing.firstTokenMs === null && watch.feed(buf)) timing.firstTokenMs = Date.now() - t0
@@ -190,8 +202,15 @@ export function createTap(opts: TapOptions): Server {
       }
       res.end()
     } catch (e: any) {
-      if (!clientGone) { streamError = `上游流中断：${e?.message || e}`; log(streamError) }
+      if (!clientGone) {
+        streamError = idleTimedOut
+          ? `上游 ${Math.round((opts.streamIdleMs ?? 0) / 1000)} 秒没有任何输出，已断开`
+          : `上游流中断：${e?.message || e}`
+        log(streamError)
+      }
       res.destroy()
+    } finally {
+      clearTimeout(idle)
     }
     finish({
       httpStatus: upstream.status, contentType: upstreamCt,

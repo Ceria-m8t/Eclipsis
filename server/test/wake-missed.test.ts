@@ -99,3 +99,42 @@ describe('醒来时告诉他错过了哪些', () => {
     } finally { delete process.env.WAKE_TOOLS }
   })
 })
+
+describe('她正在聊的时候不另外醒（2026-11-07）', () => {
+  function sched(db: DB) {
+    const woke: WakeOpportunity[] = []
+    const logs: string[] = []
+    const s = new WakeScheduler(db, { tickIntervalMs: 3_600_000, onWake: async o => { woke.push(o) }, log: m => logs.push(m) })
+    return { woke, logs, once: () => { s.start(); s.stop() } }
+  }
+  const herMsg = (db: DB, minAgo: number) => db.prepare(`INSERT INTO episodes(ts, channel, scope, actor, kind, content)
+    VALUES (?, 'chat', 'daily', 'erica', 'message', 'hi')`).run(new Date(Date.now() - minAgo * MIN).toISOString())
+  const primed = () => {
+    const db = freshDb()
+    // 累积已经过了门槛：这一 tick 一定触发
+    db.prepare('UPDATE wake_state SET h = 5, theta = 1 WHERE id = 1').run()
+    return db
+  }
+
+  it('累积到了、她 3 分钟前还在说话 → 不醒，累积清零重新攒', () => {
+    const db = primed(); herMsg(db, 3)
+    const t = sched(db); t.once()
+    assert.equal(t.woke.length, 0)
+    assert.ok(t.logs.some(l => l.includes('正在聊') && l.includes('不另外醒')))
+    assert.equal((db.prepare('SELECT h FROM wake_state').get() as any).h, 0)
+  })
+
+  it('她 20 分钟前说的话 → 照常醒', () => {
+    const db = primed(); herMsg(db, 20)
+    const t = sched(db); t.once()
+    assert.equal(t.woke.length, 1)
+  })
+
+  it('他自己定的闹钟不受影响：聊着天也照响', () => {
+    const db = freshDb(); herMsg(db, 1)
+    addAlarm(db, 'a', 1, '提醒她喝水')
+    const t = sched(db); t.once()
+    assert.equal(t.woke.length, 1)
+    assert.match(t.woke[0].reason, /提醒她喝水/)
+  })
+})

@@ -25,6 +25,8 @@ export interface WakeSchedulerConfig {
   /** 最长间隔（分钟）：距离上次说话/上次醒来超过这个就一定醒。在 [min, max] 之间随机，默认 150–180 */
   maxGapMinMinutes: number
   maxGapMaxMinutes: number
+  /** 她这么多分钟内说过话 = 正在聊，不另外自己醒（闹钟不受影响） */
+  chattingQuietMinutes: number
   /** 触发后的回调：调模型、推送等 */
   onWake: (opp: WakeOpportunity, db: DB) => Promise<void>
   log: (msg: string) => void
@@ -35,7 +37,8 @@ const DEFAULTS: Omit<WakeSchedulerConfig, 'onWake' | 'log'> = {
   xinchaoRefreshMs: 300_000,
   maxPerDay: 30,
   maxGapMinMinutes: 150,
-  maxGapMaxMinutes: 180
+  maxGapMaxMinutes: 180,
+  chattingQuietMinutes: 10
 }
 
 // ── 最长间隔（2026-11-03 Erica：最长不超过三小时）──
@@ -50,6 +53,13 @@ export function maxGapDeadline(anchor: Date, minMinutes: number, maxMinutes: num
   const u = h.readUInt32BE(0) / 0x1_0000_0000
   const minutes = minMinutes + u * Math.max(0, maxMinutes - minMinutes)
   return new Date(anchor.getTime() + minutes * 60_000)
+}
+
+/** 她最后一条消息的时间 */
+export function lastEricaMessageAt(db: DB): Date | null {
+  const row = db.prepare(`SELECT MAX(ts) AS t FROM episodes
+    WHERE retracted_at IS NULL AND channel IN ('chat', 'room') AND actor = 'erica' AND kind = 'message'`).get() as { t: string | null }
+  return row?.t ? new Date(row.t) : null
 }
 
 /** 最后一次聊天消息或醒来的时间；都没有返回 null */
@@ -164,6 +174,12 @@ export class WakeScheduler {
     saveState(this.db, result.state)
 
     if (result.triggered) {
+      // 2026-11-07 Erica 定：她正在聊（10 分钟内说过话）就不另外醒——聊天里的他就在，这次累积算用掉了，重新攒
+      const lastHer = lastEricaMessageAt(this.db)
+      if (lastHer && now.getTime() - lastHer.getTime() < this.cfg.chattingQuietMinutes * 60_000) {
+        this.cfg.log(`[wake] 累积到了，但她 ${Math.round((now.getTime() - lastHer.getTime()) / 60_000)} 分钟前还在说话（正在聊），不另外醒`)
+        return
+      }
       this.cfg.log(`[wake] 非精确触发 λ=${result.lambda.toFixed(3)} contributions=${JSON.stringify(
         result.contributions.filter(c => c.weighted > 0).map(c => `${c.sourceId}:${c.weighted.toFixed(2)}`)
       )}`)

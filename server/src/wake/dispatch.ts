@@ -561,6 +561,9 @@ async function runWithTools(
       sourceRef: sent.length === 0 ? `wake:msg:${opp.id}` : `wake:msg:${opp.id}:${sent.length + 1}`
     })
     sent.push(text)
+    // 发出去就记上，不等整次醒来结束：醒来还在跑（比如等重试）时她来聊天，聊天里的他也要看得到这条（11-07 02:40 那次就没看到）
+    db.prepare("UPDATE wake_opportunities SET outcome = 'message', content = ?, sent_messages = ? WHERE id = ?")
+      .run(sent.join('\n\n'), JSON.stringify(sent), opp.id)
     return { ok: true }
   }
 

@@ -7,6 +7,7 @@ export interface Config {
   upstreamKey: string     // 中转站密钥（换站改这个）
   tapKey: string          // xiaoke 调用上游入口时用的本地密钥（xiaoke 的 XIAOKE_UPSTREAM_KEY 填它）
   headerTimeoutMs: number // 等上游返回响应头的最长时间；开始流式输出后不再计时
+  streamIdleMs: number    // 开始输出以后，连续多久一个字节都没有就断开（中转站卡住时别一直占着 xiaoke）
   dbPath: string
   blobDir: string
 }
@@ -25,6 +26,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     upstreamKey: (env.UPSTREAM_KEY || '').trim(),
     tapKey: (env.TAP_KEY || '').trim(),
     headerTimeoutMs: num(env, 'HEADER_TIMEOUT_MS', 120_000),
+    streamIdleMs: num(env, 'STREAM_IDLE_TIMEOUT_MS', 90_000),
     dbPath: (env.DB_PATH || '/var/lib/eclipsis/eclipsis.sqlite').trim(),
     blobDir: (env.BLOB_DIR || '/var/lib/eclipsis/blobs').trim()
   }

@@ -106,12 +106,13 @@ describe('醒来设置箱子', () => {
 
 describe('dispatchWake 带工具', () => {
   type R = { content?: string; tools?: { name: string; args: Record<string, unknown> }[]; status?: number }
-  function setup(replies: R[], o: { barkStatus?: number } = {}) {
+  function setup(replies: R[], o: { barkStatus?: number; onModelCall?: (n: number) => void } = {}) {
     const db = openDb(':memory:'); ensureWakeSchema(db); ensurePromptSchema(db)
     let i = 0
     const up = fakeUpstream((req, res) => {
       if (req.url.startsWith('/bark')) { res.writeHead(o.barkStatus ?? 200); res.end('{}'); return }
       const r = replies[Math.min(i++, replies.length - 1)]
+      o.onModelCall?.(i)
       res.writeHead(r.status ?? 200, { 'content-type': 'application/json' })
       const tool_calls = r.tools?.map((t, k) => ({ id: `t${i}_${k}`, type: 'function', function: { name: t.name, arguments: JSON.stringify(t.args) } }))
       res.end(JSON.stringify({ choices: [{ message: { content: r.content ?? '', ...(tool_calls ? { tool_calls } : {}) }, finish_reason: tool_calls ? 'tool_calls' : 'stop' }] }))
@@ -158,6 +159,17 @@ describe('dispatchWake 带工具', () => {
     assert.equal(t.row().outcome, 'trace')
     assert.equal(t.row().trace, '上一串还在跑，不重复提交了。\n\n第五次醒来。镐坏了没修成。')
     assert.deepEqual(t.barks(), [])
+  })
+
+  it('发出去就记上：醒来还没结束时，聊天里的「你醒来时」已经看得到这条', async () => {
+    let blockDuringRun = ''
+    let dbRef: DB | undefined
+    // 第二次调模型时（发完了、醒来还没结束），看一眼聊天块
+    const t = setup([{ tools: [{ name: 'send_to_erica', args: { text: '快三点了还不睡' } }] }, { content: '[SILENT]' }],
+      { onModelCall: n => { if (n === 2) blockDuringRun = renderRecentWakeBlock(dbRef!) } })
+    dbRef = t.db
+    await t.run()
+    assert.match(blockDuringRun, /发给了她（推送到她手机.*：\n快三点了还不睡/)
   })
 
   it('没调工具、直接写了话 → 照旧发给她', async () => {

@@ -77,7 +77,7 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
 
   // 上游入口：只认 TAP_KEY；发给中转站时换成 UPSTREAM_KEY
   const tap = createTap({
-    tap: 'upstream', name: 'tap', recorder, headerTimeoutMs: cfg.headerTimeoutMs, log: opts.log,
+    tap: 'upstream', name: 'tap', recorder, headerTimeoutMs: cfg.headerTimeoutMs, streamIdleMs: cfg.streamIdleMs, log: opts.log,
     authorize: req => !!cfg.tapKey && safeEqual(bearer(req), cfg.tapKey),
     target: path => (cfg.upstreamUrl ? joinV1(cfg.upstreamUrl, path) : null),
     outgoingHeaders: req => {

@@ -49,7 +49,7 @@ before(async () => {
     ...loadConfig({}),
     dylanUrl: `http://127.0.0.1:${dylanPort}/v1`,
     upstreamUrl: `http://127.0.0.1:${stationPort}/v1`,
-    upstreamKey: STATION_KEY, tapKey: TAP_KEY, headerTimeoutMs: 5000,
+    upstreamKey: STATION_KEY, tapKey: TAP_KEY, headerTimeoutMs: 5000, streamIdleMs: 1500,
     dbPath: ':memory:', blobDir: tmp.dir
   }
   db = openDb(':memory:')
@@ -356,4 +356,24 @@ test('Dylan 不在：返回 502，记为 network_error', async () => {
     await settle()
     assert.equal(exchanges()[0].status, 'network_error')
   } finally { await close(s.front); await close(s.tap) }
+})
+
+test('中转站开始输出后卡住（只吐一点就没动静）→ 上游入口按时断开，记成网络错误', async () => {
+  stationReply = (_r, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.write(sseChunk({ content: '在' }))
+    // 之后再也不写、也不结束
+  }
+  const t0 = Date.now()
+  const r = await fetch(`http://127.0.0.1:${tapPort}/v1/chat/completions`, {
+    method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${TAP_KEY}` },
+    body: JSON.stringify({ model: 'm', stream: true, messages: [{ role: 'user', content: '在吗' }] })
+  })
+  await r.text().catch(() => '')   // 连接被入口断开
+  const waited = Date.now() - t0
+  assert.ok(waited >= 1400 && waited < 4000, `等了 ${waited}ms`)
+  await new Promise(res => setTimeout(res, 100))
+  const row = db.prepare("SELECT status, error FROM exchanges WHERE tap = 'upstream' ORDER BY id DESC LIMIT 1").get() as any
+  assert.equal(row.status, 'network_error')
+  assert.match(row.error, /2 秒没有任何输出，已断开/)
 })
