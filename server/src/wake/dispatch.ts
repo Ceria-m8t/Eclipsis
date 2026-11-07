@@ -346,7 +346,7 @@ function controlNote(db: DB, now = new Date()): string | undefined {
   } catch { return undefined }
 }
 
-const BOX_LABEL: Record<string, string> = { memory: '记忆库', xinchao: '心潮', leto: 'Leto', settings: '醒来设置' }
+const BOX_LABEL: Record<string, string> = { memory: '记忆库', xinchao: '心潮', leto: 'Leto', town: '迎风小镇', settings: '醒来设置' }
 
 /** 这次醒来之后她来说过话没有（说了就不用再补发醒来的消息了） */
 function ericaSpokeSince(db: DB, sinceIso: string): boolean {

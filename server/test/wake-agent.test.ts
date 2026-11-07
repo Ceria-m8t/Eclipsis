@@ -5,7 +5,7 @@ import { openDb, type DB } from '../src/db.ts'
 import { ensureWakeSchema } from '../src/wake/index.ts'
 import { ensurePromptSchema } from '../src/prompts.ts'
 import { runWakeAgent, SEND_TOOL } from '../src/wake/agent.ts'
-import { settingsBox, type WakeBox } from '../src/wake/boxes.ts'
+import { settingsBox, mcpBox, townBlock, buildWakeBoxes, type WakeBox } from '../src/wake/boxes.ts'
 import { dispatchWake, buildWakePrompt } from '../src/wake/dispatch.ts'
 import { renderRecentWakeBlock } from '../src/wake/chat-block.ts'
 import type { ModelResponse, ToolCall } from '../src/leto/responder.ts'
@@ -101,6 +101,33 @@ describe('醒来设置箱子', () => {
     const ins = JSON.parse((await box.call('wake_inspect', {})).text)
     assert.equal(ins.frequency.mode, 'low_frequency')
     assert.equal(ins.pendingAlarms.length, 1)
+  })
+})
+
+describe('迎风小镇箱子', () => {
+  it('配了 WAKE_MCP_TOWN_URL 才出现 open_town', () => {
+    const db = openDb(':memory:'); ensureWakeSchema(db)
+    assert.equal(buildWakeBoxes(db, {}).some(b => b.entryName === 'open_town'), false)
+    const box = buildWakeBoxes(db, { WAKE_MCP_TOWN_URL: 'https://crotown.example/mcp?token=x' }).find(b => b.id === 'town')
+    assert.equal(box?.entryName, 'open_town')
+  })
+
+  it('拦注销身份，不管写在 action、params 还是字符串里；查看和撤回照常放行', () => {
+    assert.ok(townBlock('enter_town', { destination: '身份', action: 'request_deletion' }))
+    assert.ok(townBlock('enter_town', { destination: '身份', params: { action: 'confirm_deletion' } }))
+    assert.ok(townBlock('enter_town', { direction: '身份:Request_Deletion' }))
+    assert.ok(townBlock('enter_town', { destination: '身份', action: '确认注销' }))
+    assert.equal(townBlock('enter_town', { destination: '身份', action: 'deletion_status' }), undefined)
+    assert.equal(townBlock('enter_town', { destination: '身份', action: 'reject_deletion' }), undefined)
+    assert.equal(townBlock('town_life', { destination: '留言板', action: 'post', params: { text: '今天不想注销，想种菜' } }), undefined)
+  })
+
+  it('被拦的动作不发请求', async () => {
+    // 地址连不上：要是真发了请求会报网络错，而不是拦下的那句话
+    const box = mcpBox({ id: 'town', entryName: 'open_town', entryDescription: '', mcp: { baseUrl: '', url: 'http://127.0.0.1:1/mcp', token: '', timeoutMs: 1000 }, block: townBlock })
+    const r = await box.call('enter_town', { destination: '身份', action: 'request_deletion' })
+    assert.equal(r.isError, true)
+    assert.match(r.text, /不能注销/)
   })
 })
 
