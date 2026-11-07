@@ -33,6 +33,8 @@ export interface TapOptions {
   headerTimeoutMs: number
   /** 开始输出后连续多久没有任何字节就断开；不给 = 不限 */
   streamIdleMs?: number
+  /** 中转站回 429 时先不告诉客户端，隔这些毫秒各自动重试一次；不给 = 不重试 */
+  retry429DelaysMs?: number[]
   api?: (req: IncomingMessage, res: ServerResponse) => boolean | Promise<boolean>   // 本地接口，返回 true 表示已处理，不转发
   log?: (msg: string, err?: unknown) => void
 }
@@ -147,25 +149,38 @@ export function createTap(opts: TapOptions): Server {
     let clientGone = false
     const timing: Timing = { ttfbMs: null, firstTokenMs: null, clientClosedMs: null, bytesOut: 0 }
     res.on('close', () => { if (!res.writableFinished) { clientGone = true; timing.clientClosedMs = Date.now() - t0; ac.abort() } })
-    const timer = setTimeout(() => ac.abort(new Error('上游响应头超时')), opts.headerTimeoutMs)
-
     let upstream: Response
-    try {
-      upstream = await fetch(target, {
-        method,
-        headers: opts.outgoingHeaders(req),
-        body: method === 'GET' || method === 'HEAD' ? undefined : new Uint8Array(prepared.body),
-        signal: ac.signal,
-        redirect: 'manual'
-      })
-    } catch (e: any) {
+    // 2026-11-07：中转站偶尔回 429（请求太多），他连着调工具时一被拒，Kelivo 那串工具就断了。
+    // 429 = 站点没处理这次请求，重试不会重复执行；隔几秒自己再试，客户端只觉得慢一点
+    const retryDelays = opts.retry429DelaysMs ?? []
+    for (let attempt = 0; ; attempt++) {
+      const timer = setTimeout(() => ac.abort(new Error('上游响应头超时')), opts.headerTimeoutMs)
+      try {
+        upstream = await fetch(target, {
+          method,
+          headers: opts.outgoingHeaders(req),
+          body: method === 'GET' || method === 'HEAD' ? undefined : new Uint8Array(prepared.body),
+          signal: ac.signal,
+          redirect: 'manual'
+        })
+      } catch (e: any) {
+        clearTimeout(timer)
+        const msg = clientGone ? 'client aborted' : `上游连接失败：${e?.cause?.message || e?.message || e}`
+        finish({ httpStatus: null, contentType: '', body: '', aborted: clientGone, networkError: clientGone ? undefined : msg, timing })
+        if (!clientGone) sendJson(res, 502, { error: { message: msg, type: 'upstream_error' } })
+        return
+      }
       clearTimeout(timer)
-      const msg = clientGone ? 'client aborted' : `上游连接失败：${e?.cause?.message || e?.message || e}`
-      finish({ httpStatus: null, contentType: '', body: '', aborted: clientGone, networkError: clientGone ? undefined : msg, timing })
-      if (!clientGone) sendJson(res, 502, { error: { message: msg, type: 'upstream_error' } })
-      return
+      if (upstream.status !== 429 || attempt >= retryDelays.length || clientGone) break
+      try { await upstream.body?.cancel() } catch { /* 丢掉这次的回包 */ }
+      const wait = retryDelays[attempt]
+      log(`[${opts.name}] 中转站 429，${Math.round(wait / 1000)} 秒后自动重试（第 ${attempt + 1} 次）`)
+      await new Promise(r => setTimeout(r, wait))
+      if (clientGone) {
+        finish({ httpStatus: 429, contentType: '', body: '', aborted: true, timing })
+        return
+      }
     }
-    clearTimeout(timer)
     timing.ttfbMs = Date.now() - t0
     const watch = new FirstTokenWatch()
 

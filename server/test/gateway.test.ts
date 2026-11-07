@@ -49,7 +49,7 @@ before(async () => {
     ...loadConfig({}),
     dylanUrl: `http://127.0.0.1:${dylanPort}/v1`,
     upstreamUrl: `http://127.0.0.1:${stationPort}/v1`,
-    upstreamKey: STATION_KEY, tapKey: TAP_KEY, headerTimeoutMs: 5000, streamIdleMs: 1500,
+    upstreamKey: STATION_KEY, tapKey: TAP_KEY, headerTimeoutMs: 5000, streamIdleMs: 1500, retry429DelaysMs: [50, 80],
     dbPath: ':memory:', blobDir: tmp.dir
   }
   db = openDb(':memory:')
@@ -376,4 +376,34 @@ test('中转站开始输出后卡住（只吐一点就没动静）→ 上游入�
   const row = db.prepare("SELECT status, error FROM exchanges WHERE tap = 'upstream' ORDER BY id DESC LIMIT 1").get() as any
   assert.equal(row.status, 'network_error')
   assert.match(row.error, /2 秒没有任何输出，已断开/)
+})
+
+test('中转站回 429 → 上游入口隔一会儿自己重试，客户端拿到的是重试成功的回复', async () => {
+  let n = 0
+  stationReply = (_r, res) => {
+    n++
+    if (n === 1) { res.writeHead(429, { 'content-type': 'application/json' }); res.end('{"error":{"message":"rate limited"}}'); return }
+    res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ choices: [{ message: { content: '在' }, finish_reason: 'stop' }] }))
+  }
+  const r = await fetch(`http://127.0.0.1:${tapPort}/v1/chat/completions`, {
+    method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${TAP_KEY}` },
+    body: JSON.stringify({ model: 'm', messages: [{ role: 'user', content: '在吗' }] })
+  })
+  assert.equal(r.status, 200)
+  assert.equal((await r.json() as any).choices[0].message.content, '在')
+  assert.equal(n, 2)
+  await new Promise(res => setTimeout(res, 50))
+  const row = db.prepare("SELECT status FROM exchanges WHERE tap = 'upstream' ORDER BY id DESC LIMIT 1").get() as any
+  assert.equal(row.status, 'ok')
+})
+
+test('一直 429 → 重试两次还不行，才把 429 交给客户端', async () => {
+  let n = 0
+  stationReply = (_r, res) => { n++; res.writeHead(429, { 'content-type': 'application/json' }); res.end('{"error":{"message":"rate limited"}}') }
+  const r = await fetch(`http://127.0.0.1:${tapPort}/v1/chat/completions`, {
+    method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${TAP_KEY}` },
+    body: JSON.stringify({ model: 'm', messages: [{ role: 'user', content: '在吗' }] })
+  })
+  assert.equal(r.status, 429)
+  assert.equal(n, 3)
 })
