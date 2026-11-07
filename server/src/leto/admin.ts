@@ -9,6 +9,60 @@ import { resolve, dirname } from 'node:path'
 import { loadAgentFile } from './agent.ts'
 import { probeStation } from './station-check.ts'
 import { listStations, saveStation, deleteStation, switchStation, findStation, currentStation } from '../station.ts'
+import type { DB } from '../db.ts'
+import { loadChatContinuation } from '../wake/continuation.ts'
+import { FirstTokenWatch } from '../proxy.ts'
+
+// ── 测速（2026-11-07）：用真实大小的上下文（最近一次聊天）发一次，看多少秒开始回 ──
+// 自检只用一句话，测不出"带 18 万 token 时慢不慢"（刺猬站小请求 30 秒、真实聊天超过 100 秒被 Cloudflare 掐成 524）。
+// 后台跑，面板轮询结果：测速可能要两分钟，网页请求别一直挂着。收到第一个字就断开，不等它说完。
+export interface SpeedResult {
+  state: 'running' | 'done'
+  station: string
+  model: string
+  contextChars: number
+  messages: number
+  /** 中转站开始回应（响应头）用了多久 */
+  headersMs?: number
+  /** 第一个字出来用了多久 */
+  firstTokenMs?: number
+  ok?: boolean
+  detail?: string
+  startedAt: number
+}
+const speedTests = new Map<string, SpeedResult>()
+
+export async function runSpeedTest(r: SpeedResult, url: string, key: string, messages: any[], timeoutMs = 150_000): Promise<void> {
+  const t0 = Date.now()
+  const ac = new AbortController()
+  const timer = setTimeout(() => ac.abort(), timeoutMs)
+  try {
+    const res = await fetch(url.replace(/\/+$/, '') + '/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+      body: JSON.stringify({ model: r.model, messages, max_tokens: 50, stream: true }),
+      signal: ac.signal
+    })
+    r.headersMs = Date.now() - t0
+    if (!res.ok) { r.ok = false; r.detail = `HTTP ${res.status}：${(await res.text()).slice(0, 200)}`; return }
+    const watch = new FirstTokenWatch()
+    for await (const chunk of res.body as any as AsyncIterable<Uint8Array>) {
+      if (watch.feed(Buffer.from(chunk))) { r.firstTokenMs = Date.now() - t0; break }
+    }
+    ac.abort()
+    if (r.firstTokenMs === undefined) { r.ok = false; r.detail = '回应了，但一个字都没出就结束了'; return }
+    const s = r.firstTokenMs / 1000
+    r.ok = s < 90
+    r.detail = s < 30 ? '快，放心用' : s < 60 ? '能用，偶尔会慢' : s < 90 ? '偏慢，长聊天容易超时' : '太慢，经过 Cloudflare 会 524（它只等 100 秒）'
+  } catch (e: any) {
+    if (r.firstTokenMs !== undefined) return
+    r.ok = false
+    r.detail = ac.signal.aborted ? `${Math.round(timeoutMs / 1000)} 秒还没出字，太慢（经过 Cloudflare 一定 524）` : `连不上：${e?.cause?.message || e?.message || e}`
+  } finally {
+    clearTimeout(timer)
+    r.state = 'done'
+  }
+}
 
 /** 列出站上的模型名（GET /models），帮她挑默认模型 */
 async function listStationModels(url: string, key: string): Promise<string[]> {
@@ -69,7 +123,7 @@ function declaredFiles(): Set<string> {
 }
 
 /** 返回 true 表示这里处理了。路径前缀 /v1/eclipsis/leto-admin/ */
-export async function handleLetoAdmin(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+export async function handleLetoAdmin(req: IncomingMessage, res: ServerResponse, db?: DB): Promise<boolean> {
   const url = new URL(req.url || '/', 'http://local')
   const path = url.pathname
   const BASE = '/v1/eclipsis/leto-admin'
@@ -152,6 +206,31 @@ export async function handleLetoAdmin(req: IncomingMessage, res: ServerResponse)
       const model = String(b.model || st?.defaultModel || '')
       if (!model) { json(res, 400, { error: '要选一个模型来自检（或者先给这个站填默认模型）' }); return true }
       json(res, 200, await probeStation(u, k, model))
+      return true
+    }
+    if (route === 'stations/speed' && req.method === 'POST') {
+      if (!db) { json(res, 500, { error: '没接数据库' }); return true }
+      const b = JSON.parse(await readBody(req))
+      const st = findStation(String(b.id || ''))
+      if (!st) { json(res, 400, { error: '要选一个存过的站' }); return true }
+      const model = String(b.model || st.defaultModel || '')
+      if (!model) { json(res, 400, { error: '这个站还没填默认模型' }); return true }
+      const cont = loadChatContinuation(db, { maxAgeHours: 24 * 30 })
+      if (!cont) { json(res, 400, { error: '还没有聊天记录，拿不到真实大小的上下文' }); return true }
+      const messages = [{ role: 'system', content: cont.system }, ...cont.history, { role: 'user', content: '（这是测速，不用认真回，回一个字就行）' }]
+      const contextChars = messages.reduce((n, m) => n + (typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content).length), 0)
+      const testId = `t${Date.now().toString(36)}`
+      const r: SpeedResult = { state: 'running', station: st.name, model, contextChars, messages: messages.length, startedAt: Date.now() }
+      speedTests.set(testId, r)
+      for (const [k, v] of speedTests) if (Date.now() - v.startedAt > 30 * 60_000) speedTests.delete(k)
+      void runSpeedTest(r, st.url, st.key, messages)
+      json(res, 200, { testId, ...r })
+      return true
+    }
+    if (route.startsWith('stations/speed/') && req.method === 'GET') {
+      const r = speedTests.get(route.slice('stations/speed/'.length))
+      if (!r) { json(res, 404, { error: '找不到这次测速（可能后端重启过）' }); return true }
+      json(res, 200, r)
       return true
     }
     if (route === 'stations/current' && req.method === 'GET') {
@@ -310,7 +389,7 @@ async function stLoad(){
   return '<div class="st'+(on?' on':'')+'"><b>'+esc(s.name)+'</b>'+(on?'<span class="tag">正在用</span>':'')+
   '<div class="hint">'+esc(s.url)+'　密钥 '+esc(s.key)+'　默认模型 '+esc(s.defaultModel||'（没填）')+'</div><div class="row">'+
   (on?'':'<button '+a+' onclick="stSwitch(this.dataset.id)">切过去</button>')+
-  '<button class="ghost" '+a+' onclick="stTest(this.dataset.id)">自检</button><button class="ghost" '+a+' onclick="stEdit(this.dataset.id)">修改</button>'+
+  '<button class="ghost" '+a+' onclick="stTest(this.dataset.id)">自检</button><button class="ghost" '+a+' onclick="stSpeed(this.dataset.id)">测速</button><button class="ghost" '+a+' onclick="stEdit(this.dataset.id)">修改</button>'+
   (on?'':'<button class="ghost" '+a+' onclick="stDel(this.dataset.id)">删除</button>')+'</div></div>'}).join('')
   :'<p class="hint">还没存过站。现在用的是 backend.env 里那个；存第一个站时它会一起存进来，叫「原来的站」。</p>'
  window._st=d.stations
@@ -340,6 +419,20 @@ async function stTest(id){
  const r=await fetch(B+'/stations/test',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({id,model})});const d=await r.json()
  if(!r.ok){$('stOut').textContent=d.error||'失败';return}
  $('stOut').innerHTML='「'+esc(s?s.name:'')+'」连得上: '+(d.reachable?'是':'否')+' ｜ 模型在: '+(d.modelOk?'是':'否')+' ｜ 转工具: '+(d.toolsOk?'是':'否')+'<br>'+(d.ok?'✅ 可以用（醒来和 Leto 要转工具，这个站转）':'❌ '+esc(d.detail))
+}
+async function stSpeed(id){
+ const s=(window._st||[]).find(x=>x.id===id);if(!s)return
+ let model=s.defaultModel
+ if(!model){model=prompt('这个站还没填默认模型。用哪个模型测速？');if(!model)return}
+ if(!confirm('用你们最近一次聊天的完整上下文测一次「'+s.name+'」，看多少秒开始回。\\n会花掉差不多一次聊天的额度。测吗？'))return
+ const r=await fetch(B+'/stations/speed',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({id,model})});const d=await r.json()
+ if(!r.ok){$('stOut').textContent=d.error||'失败';return}
+ const show=x=>{const sec=v=>v===undefined?'—':(v/1000).toFixed(1)+' 秒'
+  const head='「'+esc(x.station)+'」测速（上下文 '+Math.round(x.contextChars/10000)+' 万字、'+x.messages+' 条）'
+  if(x.state==='running'){$('stOut').textContent=head+'：测着呢，已经 '+Math.round((Date.now()-x.startedAt)/1000)+' 秒…';return false}
+  $('stOut').innerHTML=head+'<br>开始回应 '+sec(x.headersMs)+' ｜ 出第一个字 '+sec(x.firstTokenMs)+'<br>'+(x.ok?'✅ ':'❌ ')+esc(x.detail);return true}
+ show(d)
+ const timer=setInterval(async()=>{const q=await fetch(B+'/stations/speed/'+d.testId);const x=await q.json();if(!q.ok){clearInterval(timer);$('stOut').textContent=x.error||'失败';return}if(show(x))clearInterval(timer)},2000)
 }
 async function stSwitch(id){
  const name=((window._st||[]).find(x=>x.id===id)||{}).name||''

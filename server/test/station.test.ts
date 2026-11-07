@@ -162,3 +162,79 @@ describe('管理面板的换站接口', () => {
     } finally { await p.done(); await close(st.server) }
   })
 })
+
+describe('测速', async () => {
+  const { runSpeedTest } = await import('../src/leto/admin.ts')
+  const base = () => ({ state: 'running' as const, station: 'T', model: 'm', contextChars: 0, messages: 0, startedAt: Date.now() })
+
+  it('出第一个字就停，记下开始回应和出字的时间', async () => {
+    const st = fakeUpstream((_r, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' })
+      setTimeout(() => res.write('data: {"choices":[{"delta":{"content":"好"}}]}\n\n'), 200)
+      // 不结束：测速应该自己断开
+    })
+    const p = await listen(st.server)
+    try {
+      const r: any = base()
+      await runSpeedTest(r, `http://127.0.0.1:${p}/v1`, 'k', [{ role: 'user', content: 'x' }])
+      assert.equal(r.state, 'done')
+      assert.equal(r.ok, true)
+      assert.ok(r.firstTokenMs >= 150 && r.firstTokenMs < 2000, String(r.firstTokenMs))
+      assert.match(r.detail, /快/)
+      assert.equal(JSON.parse(st.seen[0].body).stream, true)
+    } finally { await close(st.server) }
+  })
+
+  it('到时间还没出字 → 太慢；站报错 → 带上原因', async () => {
+    const slow = fakeUpstream((_r, res) => { res.writeHead(200, { 'content-type': 'text/event-stream' }) })
+    const bad = fakeUpstream((_r, res) => { res.writeHead(429, { 'content-type': 'application/json' }); res.end('{"error":"rate"}') })
+    const ps = await listen(slow.server), pb = await listen(bad.server)
+    try {
+      const r1: any = base()
+      await runSpeedTest(r1, `http://127.0.0.1:${ps}/v1`, 'k', [], 500)
+      assert.equal(r1.ok, false)
+      assert.match(r1.detail, /还没出字，太慢/)
+      const r2: any = base()
+      await runSpeedTest(r2, `http://127.0.0.1:${pb}/v1`, 'k', [])
+      assert.equal(r2.ok, false)
+      assert.match(r2.detail, /HTTP 429/)
+    } finally { await close(slow.server); await close(bad.server) }
+  })
+
+  it('面板接口：用最近一次聊天的上下文开测，轮询拿结果；没有聊天记录时说清楚', async () => {
+    const st = fakeUpstream((_r, res) => { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end('data: {"choices":[{"delta":{"content":"好"}}]}\n\n') })
+    const sp = await listen(st.server)
+    const db = openDb(':memory:')
+    const srv = createServer((req, res) => { void handleLetoAdmin(req, res, db) })
+    const port = await listen(srv)
+    const call = (method: string, route: string, body?: any) => fetch(`http://127.0.0.1:${port}/v1/eclipsis/leto-admin/${route}`, {
+      method, headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined
+    }).then(async r => ({ status: r.status, data: await r.json() as any }))
+    try {
+      const s = saveStation({ name: 'T', url: `http://127.0.0.1:${sp}/v1`, key: 'tk-0000000', defaultModel: 'm' })
+      const none = await call('POST', 'stations/speed', { id: s.id })
+      assert.equal(none.status, 400)
+      assert.match(none.data.error, /还没有聊天记录/)
+
+      // 放一次聊天进去
+      const put = db.prepare('INSERT OR IGNORE INTO blobs(hash, kind, mime, size, text, created_at) VALUES (?, ?, NULL, ?, ?, ?)')
+      const msgs = [{ role: 'system', content: '提示词' }, { role: 'user', content: '在吗' }]
+      const { sha256 } = await import('../src/blobs.ts')
+      const hashes = msgs.map(m => { const t = JSON.stringify(m); const h = sha256(t); put.run(h, 'message', t.length, t, new Date().toISOString()); return h })
+      db.prepare(`INSERT INTO exchanges(rid, tap, started_at, status, path, model, message_hashes, finish_reason, reply_content)
+        VALUES ('r', 'upstream', ?, 'ok', '/v1/chat/completions', 'm', ?, 'stop', '在')`).run(new Date().toISOString(), JSON.stringify(hashes))
+
+      const started = await call('POST', 'stations/speed', { id: s.id })
+      assert.equal(started.status, 200)
+      assert.equal(started.data.messages, 4)   // system + 在吗 + 在 + 测速说明
+      let r = started.data
+      for (let i = 0; i < 50 && r.state !== 'done'; i++) { await new Promise(x => setTimeout(x, 20)); r = (await call('GET', `stations/speed/${started.data.testId}`)).data }
+      assert.equal(r.state, 'done')
+      assert.equal(r.ok, true)
+      const sent = JSON.parse(st.seen[0].body)
+      assert.equal(sent.messages[0].content, '提示词')
+      assert.match(sent.messages.at(-1).content, /测速/)
+      assert.equal(st.seen[0].headers.authorization, 'Bearer tk-0000000')
+    } finally { await close(srv); await close(st.server) }
+  })
+})

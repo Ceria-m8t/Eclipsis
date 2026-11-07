@@ -67,7 +67,7 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
       if (await handlePulseApi(db, req, res)) return true
       if (await handlePromptApi(db, req, res)) return true
       if (await handleLetoApi(opts.letoApi ?? null, db, req, res)) return true
-      if (process.env.LETO_ADMIN_ENABLED === '1' && await handleLetoAdmin(req, res)) return true
+      if (process.env.LETO_ADMIN_ENABLED === '1' && await handleLetoAdmin(req, res, db)) return true
       return handleApi(db, req, res)
     },
     authorize: () => true,
