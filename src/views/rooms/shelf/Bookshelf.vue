@@ -562,14 +562,16 @@ const animSpineLabel = computed(() => anim.value ? (void fontsReady.value, spine
               class="clasp"
               :style="{ left: `${anim.look.clasp.box.x * 100}%`, top: `${anim.look.clasp.box.y * 100}%`, width: `${anim.look.clasp.box.w * 100}%`, height: `${anim.look.clasp.box.h * 100}%`, '--clasp': `url(${ASSET + anim.look.clasp.file})`, '--ct': `${claspT(anim)}px` }"
             >
-              <div
+              <img
                 v-for="k in CLASP_LAYERS"
                 :key="k"
                 class="clasp-edge"
+                :src="ASSET + anim.look.clasp.edge.file"
+                alt=""
                 :style="{ transform: `translateZ(calc(var(--ct) * ${(k / (CLASP_LAYERS + 1) - 0.5).toFixed(3)}))` }"
-              ></div>
+              />
               <img class="face clasp-front" :src="ASSET + anim.look.clasp.file" alt="" />
-              <div class="face clasp-back"></div>
+              <img class="face clasp-back" :src="ASSET + anim.look.clasp.back.file" alt="" />
             </div>
             <div ref="cover" class="cover">
               <div class="face cf">
@@ -859,21 +861,9 @@ const animSpineLabel = computed(() => anim.value ? (void fontsReady.value, spine
   transform: translateZ(calc(var(--ct) / 2));
   filter: drop-shadow(-1px 1px 1.2px rgba(0, 0, 0, 0.55));
 }
-/* 背面：皮扣内侧是没有金属件的素皮子（11-09 用正面压暗，翻开后扣子像朝里） */
-.clasp-back {
-  transform: rotateY(180deg) translateZ(calc(var(--ct) / 2));
-  background:
-    repeating-linear-gradient(115deg, rgba(255, 255, 255, 0.04) 0 2px, rgba(0, 0, 0, 0.05) 2px 4px),
-    linear-gradient(#5a3c22, #3b2715 70%, #2c1d10);
-  -webkit-mask: var(--clasp) center / 100% 100% no-repeat;
-  mask: var(--clasp) center / 100% 100% no-repeat;
-}
-/* 中间几层：皮子侧边的颜色，斜着看时连成一条边 */
-.clasp-edge {
-  background: linear-gradient(#7a5528, #4a3016 60%, #2e1e0e);
-  -webkit-mask: var(--clasp) center / 100% 100% no-repeat;
-  mask: var(--clasp) center / 100% 100% no-repeat;
-}
+/* 背面：皮扣内侧是没有金属件的素皮子；中间几层是皮子侧边，斜着看时连成一条边。
+   都是和正面同轮廓的图（books.py 生成），不用 CSS 遮罩：iOS 上翻过来的 3D 元素遮罩会失效，成了方口 */
+.clasp-back { transform: rotateY(180deg) translateZ(calc(var(--ct) / 2)); }
 .cover {
   position: absolute;
   left: 0; top: 0; width: var(--W); height: var(--H);

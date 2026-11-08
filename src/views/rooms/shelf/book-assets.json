@@ -227,6 +227,12 @@
     "y": 0.4575,
     "w": 0.2198,
     "h": 0.1013
+   },
+   "back": {
+    "file": "main-clasp-back.webp?v=9e89d82b"
+   },
+   "edge": {
+    "file": "main-clasp-edge.webp?v=10642b9f"
    }
   }
  },
