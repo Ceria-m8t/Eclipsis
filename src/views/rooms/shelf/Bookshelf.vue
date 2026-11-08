@@ -153,6 +153,9 @@ function safeTop(): number {
   return v
 }
 const anim = ref<Anim | null>(null)
+// 书是不是翻开着：合着的时候书里面那几面（封底里面、封面里面、书页背面）直接藏起来。
+// iOS Safari 在一层套一层的 3D 里常常不管 backface-visibility，合着时它们会从书脊旁边露出来（11-09 像一页纸腾空）
+const bookOpen = ref(false)
 const hiddenKey = ref<string | null>(null)
 const busy = ref(false)
 
@@ -310,6 +313,7 @@ async function openItem(it: Placed) {
   // 2.5 有皮扣的先解开
   if (clasp.value) await play(clasp.value, [{ transform: CLASP_CLOSED(a) }, { transform: CLASP_OPEN(a) }], 420, 'cubic-bezier(.4,.1,.3,1)')
   // 3. 掀开封面（书往右挪半本，摊开后两页居中）
+  bookOpen.value = true
   await Promise.all([
     play(turner.value, [{ transform: 'translateX(0px) rotateY(0deg)' }, { transform: `translateX(${W / 2}px) rotateY(0deg)` }], 620),
     play(cover.value, [{ transform: COVER_CLOSED(a) }, { transform: COVER_OPEN(a) }], 620, 'cubic-bezier(.5,.1,.3,1)')
@@ -339,6 +343,7 @@ async function closeBook(after?: () => void) {
     play(turner.value, [{ transform: `translateX(${a.W / 2}px) rotateY(0deg)` }, { transform: 'translateX(0px) rotateY(0deg)' }], 560),
     play(cover.value, [{ transform: COVER_OPEN(a) }, { transform: COVER_CLOSED(a) }], 560, 'cubic-bezier(.5,.1,.3,1)')
   ])
+  bookOpen.value = false
   if (clasp.value) await play(clasp.value, [{ transform: CLASP_OPEN(a) }, { transform: CLASP_CLOSED(a) }], 360, 'cubic-bezier(.5,.1,.3,1)')
   const target = shelfTransform(key, a)
   await Promise.all([
@@ -350,6 +355,7 @@ async function closeBook(after?: () => void) {
 }
 
 function finish() {
+  bookOpen.value = false
   hiddenKey.value = null
   anim.value = null
   editing.value = null
@@ -513,7 +519,7 @@ const animSpineLabel = computed(() => anim.value ? (void fontsReady.value, spine
     </div>
 
     <!-- 拿出来的那本（3D） -->
-    <div v-if="anim" class="stage3d" :style="{ '--W': `${anim.W}px`, '--H': `${anim.H}px`, '--T': `${anim.T}px`, '--u': `${anim.u}px`, '--px': `${anim.px}px`, '--pt': `${anim.pt}px` }">
+    <div v-if="anim" class="stage3d" :class="{ open: bookOpen }" :style="{ '--W': `${anim.W}px`, '--H': `${anim.H}px`, '--T': `${anim.T}px`, '--u': `${anim.u}px`, '--px': `${anim.px}px`, '--pt': `${anim.pt}px` }">
       <div ref="backdrop" class="backdrop"></div>
       <div ref="flyer" class="flyer">
         <div ref="turner" class="turner">
@@ -761,6 +767,9 @@ const animSpineLabel = computed(() => anim.value ? (void fontsReady.value, spine
   filter: brightness(0.7);
   border-radius: 3px;
 }
+.stage3d:not(.open) .f-inback,
+.stage3d:not(.open) .cb,
+.stage3d:not(.open) .lb { visibility: hidden; }
 .f-inback {
   left: 0; top: 0; width: var(--W); height: var(--H);
   transform: translateZ(calc(var(--T) / -2 + 0.6px));
