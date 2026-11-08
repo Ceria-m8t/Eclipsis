@@ -1,7 +1,7 @@
 {
  "spines": [
   {
-   "file": "spine-0.webp",
+   "file": "spine-0.webp?v=81df0e87",
    "w": 120,
    "h": 513,
    "label": {
@@ -17,7 +17,7 @@
    ]
   },
   {
-   "file": "spine-1.webp",
+   "file": "spine-1.webp?v=a825bc6c",
    "w": 86,
    "h": 432,
    "label": {
@@ -33,7 +33,7 @@
    ]
   },
   {
-   "file": "spine-2.webp",
+   "file": "spine-2.webp?v=34f7f87b",
    "w": 100,
    "h": 520,
    "label": {
@@ -49,7 +49,7 @@
    ]
   },
   {
-   "file": "spine-3.webp",
+   "file": "spine-3.webp?v=0da319f8",
    "w": 97,
    "h": 432,
    "label": {
@@ -65,7 +65,7 @@
    ]
   },
   {
-   "file": "spine-4.webp",
+   "file": "spine-4.webp?v=932bf95e",
    "w": 101,
    "h": 520,
    "label": {
@@ -81,7 +81,7 @@
    ]
   },
   {
-   "file": "spine-5.webp",
+   "file": "spine-5.webp?v=1d60ca6d",
    "w": 91,
    "h": 432,
    "label": {
@@ -97,7 +97,7 @@
    ]
   },
   {
-   "file": "spine-6.webp",
+   "file": "spine-6.webp?v=84bd46f7",
    "w": 108,
    "h": 517,
    "label": {
@@ -113,7 +113,7 @@
    ]
   },
   {
-   "file": "spine-7.webp",
+   "file": "spine-7.webp?v=d2c0adbe",
    "w": 80,
    "h": 423,
    "label": {
@@ -131,7 +131,7 @@
  ],
  "covers": [
   {
-   "file": "cover-0.webp",
+   "file": "cover-0.webp?v=384b99fa",
    "w": 358,
    "h": 552,
    "label": {
@@ -147,7 +147,7 @@
    ]
   },
   {
-   "file": "cover-1.webp",
+   "file": "cover-1.webp?v=bc6618b5",
    "w": 348,
    "h": 552,
    "label": {
@@ -163,7 +163,7 @@
    ]
   },
   {
-   "file": "cover-2.webp",
+   "file": "cover-2.webp?v=99b1e3aa",
    "w": 349,
    "h": 552,
    "label": {
@@ -179,7 +179,7 @@
    ]
   },
   {
-   "file": "cover-3.webp",
+   "file": "cover-3.webp?v=014a2ab2",
    "w": 362,
    "h": 552,
    "label": {
@@ -197,7 +197,7 @@
  ],
  "main": {
   "spine": {
-   "file": "main-spine.webp",
+   "file": "main-spine.webp?v=634d5264",
    "w": 206,
    "h": 700,
    "label": {
@@ -208,7 +208,7 @@
    }
   },
   "cover": {
-   "file": "main-cover.webp",
+   "file": "main-cover.webp?v=4ff9aba4",
    "w": 642,
    "h": 900,
    "label": {
@@ -219,7 +219,7 @@
    }
   },
   "clasp": {
-   "file": "main-clasp.webp",
+   "file": "main-clasp.webp?v=4c263ce7",
    "w": 155,
    "h": 89,
    "box": {
@@ -232,33 +232,33 @@
  },
  "endpapers": [
   {
-   "file": "endpaper-0.webp",
+   "file": "endpaper-0.webp?v=d81dfc63",
    "w": 356,
    "h": 564
   },
   {
-   "file": "endpaper-1.webp",
+   "file": "endpaper-1.webp?v=86946ef2",
    "w": 352,
    "h": 564
   },
   {
-   "file": "endpaper-2.webp",
+   "file": "endpaper-2.webp?v=2639dde1",
    "w": 351,
    "h": 564
   },
   {
-   "file": "endpaper-3.webp",
+   "file": "endpaper-3.webp?v=ec95b4d7",
    "w": 357,
    "h": 564
   }
  ],
  "mainEndpaper": {
-  "file": "main-endpaper.webp",
+  "file": "main-endpaper.webp?v=8fa76d82",
   "w": 593,
   "h": 900
  },
  "shelf": {
-  "file": "shelf.webp",
+  "file": "shelf.webp?v=b5d15567",
   "w": 815,
   "h": 1772,
   "shelfLines": [
@@ -465,12 +465,12 @@
   ]
  },
  "page_rococo": {
-  "file": "page-rococo.webp",
+  "file": "page-rococo.webp?v=a49afb46",
   "w": 1251,
   "h": 1877
  },
  "page_main": {
-  "file": "page-main.webp",
+  "file": "page-main.webp?v=7aa9cd53",
   "w": 1309,
   "h": 1745
  }
