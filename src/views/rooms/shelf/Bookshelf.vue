@@ -16,7 +16,7 @@ import { useRouter } from 'vue-router'
 import BookPage from './BookPage.vue'
 import {
   ASSET, SHELF_IMG, MAIN_LOOK, worldLook, loadWorldbook, saveWorldbook, spineTitle, coverTitle,
-  BOOK_FONTS, loadBookFont, saveBookFont, type BookLook, type WorldbookEntry
+  loadBookFont, type BookLook, type WorldbookEntry
 } from './books'
 import { loadPrompt, savePrompt } from '../../../prompt-store'
 
@@ -29,13 +29,8 @@ const NEW_TITLE = '新的一本'
 const entries = ref<WorldbookEntry[]>(loadWorldbook())
 const mainText = ref(loadPrompt().main)
 
-// ── 书名字体 ──
-const font = ref(loadBookFont())
-function nextFont() {
-  const i = BOOK_FONTS.findIndex(f => f.id === font.value.id)
-  font.value = BOOK_FONTS[(i + 1) % BOOK_FONTS.length]
-  saveBookFont(font.value.id)
-}
+// ── 书名字体（在设置页「外观」里选）──
+const font = loadBookFont()
 
 // ── 摆书 ──
 // 书架图里的位置（比例）：books.py 量出来的搁板亮带，书底贴着它
@@ -135,6 +130,19 @@ interface Anim {
   look: BookLook
   W: number; H: number; T: number
   title: string
+  /** 编辑页上的 1px 在书页上是多少 px（= 1 / 推近倍数），书页上的字按它缩 */
+  u: number
+  /** 书页上字的左右边距、上边距（px，书页自己的坐标），和编辑页对齐 */
+  px: number; pt: number
+}
+
+function safeTop(): number {
+  const d = document.createElement('div')
+  d.style.cssText = 'position:fixed;visibility:hidden;padding-top:env(safe-area-inset-top)'
+  document.body.appendChild(d)
+  const v = parseFloat(getComputedStyle(d).paddingTop) || 0
+  d.remove()
+  return v
 }
 const anim = ref<Anim | null>(null)
 const hiddenKey = ref<string | null>(null)
@@ -183,17 +191,23 @@ function shelfTransform(key: string, a: Anim): { t: string; s: number; r?: DOMRe
   return { t: `translate(${r.left + r.width / 2 - v.cx}px, ${r.top + r.height / 2 - v.cy}px) scale(${s})`, s, r }
 }
 
-function zoomTransform(a: Anim) {
+function zoomScale(W: number, H: number) {
   const v = viewport()
-  const s = Math.max(v.w / a.W, v.h / a.H) * 1.02
+  return Math.max(v.w / W, v.h / H) * 1.02
+}
+function zoomTransform(a: Anim) {
+  const s = zoomScale(a.W, a.H)
   return `translate(${-s * a.W / 2}px, 0px) scale(${s})`
 }
 
+// 合上时书页在封面下面一摞；翻过去以后要压在封面衬页上面，而且角度和封面一样平，
+// 不然靠近书脊那一截书页会比衬页低，衬页从缝里露出来（11-09 iOS 上露了一条）。
+// 先翻的那页在最下面，后翻的叠在上面。
+const OPEN_DEG = -179.6
 const COVER_CLOSED = (a: Anim) => `translateZ(${a.T / 2}px) rotateY(0deg)`
-const COVER_OPEN = (a: Anim) => `translateZ(${a.T / 2}px) rotateY(-178deg)`
-const leafZ = (a: Anim, i: number) => a.T / 2 - 1.2 - i * 0.35
-const LEAF_CLOSED = (a: Anim, i: number) => `translateZ(${leafZ(a, i)}px) rotateY(0deg)`
-const LEAF_OPEN = (a: Anim, i: number) => `translateZ(${leafZ(a, i)}px) rotateY(${-176 + i * 0.7}deg)`
+const COVER_OPEN = (a: Anim) => `translateZ(${a.T / 2}px) rotateY(${OPEN_DEG}deg)`
+const LEAF_CLOSED = (a: Anim, i: number) => `translateZ(${a.T / 2 - 1 - i * 0.35}px) rotateY(0deg)`
+const LEAF_OPEN = (a: Anim, i: number) => `translateZ(${a.T / 2 + 1 + i * 0.6}px) rotateY(${OPEN_DEG}deg)`
 
 async function openItem(it: Placed) {
   if (busy.value) return
@@ -205,7 +219,12 @@ async function openItem(it: Placed) {
   const H = W / aspect
   const T = H * (look.spine.w / look.spine.h) * WIDEN[look.kind]   // 和书架上一样粗
   const title = it.kind === 'add' ? NEW_TITLE : it.title
-  anim.value = { look, W, H, T, title }
+  // 推近以后书页中心对着屏幕中心：屏幕左边缘在书页上的 x = W/2 - 屏宽/2/倍数
+  const zs = zoomScale(W, H)
+  const sideVw = it.kind === 'main' ? 0.10 : 0.13          // 和 BookPage 的左右边距一样
+  const px = W / 2 - v.w / 2 / zs + (v.w * sideVw + 3) / zs
+  const pt = H / 2 - v.h / 2 / zs + (safeTop() + v.h * 0.11 + 5) / zs - 3
+  anim.value = { look, W, H, T, title, u: 1 / zs, px, pt }
 
   if (it.kind === 'main') {
     editing.value = { kind: 'main', index: -1, isNew: false, key: 'main',
@@ -376,6 +395,11 @@ const coverLabel = computed(() => {
   const t = coverTitle(a.title, a.look.cover)
   return { style: { left: `${l.x * 100}%`, top: `${l.y * 100}%`, width: `${l.w * 100}%`, height: `${l.h * 100}%` }, ...t }
 })
+// 翻页时每一面写一段内容（第 0 段在停下的那页上），只是做样子，每段截 260 字
+const pageChunk = (n: number) => {
+  const text = editing.value?.draft.content ?? ''
+  return text.slice(n * 260, n * 260 + 260)
+}
 const animSpineLabel = computed(() => anim.value ? spineTitle(anim.value.title, anim.value.look.spine, WIDEN[anim.value.look.kind]) : null)
 </script>
 
@@ -419,7 +443,7 @@ const animSpineLabel = computed(() => anim.value ? spineTitle(anim.value.title, 
     </div>
 
     <!-- 拿出来的那本（3D） -->
-    <div v-if="anim" class="stage3d" :style="{ '--W': `${anim.W}px`, '--H': `${anim.H}px`, '--T': `${anim.T}px` }">
+    <div v-if="anim" class="stage3d" :style="{ '--W': `${anim.W}px`, '--H': `${anim.H}px`, '--T': `${anim.T}px`, '--u': `${anim.u}px`, '--px': `${anim.px}px`, '--pt': `${anim.pt}px` }">
       <div ref="backdrop" class="backdrop"></div>
       <div ref="flyer" class="flyer">
         <div ref="turner" class="turner">
@@ -434,15 +458,25 @@ const animSpineLabel = computed(() => anim.value ? spineTitle(anim.value.title, 
             <div class="face f-fore"></div>
             <div class="face f-top"></div>
             <div class="face f-bottom"></div>
-            <div class="face f-block" :style="{ backgroundImage: `url(${ASSET + anim.look.page.file})` }"></div>
+            <div class="face f-block" :class="anim.look.kind" :style="{ backgroundImage: `url(${ASSET + anim.look.page.file})` }">
+              <div class="page-text first">
+                <div class="pt-title" :style="{ fontFamily: font.family, fontWeight: font.weight }">{{ anim.title }}</div>
+                <div class="pt-meta"></div>
+                <div class="pt-body">{{ pageChunk(0) }}</div>
+              </div>
+            </div>
             <div
               v-for="i in LEAVES"
               :key="i"
               :ref="el => setLeafEl(i - 1, el)"
               class="leaf"
             >
-              <div class="face lf" :style="{ backgroundImage: `url(${ASSET + anim.look.page.file})` }"></div>
-              <div class="face lb" :style="{ backgroundImage: `url(${ASSET + anim.look.page.file})` }"></div>
+              <div class="face lf" :class="anim.look.kind" :style="{ backgroundImage: `url(${ASSET + anim.look.page.file})` }">
+                <div class="page-text"><div class="pt-body">{{ pageChunk(i * 2 - 1) }}</div></div>
+              </div>
+              <div class="face lb" :class="anim.look.kind" :style="{ backgroundImage: `url(${ASSET + anim.look.page.file})` }">
+                <div class="page-text"><div class="pt-body">{{ pageChunk(i * 2) }}</div></div>
+              </div>
             </div>
             <div ref="cover" class="cover">
               <div class="face cf">
@@ -480,8 +514,7 @@ const animSpineLabel = computed(() => anim.value ? spineTitle(anim.value.title, 
       />
     </Transition>
 
-    <button class="glass-btn corner back" :disabled="!!anim" @click="back">‹ 书房</button>
-    <button class="glass-btn corner font" :disabled="!!anim" @click="nextFont">书名字体：{{ font.name }}</button>
+    <button class="glass corner back" :disabled="!!anim" @click="back">‹ 书房</button>
     <div v-if="toastMsg" class="toast glass">{{ toastMsg }}</div>
   </div>
   </Teleport>
@@ -630,7 +663,7 @@ const animSpineLabel = computed(() => anim.value ? spineTitle(anim.value.title, 
 .f-block {
   left: 0; top: 3px;
   width: calc(var(--W) - 3px); height: calc(var(--H) - 6px);
-  transform: translateZ(calc(var(--T) / 2 - 2px));
+  transform: translateZ(calc(var(--T) / 2 - 3px));
   background-size: cover;
   background-position: center;
   box-shadow: inset 10px 0 14px -8px rgba(60, 40, 20, 0.35);
@@ -643,6 +676,38 @@ const animSpineLabel = computed(() => anim.value ? spineTitle(anim.value.title, 
   transform-style: preserve-3d;
 }
 .leaf .face { inset: 0; background-size: cover; background-position: center; }
+/* 书页上的字：照编辑页的排版按比例缩（编辑页 16px 字、31px 行、左右各 13vw），书页宽对应屏幕宽 */
+.f-block, .leaf .face { container-type: size; overflow: hidden; }
+.page-text {
+  position: absolute; inset: 0;
+  /* 停下那页推到满屏后，和编辑页的位置一一对上：--pt/--px/--u 由 openItem 按推近的倍数算好 */
+  padding: var(--pt) var(--px) 0;
+  color: #000;
+  pointer-events: none;
+}
+.pt-title {
+  text-align: center;
+  font-size: calc(26 * var(--u));
+  line-height: 1.3;
+  color: #2a1a0c;
+  letter-spacing: calc(2 * var(--u));
+  white-space: nowrap;
+}
+.main .pt-title { color: #1d2140; }
+.pt-meta { height: calc(25 * var(--u)); }
+.pt-body {
+  margin-top: calc(18 * var(--u));
+  font-family: var(--app-font, var(--sans));
+  font-size: calc(16 * var(--u));
+  line-height: calc(31 * var(--u));
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 100%;
+  overflow: hidden;
+  background-image: repeating-linear-gradient(to bottom, transparent 0, transparent calc(31 * var(--u) - var(--u)),
+    rgba(95, 70, 40, 0.24) calc(31 * var(--u) - var(--u)), rgba(95, 70, 40, 0.24) calc(31 * var(--u)));
+}
+.page-text:not(.first) .pt-body { margin-top: 0; }
 .leaf .lf { box-shadow: inset 8px 0 12px -8px rgba(60, 40, 20, 0.35); }
 .leaf .lb { transform: rotateY(180deg); filter: brightness(0.93); }
 .cover {
@@ -680,8 +745,7 @@ const animSpineLabel = computed(() => anim.value ? spineTitle(anim.value.title, 
   color: var(--text);
 }
 .corner:disabled { opacity: 0; pointer-events: none; }
-.back { left: 14px; }
-.font { right: 14px; }
+.back { left: 14px; white-space: nowrap; }
 .toast {
   position: absolute;
   left: 50%;

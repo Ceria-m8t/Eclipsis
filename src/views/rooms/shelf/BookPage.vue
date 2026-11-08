@@ -111,14 +111,14 @@ function remove() {
           :placeholder="kind === 'main' ? '写下他是谁……' : '在这页写下这本书的内容……'"
           spellcheck="false"
         ></textarea>
+
+        <button v-if="kind === 'world' && !isNew" class="remove" @click="remove">{{ confirmRemove ? '再点一次，抽走这本' : '抽走这本' }}</button>
       </div>
     </div>
 
-    <div class="bar">
-      <button v-if="kind === 'world' && !isNew" class="btn ghost danger" @click="remove">{{ confirmRemove ? '再点一次，抽走这本' : '抽走这本' }}</button>
-      <button v-if="dirty" class="btn ghost" @click="emit('discard')">不保存</button>
-      <button class="btn primary" @click="done">{{ dirty || isNew ? '完成' : '合上' }}</button>
-    </div>
+    <!-- 合上/完成在右上角，不保存在左上角（液态玻璃，和书架页的返回按钮一样） -->
+    <button v-if="dirty" class="glass corner left" @click="emit('discard')">不保存</button>
+    <button class="glass corner right" :class="{ strong: dirty || isNew }" @click="done">{{ dirty || isNew ? '完成' : '合上' }}</button>
   </div>
 </template>
 
@@ -144,7 +144,7 @@ function remove() {
 }
 /* 字写在花框里面：左右各让出约 12%，上下让出花饰 */
 .sheet {
-  padding: calc(var(--safe-top, 0px) + 11vh) 13vw 120px;
+  padding: calc(var(--safe-top, 0px) + 11vh) 13vw 60px;
   min-height: 100%;
   box-sizing: border-box;
   display: flex;
@@ -238,31 +238,28 @@ function remove() {
 }
 .body::placeholder { color: rgba(40, 28, 16, 0.38); }
 
-.bar {
-  position: absolute;
-  left: 0; right: 0;
-  bottom: calc(var(--safe-bottom, 0px) + 18px);
-  display: flex;
-  justify-content: center;
-  gap: 10px;
-  pointer-events: none;
+.remove {
+  align-self: center;
+  margin-top: 28px;
+  border: none; background: none;
+  font-size: 13px;
+  color: rgba(120, 40, 25, 0.7);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
-.btn {
-  pointer-events: auto;
-  border-radius: 20px;
-  padding: 9px 20px;
-  font-size: 15px;
+.corner {
+  position: absolute;
+  top: calc(var(--safe-top, 0px) + 12px);
+  border-radius: 18px;
+  padding: 7px 16px;
+  font-size: 14px;
   letter-spacing: 1px;
-  border: 1px solid rgba(120, 88, 30, 0.45);
-  box-shadow: 0 4px 14px rgba(60, 40, 10, 0.18);
+  white-space: nowrap;
+  color: var(--text);
   transition: transform 0.25s var(--spring);
 }
-.btn:active { transform: scale(var(--press-scale)); }
-.btn.primary {
-  color: #fff8e6;
-  background: linear-gradient(180deg, #b48a3c, #8a6424);
-  text-shadow: 0 1px 0 rgba(60, 35, 5, 0.5);
-}
-.btn.ghost { color: #4a3416; background: rgba(255, 250, 238, 0.82); }
-.btn.danger { color: #8a2a1a; }
+.corner:active { transform: scale(var(--press-scale)); }
+.corner.left { left: 14px; }
+.corner.right { right: 14px; }
+.corner.strong { font-weight: 600; }
 </style>

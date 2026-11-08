@@ -7,6 +7,7 @@ import { queueWorldbookPush } from '../prompt-store'
 import { isViewportDebug, setViewportDebug } from '../viewport'
 import { theme, THEME_PRESETS, DEFAULT_THEME } from '../theme'
 import { fontName, setFontFile, clearFont } from '../font'
+import { BOOK_FONTS, loadBookFont, saveBookFont } from './rooms/shelf/books'
 
 const viewportDebug = ref(isViewportDebug())
 function toggleViewportDebug() {
@@ -99,6 +100,10 @@ interface GroupState {
   collapsed: boolean
   enabled: boolean
 }
+
+// 书房书架上的书名字体
+const bookFont = ref<string>(loadBookFont().id)
+function pickBookFont(id: string) { bookFont.value = id; saveBookFont(id) }
 
 const WORLDBOOK_KEY = 'worldbook'
 const GROUPS_KEY = 'worldbook-groups'
@@ -434,6 +439,15 @@ onMounted(() => {
           </div>
           <span v-if="fontMsg" class="hint">{{ fontMsg }}</span>
           <span class="hint">改了马上生效，不用点保存。字体对整个应用生效（代码块除外）；字体里没有的字会用系统字体补上。聊天页如果在聊天样式里设了背景，会优先用那个。</span>
+          <div class="theme-custom">
+            <span class="image-label" style="margin:0">书房书名字体</span>
+            <button
+              v-for="f in BOOK_FONTS" :key="f.id" type="button"
+              class="upload-btn" :class="{ picked: bookFont === f.id }"
+              @click="pickBookFont(f.id)"
+            >{{ f.name }}</button>
+          </div>
+          <span class="hint">书架上书脊、封面和书页标题用的字体。华丽 = 站酷小薇，庄重 = 思源宋体最粗，毛笔 = 马善政；英文和数字都用 Cinzel Decorative。</span>
         </div>
 
         <div class="section-title">头像设置</div>
@@ -709,6 +723,7 @@ label input:focus { border-color: rgba(0, 0, 0, 0.25); }
   border: 1px solid rgba(0, 0, 0, 0.08);
 }
 .upload-btn:hover { background: rgba(0, 0, 0, 0.08); }
+.upload-btn.picked { background: rgba(111, 134, 184, 0.22); color: rgba(0, 0, 0, 0.85); font-weight: 600; }
 
 .reset-btn {
   padding: 6px 10px; background: none; border: 1px solid rgba(0, 0, 0, 0.1);
