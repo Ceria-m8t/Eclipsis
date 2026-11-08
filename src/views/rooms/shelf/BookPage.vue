@@ -39,14 +39,18 @@ const dirty = computed(() =>
   group.value !== props.group || position.value !== props.position || priority.value !== props.priority)
 
 const area = ref<HTMLTextAreaElement | null>(null)
-function grow() {
-  const el = area.value
+const titleEl = ref<HTMLTextAreaElement | null>(null)
+function fit(el: HTMLTextAreaElement | null) {
   if (!el) return
   el.style.height = 'auto'
   el.style.height = el.scrollHeight + 'px'
 }
-watch(content, () => nextTick(grow))
+const grow = () => { fit(area.value); fit(titleEl.value) }
+watch([content, title], () => nextTick(grow))
 onMounted(() => nextTick(grow))
+
+// 纸的高度：打开这页时的整屏高（那时键盘还没弹）
+const paperH = `${Math.round(parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--app-h')) || innerHeight)}px`
 
 function done() {
   emit('done', {
@@ -62,17 +66,22 @@ function remove() {
 </script>
 
 <template>
-  <div class="book-page" :class="kind" :style="{ backgroundImage: `url(${page})` }">
+  <div class="book-page" :class="kind">
+    <!-- 纸单独一层，高度定在打开时的整屏高：键盘弹出来时页面变矮，纸不跟着缩放上移 -->
+    <div class="paper" :style="{ backgroundImage: `url(${page})`, height: paperH }"></div>
     <div class="scroll">
       <div class="sheet">
-        <input
+        <textarea
           v-if="kind === 'world'"
+          ref="titleEl"
           v-model="title"
           class="title"
+          rows="1"
           :style="{ fontFamily: titleFont, fontWeight: titleWeight }"
           maxlength="40"
           aria-label="书名"
-        />
+          @keydown.enter.prevent
+        ></textarea>
         <div v-else class="title" :style="{ fontFamily: titleFont, fontWeight: titleWeight }">{{ title }}</div>
 
         <div class="meta">
@@ -129,13 +138,19 @@ function remove() {
   top: var(--app-top, 0px);
   height: var(--app-h, 100dvh);
   z-index: 230;
-  background-color: #efe6d6;
-  background-size: cover;
-  background-position: center;
   display: flex;
   flex-direction: column;
 }
-.book-page.main { background-color: #dfe3ee; }
+.paper {
+  position: absolute;
+  left: 0; right: 0; top: 0;
+  background-color: #efe6d6;
+  background-size: cover;
+  background-position: center;
+  pointer-events: none;
+}
+.main .paper { background-color: #dfe3ee; }
+.scroll { position: relative; }
 .scroll {
   flex: 1;
   overflow-y: auto;
@@ -164,6 +179,10 @@ function remove() {
   letter-spacing: 2px;
   padding: 0;
   outline: none;
+  resize: none;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
   text-shadow: 0 1px 0 rgba(255, 250, 235, 0.6);
 }
 .main .title { color: #1d2140; }

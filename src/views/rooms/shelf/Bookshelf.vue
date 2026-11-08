@@ -108,8 +108,11 @@ const decor = computed(() => {
   return out
 })
 
+// 书名字体下载好以后再量一次字宽（没下载好时量的是系统字体）
+const fontsReady = ref(0)
 function spineLabel(it: { look: BookLook; title: string }) {
-  return spineTitle(it.title, it.look.spine, WIDEN[it.look.kind])
+  void fontsReady.value
+  return spineTitle(it.title, it.look.spine, font, WIDEN[it.look.kind])
 }
 function labelBox(look: BookLook) {
   const l = look.spine.label ?? { x: 0.3, y: 0.25, w: 0.4, h: 0.23 }
@@ -378,6 +381,8 @@ const groups = computed(() => [...new Set(entries.value.map(e => e.group))])
 // ── 进出书架 ──
 const stage = ref<HTMLElement | null>(null)
 onMounted(() => {
+  const sample = [MAIN_TITLE, NEW_TITLE, ...entries.value.map(e => e.title)].join('')
+  document.fonts?.load(`${font.weight} 20px ${font.family}`, sample).then(() => fontsReady.value++).catch(() => {})
   stage.value?.animate(
     [{ transform: 'translate(-50%, -50%) scale(1.1)', opacity: 0 }, { transform: 'translate(-50%, -50%) scale(1)', opacity: 1 }],
     { duration: D(520), easing: 'cubic-bezier(.2,.7,.3,1)' })
@@ -392,7 +397,8 @@ const coverLabel = computed(() => {
   const a = anim.value
   if (!a) return null
   const l = a.look.cover.label ?? { x: 0.25, y: 0.34, w: 0.54, h: 0.22 }
-  const t = coverTitle(a.title, a.look.cover)
+  void fontsReady.value
+  const t = coverTitle(a.title, a.look.cover, font)
   return { style: { left: `${l.x * 100}%`, top: `${l.y * 100}%`, width: `${l.w * 100}%`, height: `${l.h * 100}%` }, ...t }
 })
 // 翻页时每一面写一段内容（第 0 段在停下的那页上），只是做样子，每段截 260 字
@@ -400,7 +406,7 @@ const pageChunk = (n: number) => {
   const text = editing.value?.draft.content ?? ''
   return text.slice(n * 260, n * 260 + 260)
 }
-const animSpineLabel = computed(() => anim.value ? spineTitle(anim.value.title, anim.value.look.spine, WIDEN[anim.value.look.kind]) : null)
+const animSpineLabel = computed(() => anim.value ? (void fontsReady.value, spineTitle(anim.value.title, anim.value.look.spine, font, WIDEN[anim.value.look.kind])) : null)
 </script>
 
 <template>
@@ -691,7 +697,8 @@ const animSpineLabel = computed(() => anim.value ? spineTitle(anim.value.title, 
   line-height: 1.3;
   color: #2a1a0c;
   letter-spacing: calc(2 * var(--u));
-  white-space: nowrap;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 .main .pt-title { color: #1d2140; }
 .pt-meta { height: calc(25 * var(--u)); }
@@ -727,8 +734,9 @@ const animSpineLabel = computed(() => anim.value ? spineTitle(anim.value.title, 
   pointer-events: none;
 }
 .cover-title > span {
-  white-space: nowrap;
-  line-height: 1;
+  white-space: pre;
+  text-align: center;
+  line-height: 1.15;
   color: #3a210e;
   text-shadow: 0 0.04em 0 rgba(255, 240, 210, 0.5);
   letter-spacing: 0.06em;
