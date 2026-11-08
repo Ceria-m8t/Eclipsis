@@ -208,7 +208,7 @@
    }
   },
   "cover": {
-   "file": "main-cover.webp?v=a34806cc",
+   "file": "main-cover.webp?v=0c62c66a",
    "w": 642,
    "h": 900,
    "label": {
@@ -219,7 +219,7 @@
    }
   },
   "clasp": {
-   "file": "main-clasp.webp?v=aabdc0a3",
+   "file": "main-clasp.webp?v=4a8f637f",
    "w": 141,
    "h": 91,
    "box": {
@@ -229,10 +229,10 @@
     "h": 0.1013
    },
    "back": {
-    "file": "main-clasp-back.webp?v=622b23da"
+    "file": "main-clasp-back.webp?v=76b22780"
    },
    "edge": {
-    "file": "main-clasp-edge.webp?v=10642b9f"
+    "file": "main-clasp-edge.webp?v=3bb5cb61"
    }
   }
  },
