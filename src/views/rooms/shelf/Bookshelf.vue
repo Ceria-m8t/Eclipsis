@@ -519,6 +519,8 @@ const animSpineLabel = computed(() => anim.value ? (void fontsReady.value, spine
         <div ref="turner" class="turner">
           <div class="book3d">
             <div class="face f-back" :style="{ backgroundImage: `url(${ASSET + anim.look.cover.file})` }"></div>
+            <!-- 封底的里面（贴着衬页）：板子比书页大一圈，翻开后书页右边、上下露出来的就是它 -->
+            <div class="face f-inback" :style="{ backgroundImage: `url(${ASSET + anim.look.endpaper.file})` }"></div>
             <div class="face f-spine">
               <img :src="ASSET + anim.look.spine.file" alt="" />
               <span v-if="animSpineLabel && anim.look.kind !== 'main'" class="spine-title" :style="{ ...labelBox(anim.look), fontFamily: font.family, fontWeight: font.weight }">
@@ -548,6 +550,12 @@ const animSpineLabel = computed(() => anim.value ? (void fontsReady.value, spine
                 <div class="page-text"><div class="pt-body">{{ pageChunk(i * 2) }}</div></div>
               </div>
             </div>
+            <!-- 皮扣绕过书口的那一段（钉在封底上，翻开以后皮扣从这里挂出去） -->
+            <div
+              v-if="anim.look.clasp"
+              class="clasp-band"
+              :style="{ top: `${anim.look.clasp.box.y * 100}%`, height: `${anim.look.clasp.box.h * 100}%`, '--ct': `${claspT(anim)}px` }"
+            ></div>
             <div
               v-if="anim.look.clasp"
               ref="clasp"
@@ -750,6 +758,22 @@ const animSpineLabel = computed(() => anim.value ? (void fontsReady.value, spine
   transform: rotateY(180deg) translateZ(calc(var(--T) / 2));
   filter: brightness(0.7);
   border-radius: 3px;
+}
+.f-inback {
+  left: 0; top: 0; width: var(--W); height: var(--H);
+  transform: translateZ(calc(var(--T) / -2 + 0.6px));
+  background-size: 100% 100%;
+  border-radius: 3px;
+  filter: brightness(0.85);
+}
+/* 皮扣绕过书口的那段：在书的右边缘，从封底到封面那么宽，朝右 */
+.clasp-band {
+  position: absolute;
+  left: calc(var(--W) - var(--T) / 2 - var(--ct) / 2);
+  width: calc(var(--T) + var(--ct));
+  transform: rotateY(90deg) translateZ(0.5px);
+  background: linear-gradient(#7a5528, #4a3016 60%, #2e1e0e);
+  border-radius: 2px;
 }
 .f-spine {
   left: calc((var(--W) - var(--T)) / 2); top: 0;
