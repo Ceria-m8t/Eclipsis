@@ -209,9 +209,11 @@ function zoomTransform(a: Anim) {
   return `translate(${-s * pg.w / 2}px, 0px) scale(${s})`
 }
 
-// 皮扣：铰链在封面右边缘，往右翻开挂着
-const CLASP_CLOSED = (a: Anim) => `translateZ(${a.T / 2 + 0.8}px) rotateY(0deg)`
-const CLASP_OPEN = (a: Anim) => `translateZ(${a.T / 2 + 0.8}px) rotateY(150deg)`
+// 皮扣：铰链在封面右边缘，往右翻开挂着。皮扣有厚度（几层叠起来，中间几层是皮子的侧边）
+const claspT = (a: Anim) => Math.max(2, a.W * 0.012)
+const CLASP_CLOSED = (a: Anim) => `translateZ(${a.T / 2 + claspT(a) / 2 + 0.4}px) rotateY(0deg)`
+const CLASP_OPEN = (a: Anim) => `translateZ(${a.T / 2 + claspT(a) / 2 + 0.4}px) rotateY(150deg)`
+const CLASP_LAYERS = 4
 const clasp = ref<HTMLElement | null>(null)
 
 // 合上时书页在封面下面一摞；翻过去以后要压在封面衬页上面，而且角度和封面一样平，
@@ -550,10 +552,16 @@ const animSpineLabel = computed(() => anim.value ? (void fontsReady.value, spine
               v-if="anim.look.clasp"
               ref="clasp"
               class="clasp"
-              :style="{ left: `${anim.look.clasp.box.x * 100}%`, top: `${anim.look.clasp.box.y * 100}%`, width: `${anim.look.clasp.box.w * 100}%`, height: `${anim.look.clasp.box.h * 100}%`, '--clasp': `url(${ASSET + anim.look.clasp.file})` }"
+              :style="{ left: `${anim.look.clasp.box.x * 100}%`, top: `${anim.look.clasp.box.y * 100}%`, width: `${anim.look.clasp.box.w * 100}%`, height: `${anim.look.clasp.box.h * 100}%`, '--clasp': `url(${ASSET + anim.look.clasp.file})`, '--ct': `${claspT(anim)}px` }"
             >
-              <img class="face" :src="ASSET + anim.look.clasp.file" alt="" />
-              <div class="face clasp-back"></div>
+              <div
+                v-for="k in CLASP_LAYERS"
+                :key="k"
+                class="clasp-edge"
+                :style="{ transform: `translateZ(calc(var(--ct) * ${(k / (CLASP_LAYERS + 1) - 0.5).toFixed(3)}))` }"
+              ></div>
+              <img class="face clasp-front" :src="ASSET + anim.look.clasp.file" alt="" />
+              <img class="face clasp-back" :src="ASSET + anim.look.clasp.file" alt="" />
             </div>
             <div ref="cover" class="cover">
               <div class="face cf">
@@ -822,11 +830,19 @@ const animSpineLabel = computed(() => anim.value ? (void fontsReady.value, spine
   transform-origin: right center;
   transform-style: preserve-3d;
 }
-.clasp .face { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-/* 皮扣背面：深色皮子，形状跟正面一样 */
+.clasp .face, .clasp-edge { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.clasp-front {
+  transform: translateZ(calc(var(--ct) / 2));
+  filter: drop-shadow(-1px 1px 1.2px rgba(0, 0, 0, 0.55));
+}
+/* 背面：同一张图压暗，翻开时看到的是皮子背面 */
 .clasp-back {
-  transform: rotateY(180deg);
-  background: linear-gradient(#4a3320, #2e1f12);
+  transform: rotateY(180deg) translateZ(calc(var(--ct) / 2));
+  filter: brightness(0.45) saturate(0.7);
+}
+/* 中间几层：皮子侧边的颜色，斜着看时连成一条边 */
+.clasp-edge {
+  background: linear-gradient(#6b4a22, #3a2612);
   -webkit-mask: var(--clasp) center / 100% 100% no-repeat;
   mask: var(--clasp) center / 100% 100% no-repeat;
 }
