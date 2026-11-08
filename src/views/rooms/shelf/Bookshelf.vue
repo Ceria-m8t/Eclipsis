@@ -223,6 +223,38 @@ const COVER_OPEN = (a: Anim) => `translateZ(${a.T / 2}px) rotateY(${OPEN_DEG}deg
 const LEAF_CLOSED = (a: Anim, i: number) => `translateZ(${a.T / 2 - 1 - i * 0.35}px) rotateY(0deg)`
 const LEAF_OPEN = (a: Anim, i: number) => `translateZ(${a.T / 2 + 1 + i * 0.6}px) rotateY(${OPEN_DEG}deg)`
 
+// ── 按住一本书：书微微抽出来，上方浮出完整书名；松手不打开 ──
+const peek = ref<{ key: string; title: string; x: number; top: number } | null>(null)
+let pressTimer: ReturnType<typeof setTimeout> | null = null
+let pressStart: { x: number; y: number } | null = null
+let suppressClick = false
+function onPressStart(it: Placed, e: PointerEvent) {
+  if (busy.value) return
+  suppressClick = false
+  pressStart = { x: e.clientX, y: e.clientY }
+  if (pressTimer) clearTimeout(pressTimer)
+  pressTimer = setTimeout(() => {
+    pressTimer = null
+    suppressClick = true
+    const title = it.kind === 'add' ? '添一本' : it.title || '无题'
+    // 书名牌放在书的正上方；太靠边就往里挪，不出屏幕
+    peek.value = { key: it.key, title, x: Math.min(0.82, Math.max(0.18, it.x + it.w / 2)), top: it.bottom - it.h }
+    navigator.vibrate?.(8)
+  }, 380)
+}
+function onPressMove(e: PointerEvent) {
+  if (pressStart && Math.hypot(e.clientX - pressStart.x, e.clientY - pressStart.y) > 10) onPressEnd()
+}
+function onPressEnd() {
+  if (pressTimer) { clearTimeout(pressTimer); pressTimer = null }
+  pressStart = null
+  peek.value = null
+}
+function onSpineClick(it: Placed) {
+  if (suppressClick) { suppressClick = false; return }
+  openItem(it)
+}
+
 async function openItem(it: Placed) {
   if (busy.value) return
   busy.value = true
@@ -448,10 +480,16 @@ const animSpineLabel = computed(() => anim.value ? (void fontsReady.value, spine
         :key="it.key"
         :ref="el => setSpineEl(it.key, el)"
         class="spine"
-        :class="[it.kind, { off: !it.enabled, hidden: hiddenKey === it.key }]"
+        :class="[it.kind, { off: !it.enabled, hidden: hiddenKey === it.key, peeking: peek?.key === it.key }]"
         :style="{ left: `${it.x * 100}%`, bottom: `${(1 - it.bottom) * 100}%`, width: `${it.w * 100}%`, height: `${it.h * 100}%`, '--mask': `url(${ASSET + it.look.spine.file}) center / 100% 100% no-repeat` }"
         :aria-label="it.kind === 'add' ? '添一本世界书' : it.title"
-        @click="openItem(it)"
+        @click="onSpineClick(it)"
+        @pointerdown="onPressStart(it, $event)"
+        @pointermove="onPressMove"
+        @pointerup="onPressEnd"
+        @pointercancel="onPressEnd"
+        @pointerleave="onPressEnd"
+        @contextmenu.prevent
       >
         <template v-if="it.kind !== 'add'">
           <img :src="ASSET + it.look.spine.file" alt="" draggable="false" />
@@ -462,6 +500,14 @@ const animSpineLabel = computed(() => anim.value ? (void fontsReady.value, spine
         </template>
         <span v-else class="add-slot"><span>＋</span></span>
       </button>
+
+      <Transition name="peek">
+        <div
+          v-if="peek"
+          class="peek glass"
+          :style="{ left: `${peek.x * 100}%`, bottom: `calc(${(1 - peek.top) * 100}% + 10px)`, fontFamily: font.family, fontWeight: font.weight }"
+        >{{ peek.title }}</div>
+      </Transition>
     </div>
 
     <!-- 拿出来的那本（3D） -->
@@ -601,6 +647,34 @@ const animSpineLabel = computed(() => anim.value ? (void fontsReady.value, spine
 .spine.off img, .spine.off .spine-title { filter: saturate(0.45) brightness(0.62); }
 .spine.hidden { visibility: hidden; }
 .spine:not(.decor):active { transform: translateY(-2%); }
+.spine.peeking { transform: translateY(-5%); }
+.spine:not(.decor) {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* 按住时浮出的书名牌 */
+.peek {
+  position: absolute;
+  transform: translateX(-50%);
+  z-index: 5;
+  max-width: 64vw;
+  padding: 7px 14px;
+  border-radius: 14px;
+  font-size: 16px;
+  line-height: 1.3;
+  letter-spacing: 1px;
+  text-align: center;
+  color: var(--text);
+  white-space: normal;
+  word-break: break-word;
+  pointer-events: none;
+}
+.peek-enter-active { transition: opacity 0.18s ease, transform 0.25s var(--spring); }
+.peek-leave-active { transition: opacity 0.12s ease; }
+.peek-enter-from { opacity: 0; transform: translateX(-50%) translateY(6px) scale(0.92); }
+.peek-leave-to { opacity: 0; }
 .spine { transition: transform 0.2s ease; }
 
 .spine-title {
