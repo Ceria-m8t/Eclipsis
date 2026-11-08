@@ -8,7 +8,7 @@ export interface Config {
   tapKey: string          // xiaoke 调用上游入口时用的本地密钥（xiaoke 的 XIAOKE_UPSTREAM_KEY 填它）
   headerTimeoutMs: number // 等上游返回响应头的最长时间；开始流式输出后不再计时
   streamIdleMs: number    // 开始输出以后，连续多久一个字节都没有就断开（中转站卡住时别一直占着 xiaoke）
-  retry429DelaysMs: number[] // 中转站回 429 时隔多久自动重试（逗号分隔的毫秒数，空 = 不重试）
+  retry429DelaysMs: number[] // 中转站回 429/502/503 时隔多久自动重试（逗号分隔的毫秒数，空 = 不重试）
   dbPath: string
   blobDir: string
 }

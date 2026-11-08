@@ -397,6 +397,31 @@ test('中转站回 429 → 上游入口隔一会儿自己重试，客户端拿�
   assert.equal(row.status, 'ok')
 })
 
+test('中转站回 502 号池用完 / 503 → 也自己重试；500 不重试', async () => {
+  for (const status of [502, 503]) {
+    let n = 0
+    stationReply = (_r, res) => {
+      n++
+      if (n === 1) { res.writeHead(status, { 'content-type': 'application/json' }); res.end('{"error":{"message":"All available accounts exhausted"}}'); return }
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ choices: [{ message: { content: '在' }, finish_reason: 'stop' }] }))
+    }
+    const r = await fetch(`http://127.0.0.1:${tapPort}/v1/chat/completions`, {
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${TAP_KEY}` },
+      body: JSON.stringify({ model: 'm', messages: [{ role: 'user', content: '在吗' }] })
+    })
+    assert.equal(r.status, 200, String(status))
+    assert.equal(n, 2, String(status))
+  }
+  let n = 0
+  stationReply = (_r, res) => { n++; res.writeHead(500, { 'content-type': 'application/json' }); res.end('{"error":{"message":"boom"}}') }
+  const r = await fetch(`http://127.0.0.1:${tapPort}/v1/chat/completions`, {
+    method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${TAP_KEY}` },
+    body: JSON.stringify({ model: 'm', messages: [{ role: 'user', content: '在吗' }] })
+  })
+  assert.equal(r.status, 500)
+  assert.equal(n, 1)
+})
+
 test('一直 429 → 重试两次还不行，才把 429 交给客户端', async () => {
   let n = 0
   stationReply = (_r, res) => { n++; res.writeHead(429, { 'content-type': 'application/json' }); res.end('{"error":{"message":"rate limited"}}') }

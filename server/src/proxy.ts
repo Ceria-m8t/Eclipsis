@@ -14,6 +14,9 @@ const DROP_REQ = new Set(['host', 'connection', 'keep-alive', 'proxy-connection'
 // 不回传的响应头（fetch 已经解压过，长度/编码都不再准确）
 const DROP_RES = new Set(['connection', 'keep-alive', 'transfer-encoding', 'content-encoding', 'content-length'])
 
+/** 中转站回这些状态时自动重试（见 retry429DelaysMs） */
+const RETRY_STATUSES = new Set([429, 502, 503])
+
 export interface Prepared {
   rid: string
   linked: boolean
@@ -33,7 +36,7 @@ export interface TapOptions {
   headerTimeoutMs: number
   /** 开始输出后连续多久没有任何字节就断开；不给 = 不限 */
   streamIdleMs?: number
-  /** 中转站回 429 时先不告诉客户端，隔这些毫秒各自动重试一次；不给 = 不重试 */
+  /** 中转站回 429/502/503 时先不告诉客户端，隔这些毫秒各自动重试一次；不给 = 不重试（名字沿用最早只管 429 时的） */
   retry429DelaysMs?: number[]
   api?: (req: IncomingMessage, res: ServerResponse) => boolean | Promise<boolean>   // 本地接口，返回 true 表示已处理，不转发
   log?: (msg: string, err?: unknown) => void
@@ -152,6 +155,9 @@ export function createTap(opts: TapOptions): Server {
     let upstream: Response
     // 2026-11-07：中转站偶尔回 429（请求太多），他连着调工具时一被拒，Kelivo 那串工具就断了。
     // 429 = 站点没处理这次请求，重试不会重复执行；隔几秒自己再试，客户端只觉得慢一点
+    // 2026-11-08：502/503 也这样重试。晚晚舟号池用完时回 502「All available accounts exhausted」，
+    // 他在 Leto 上连着调工具，18:22、18:25 两次被拒，Kelivo 那串就断了。
+    // 重试只是让站再算一次这条回复（工具在客户端执行，不会多做一遍）。500/504 不重试：可能是站真算了一半或已经等太久。
     const retryDelays = opts.retry429DelaysMs ?? []
     for (let attempt = 0; ; attempt++) {
       const timer = setTimeout(() => ac.abort(new Error('上游响应头超时')), opts.headerTimeoutMs)
@@ -171,13 +177,13 @@ export function createTap(opts: TapOptions): Server {
         return
       }
       clearTimeout(timer)
-      if (upstream.status !== 429 || attempt >= retryDelays.length || clientGone) break
+      if (!RETRY_STATUSES.has(upstream.status) || attempt >= retryDelays.length || clientGone) break
       try { await upstream.body?.cancel() } catch { /* 丢掉这次的回包 */ }
       const wait = retryDelays[attempt]
-      log(`[${opts.name}] 中转站 429，${Math.round(wait / 1000)} 秒后自动重试（第 ${attempt + 1} 次）`)
+      log(`[${opts.name}] 中转站 ${upstream.status}，${Math.round(wait / 1000)} 秒后自动重试（第 ${attempt + 1} 次）`)
       await new Promise(r => setTimeout(r, wait))
       if (clientGone) {
-        finish({ httpStatus: 429, contentType: '', body: '', aborted: true, timing })
+        finish({ httpStatus: upstream.status, contentType: '', body: '', aborted: true, timing })
         return
       }
     }
