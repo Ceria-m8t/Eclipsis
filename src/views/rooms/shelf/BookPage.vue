@@ -1,0 +1,268 @@
+<script setup lang="ts">
+// 书翻开以后停下的那一页：在纸上直接编辑。
+// 纸（书页图）固定铺满屏幕，只有字在滚；横线跟着行高画，跟着字一起滚。
+import { ref, computed, nextTick, onMounted, watch } from 'vue'
+
+const props = defineProps<{
+  kind: 'main' | 'world'
+  page: string               // 书页图地址
+  title: string
+  content: string
+  enabled: boolean
+  group: string
+  position: 'before' | 'after'
+  priority: number
+  groups: string[]           // 已有的分组，给分组输入框做选项
+  isNew: boolean
+  titleFont: string
+  titleWeight: number
+}>()
+
+const emit = defineEmits<{
+  done: [v: { title: string; content: string; enabled: boolean; group: string; position: 'before' | 'after'; priority: number }]
+  discard: []
+  remove: []
+  history: []
+}>()
+
+const title = ref(props.title)
+const content = ref(props.content)
+const enabled = ref(props.enabled)
+const group = ref(props.group)
+const position = ref(props.position)
+const priority = ref(props.priority)
+const showMarks = ref(false)
+const confirmRemove = ref(false)
+
+const dirty = computed(() =>
+  title.value !== props.title || content.value !== props.content || enabled.value !== props.enabled ||
+  group.value !== props.group || position.value !== props.position || priority.value !== props.priority)
+
+const area = ref<HTMLTextAreaElement | null>(null)
+function grow() {
+  const el = area.value
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = el.scrollHeight + 'px'
+}
+watch(content, () => nextTick(grow))
+onMounted(() => nextTick(grow))
+
+function done() {
+  emit('done', {
+    title: title.value.trim() || (props.kind === 'main' ? props.title : '无题'),
+    content: content.value, enabled: enabled.value, group: group.value.trim() || '默认',
+    position: position.value, priority: Math.max(0, Math.min(100, Math.round(Number(priority.value) || 0)))
+  })
+}
+function remove() {
+  if (!confirmRemove.value) { confirmRemove.value = true; setTimeout(() => (confirmRemove.value = false), 3000); return }
+  emit('remove')
+}
+</script>
+
+<template>
+  <div class="book-page" :class="kind" :style="{ backgroundImage: `url(${page})` }">
+    <div class="scroll">
+      <div class="sheet">
+        <input
+          v-if="kind === 'world'"
+          v-model="title"
+          class="title"
+          :style="{ fontFamily: titleFont, fontWeight: titleWeight }"
+          maxlength="40"
+          aria-label="书名"
+        />
+        <div v-else class="title" :style="{ fontFamily: titleFont, fontWeight: titleWeight }">{{ title }}</div>
+
+        <div class="meta">
+          <template v-if="kind === 'world'">
+            <label class="toggle"><input v-model="enabled" type="checkbox" /> {{ enabled ? '启用中' : '没启用' }}</label>
+            <span class="dot">·</span>
+            <button class="link" @click="showMarks = !showMarks">{{ showMarks ? '收起书签' : '书签' }}</button>
+          </template>
+          <template v-else>
+            <span>他是谁</span>
+            <span class="dot">·</span>
+            <button class="link" @click="emit('history')">历史版本</button>
+          </template>
+        </div>
+
+        <div v-if="kind === 'world' && showMarks" class="marks">
+          <label>分组
+            <input v-model="group" list="book-groups" maxlength="20" />
+            <datalist id="book-groups"><option v-for="g in groups" :key="g" :value="g" /></datalist>
+          </label>
+          <label>放在
+            <select v-model="position">
+              <option value="before">主 Prompt 前面</option>
+              <option value="after">主 Prompt 后面</option>
+            </select>
+          </label>
+          <label>优先级
+            <input v-model.number="priority" type="number" min="0" max="100" step="10" inputmode="numeric" />
+          </label>
+        </div>
+
+        <textarea
+          ref="area"
+          v-model="content"
+          class="body"
+          :placeholder="kind === 'main' ? '写下他是谁……' : '在这页写下这本书的内容……'"
+          spellcheck="false"
+        ></textarea>
+      </div>
+    </div>
+
+    <div class="bar">
+      <button v-if="kind === 'world' && !isNew" class="btn ghost danger" @click="remove">{{ confirmRemove ? '再点一次，抽走这本' : '抽走这本' }}</button>
+      <button v-if="dirty" class="btn ghost" @click="emit('discard')">不保存</button>
+      <button class="btn primary" @click="done">{{ dirty || isNew ? '完成' : '合上' }}</button>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.book-page {
+  position: fixed;
+  left: 0; right: 0;
+  top: var(--app-top, 0px);
+  height: var(--app-h, 100dvh);
+  z-index: 230;
+  background-color: #efe6d6;
+  background-size: cover;
+  background-position: center;
+  display: flex;
+  flex-direction: column;
+}
+.book-page.main { background-color: #dfe3ee; }
+.scroll {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+/* 字写在花框里面：左右各让出约 12%，上下让出花饰 */
+.sheet {
+  padding: calc(var(--safe-top, 0px) + 11vh) 13vw 120px;
+  min-height: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+}
+.main .sheet { padding-left: 10vw; padding-right: 10vw; }
+
+.title {
+  display: block;
+  width: 100%;
+  border: none;
+  background: transparent;
+  text-align: center;
+  font-size: 26px;
+  line-height: 1.3;
+  color: #2a1a0c;
+  letter-spacing: 2px;
+  padding: 0;
+  outline: none;
+  text-shadow: 0 1px 0 rgba(255, 250, 235, 0.6);
+}
+.main .title { color: #1d2140; }
+.meta {
+  margin-top: 6px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: rgba(40, 28, 16, 0.62);
+}
+.main .meta { color: rgba(29, 33, 64, 0.62); }
+.dot { opacity: 0.6; }
+.toggle { display: inline-flex; align-items: center; gap: 4px; }
+.toggle input { width: 15px; height: 15px; accent-color: #8a6a2a; }
+.link {
+  border: none; background: none; padding: 0;
+  color: inherit; text-decoration: underline; text-underline-offset: 3px;
+  font-size: 13px;
+}
+.marks {
+  margin: 12px auto 0;
+  display: flex; flex-wrap: wrap; gap: 8px 14px; justify-content: center;
+  font-size: 13px; color: rgba(40, 28, 16, 0.75);
+}
+.marks label { display: inline-flex; align-items: center; gap: 6px; }
+.marks input, .marks select {
+  border: 1px solid rgba(90, 65, 30, 0.3);
+  background: rgba(255, 252, 244, 0.55);
+  border-radius: 6px;
+  padding: 3px 6px;
+  font-size: 16px;
+  color: #000;
+}
+.marks input[type='number'] { width: 64px; }
+.marks input[list] { width: 110px; }
+
+/* 正文：纯黑字，横线和行高对齐 */
+.body {
+  --lh: 31px;
+  margin-top: 18px;
+  width: 100%;
+  min-height: 55vh;
+  border: none;
+  outline: none;
+  resize: none;
+  overflow: hidden;
+  padding: 0;
+  font-family: var(--app-font, var(--sans));
+  font-size: 16px;
+  line-height: var(--lh);
+  color: #000;
+  background-color: transparent;
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent calc(var(--lh) - 1px),
+    rgba(95, 70, 40, 0.24) calc(var(--lh) - 1px),
+    rgba(95, 70, 40, 0.24) var(--lh)
+  );
+  background-attachment: local;
+}
+.main .body {
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent calc(var(--lh) - 1px),
+    rgba(50, 60, 110, 0.2) calc(var(--lh) - 1px),
+    rgba(50, 60, 110, 0.2) var(--lh)
+  );
+}
+.body::placeholder { color: rgba(40, 28, 16, 0.38); }
+
+.bar {
+  position: absolute;
+  left: 0; right: 0;
+  bottom: calc(var(--safe-bottom, 0px) + 18px);
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  pointer-events: none;
+}
+.btn {
+  pointer-events: auto;
+  border-radius: 20px;
+  padding: 9px 20px;
+  font-size: 15px;
+  letter-spacing: 1px;
+  border: 1px solid rgba(120, 88, 30, 0.45);
+  box-shadow: 0 4px 14px rgba(60, 40, 10, 0.18);
+  transition: transform 0.25s var(--spring);
+}
+.btn:active { transform: scale(var(--press-scale)); }
+.btn.primary {
+  color: #fff8e6;
+  background: linear-gradient(180deg, #b48a3c, #8a6424);
+  text-shadow: 0 1px 0 rgba(60, 35, 5, 0.5);
+}
+.btn.ghost { color: #4a3416; background: rgba(255, 250, 238, 0.82); }
+.btn.danger { color: #8a2a1a; }
+</style>

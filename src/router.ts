@@ -13,6 +13,7 @@ const router = createRouter({
         { path: 'bedroom', component: () => import('./views/rooms/Bedroom.vue') },
         { path: 'kitchen', component: () => import('./views/rooms/Kitchen.vue') },
         { path: 'study', component: () => import('./views/rooms/Study.vue') },
+        { path: 'study/shelf', component: () => import('./views/rooms/shelf/Bookshelf.vue') },
         { path: 'bathroom', component: () => import('./views/rooms/Bathroom.vue') },
         { path: 'greenhouse', component: () => import('./views/rooms/Greenhouse.vue') },
         { path: 'rooftop', component: () => import('./views/rooms/Rooftop.vue') },

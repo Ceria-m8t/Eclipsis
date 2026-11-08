@@ -29,9 +29,37 @@ function onHotspot(path: string) {
   if (!hasMoved && path) router.push(path)
 }
 
+// 书架：镜头往书架那一段推过去，再换成书架特写页（2026-11-09）
+const canvas = ref<HTMLElement | null>(null)
+const SHELF_FOCUS = '30% 17%'      // 书房底图里拉近的那一段书架（左边立柱旁边几格）
+let zooming = false
+function openShelf() {
+  if (hasMoved || zooming) return
+  zooming = true
+  const el = canvas.value
+  if (!el || matchMedia('(prefers-reduced-motion: reduce)').matches) { router.push('/study/shelf'); return }
+  el.style.transformOrigin = SHELF_FOCUS
+  el.animate(
+    [{ transform: 'scale(1)', opacity: 1 }, { transform: 'scale(2.6)', opacity: 0.15 }],
+    { duration: 560, easing: 'cubic-bezier(.5,0,.75,.4)', fill: 'forwards' }
+  ).finished.then(() => router.push('/study/shelf'))
+}
+
 onMounted(() => {
   const el = container.value
   if (el) el.scrollLeft = (el.scrollWidth - el.clientWidth) / 2
+  // 从书架回来：镜头从书架那儿拉回来
+  if (sessionStorage.getItem('eclipsis-from-shelf') === '1') {
+    sessionStorage.removeItem('eclipsis-from-shelf')
+    const c = canvas.value
+    if (c && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      c.style.transformOrigin = SHELF_FOCUS
+      c.animate(
+        [{ transform: 'scale(2.6)', opacity: 0.15 }, { transform: 'scale(1)', opacity: 1 }],
+        { duration: 560, easing: 'cubic-bezier(.25,.6,.5,1)' }
+      )
+    }
+  }
 })
 </script>
 
@@ -45,7 +73,7 @@ onMounted(() => {
       @pointerup="onPointerUp"
       @pointercancel="onPointerUp"
     >
-      <div class="room-canvas">
+      <div ref="canvas" class="room-canvas">
         <img src="/assets/rooms/study/base-night.jpg" alt="书房" class="room-base" draggable="false" />
 
         <div class="furniture-layer"></div>
@@ -53,6 +81,9 @@ onMounted(() => {
         <div class="people-layer"></div>
 
         <div class="hotspot-layer">
+          <button class="hotspot shelf" aria-label="书架" @click.stop="openShelf">
+            <span class="hotspot-label glass">📚 书架</span>
+          </button>
           <button class="hotspot door-hallway" @click.stop="onHotspot('/hallway')">
             <span class="hotspot-label glass">🚪 走廊</span>
           </button>
@@ -136,4 +167,5 @@ onMounted(() => {
 
 /* ---- 热区位置 ---- */
 .hotspot.door-hallway { bottom: 18%; right: 8%; }
+.hotspot.shelf { left: 26%; top: 15%; }
 </style>
