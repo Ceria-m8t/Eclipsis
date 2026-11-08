@@ -210,10 +210,10 @@ function zoomTransform(a: Anim) {
 }
 
 // 皮扣：铰链在封面右边缘，往右翻开挂着。皮扣有厚度（几层叠起来，中间几层是皮子的侧边）
-const claspT = (a: Anim) => Math.max(2, a.W * 0.012)
+const claspT = (a: Anim) => Math.max(4, a.W * 0.03)      // 11-09 1.2% 太薄看不出来
 const CLASP_CLOSED = (a: Anim) => `translateZ(${a.T / 2 + claspT(a) / 2 + 0.4}px) rotateY(0deg)`
 const CLASP_OPEN = (a: Anim) => `translateZ(${a.T / 2 + claspT(a) / 2 + 0.4}px) rotateY(150deg)`
-const CLASP_LAYERS = 4
+const CLASP_LAYERS = 8
 const clasp = ref<HTMLElement | null>(null)
 
 // 合上时书页在封面下面一摞；翻过去以后要压在封面衬页上面，而且角度和封面一样平，
@@ -561,7 +561,7 @@ const animSpineLabel = computed(() => anim.value ? (void fontsReady.value, spine
                 :style="{ transform: `translateZ(calc(var(--ct) * ${(k / (CLASP_LAYERS + 1) - 0.5).toFixed(3)}))` }"
               ></div>
               <img class="face clasp-front" :src="ASSET + anim.look.clasp.file" alt="" />
-              <img class="face clasp-back" :src="ASSET + anim.look.clasp.file" alt="" />
+              <div class="face clasp-back"></div>
             </div>
             <div ref="cover" class="cover">
               <div class="face cf">
@@ -835,14 +835,18 @@ const animSpineLabel = computed(() => anim.value ? (void fontsReady.value, spine
   transform: translateZ(calc(var(--ct) / 2));
   filter: drop-shadow(-1px 1px 1.2px rgba(0, 0, 0, 0.55));
 }
-/* 背面：同一张图压暗，翻开时看到的是皮子背面 */
+/* 背面：皮扣内侧是没有金属件的素皮子（11-09 用正面压暗，翻开后扣子像朝里） */
 .clasp-back {
   transform: rotateY(180deg) translateZ(calc(var(--ct) / 2));
-  filter: brightness(0.45) saturate(0.7);
+  background:
+    repeating-linear-gradient(115deg, rgba(255, 255, 255, 0.04) 0 2px, rgba(0, 0, 0, 0.05) 2px 4px),
+    linear-gradient(#5a3c22, #3b2715 70%, #2c1d10);
+  -webkit-mask: var(--clasp) center / 100% 100% no-repeat;
+  mask: var(--clasp) center / 100% 100% no-repeat;
 }
 /* 中间几层：皮子侧边的颜色，斜着看时连成一条边 */
 .clasp-edge {
-  background: linear-gradient(#6b4a22, #3a2612);
+  background: linear-gradient(#7a5528, #4a3016 60%, #2e1e0e);
   -webkit-mask: var(--clasp) center / 100% 100% no-repeat;
   mask: var(--clasp) center / 100% 100% no-repeat;
 }

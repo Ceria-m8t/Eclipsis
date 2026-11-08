@@ -208,7 +208,7 @@
    }
   },
   "cover": {
-   "file": "main-cover.webp?v=982a2500",
+   "file": "main-cover.webp?v=a34806cc",
    "w": 642,
    "h": 900,
    "label": {
@@ -219,13 +219,13 @@
    }
   },
   "clasp": {
-   "file": "main-clasp.webp?v=3836b4da",
-   "w": 156,
+   "file": "main-clasp.webp?v=aabdc0a3",
+   "w": 141,
    "h": 91,
    "box": {
-    "x": 0.7573,
+    "x": 0.7802,
     "y": 0.4575,
-    "w": 0.2427,
+    "w": 0.2198,
     "h": 0.1013
    }
   }
