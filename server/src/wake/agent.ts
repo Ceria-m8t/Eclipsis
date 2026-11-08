@@ -11,6 +11,21 @@ import type { WakeBox, ToolResult } from './boxes.ts'
 
 export const SEND_TOOL = 'send_to_erica'
 
+// 把工具调用写成了文字（照着聊天记录里的格式写，没真调）：「[调用工具 X：…]」「[工具 X 返回]」「[系统记录…]」
+// 11-08 三次醒来都是这样，那段话被当成消息推给了她。
+const FAKE_CALL = /\[(?:调用工具|工具 [^\]\n]* 返回|系统记录)/
+const FAKE_CALL_LINE = /^.*\[(?:调用工具|工具 [^\]\n]* 返回|系统记录)[^\n]*$/gm
+/** 提醒几次还写成文字，就不再提醒，直接收尾 */
+const MAX_FAKE_NUDGES = 2
+
+export const FAKE_CALL_NUDGE = '[系统提示，不是她说的] 你刚才把工具调用写成了文字，这样不会真的执行，那段话也不会发给她。' +
+  '要用工具就直接调用（箱子要先用 open_ 入口打开）；想跟她说话用 send_to_erica；做完了就停下。'
+
+/** 去掉写成文字的工具调用那几行 */
+export function stripFakeCalls(text: string): string {
+  return text.replace(FAKE_CALL_LINE, '').replace(/\n{3,}/g, '\n\n').trim()
+}
+
 export type WakeModelResult = { ok: true; resp: ModelResponse } | { ok: false; error: string }
 
 export interface WakeAgentDeps {
@@ -38,6 +53,8 @@ export interface WakeAgentResult {
   truncated: boolean
   /** 中途模型调用失败 / 回复被截断 */
   error?: string
+  /** 把工具调用写成文字的次数（每次都提醒过他） */
+  fakeCalls: number
 }
 
 const fn = (name: string, description: string, properties: Record<string, unknown> = {}, required: string[] = []) =>
@@ -66,6 +83,7 @@ export async function runWakeAgent(initial: ChatMessage[], deps: WakeAgentDeps):
   let finalText = ''
   let error: string | undefined
   let finished = false
+  let fakeCalls = 0
 
   const runTool = async (tc: ToolCall): Promise<string> => {
     const name = tc.function.name
@@ -111,7 +129,16 @@ export async function runWakeAgent(initial: ChatMessage[], deps: WakeAgentDeps):
 
     if (resp.toolCalls.length === 0) {
       if (resp.finishReason === 'length') { error = '回复被截断'; break }
-      finalText = resp.content || ''
+      const text = resp.content || ''
+      if (FAKE_CALL.test(text)) {
+        fakeCalls++
+        log(`[wake-agent] 把工具调用写成了文字（第 ${fakeCalls} 次）`)
+        if (fakeCalls <= MAX_FAKE_NUDGES && modelTurns < maxTurns) {
+          messages.push({ role: 'user', content: FAKE_CALL_NUDGE })
+          continue
+        }
+        finalText = stripFakeCalls(text)
+      } else finalText = text
       finished = true
       break
     }
@@ -126,5 +153,5 @@ export async function runWakeAgent(initial: ChatMessage[], deps: WakeAgentDeps):
 
   const truncated = !finished && !error
   if (truncated) log(`[wake-agent] 到了 ${maxTurns} 轮上限还没停`)
-  return { sent, finalText, toolsUsed, modelTurns, truncated, error }
+  return { sent, finalText, toolsUsed, modelTurns, truncated, error, fakeCalls }
 }

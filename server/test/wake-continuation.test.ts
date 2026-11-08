@@ -45,13 +45,29 @@ describe('continuation 拼装', () => {
     assert.equal(stripSceneBlock('没有此刻块'), '没有此刻块')
   })
 
-  it('工具调用/结果压成文字，图片换成 [图片]', () => {
+  it('工具调用/结果压成 user 那一侧的系统记录，他的回复里只留他说的话；图片换成 [图片]', () => {
     const out = flattenTools(chat.slice(1))
     assert.deepEqual(out.map(m => m.role), ['user', 'assistant', 'user', 'assistant', 'user'])
-    assert.equal(out[1].content, '我看看\n[调用工具 breath：{"q":"她"}]')
-    assert.equal(out[2].content, '[工具 breath 返回]\n记忆：她喜欢猫')
+    assert.equal(out[1].content, '我看看')
+    assert.equal(out[2].content, '[系统记录，不是她说的] 这一步你用了工具 breath，参数 {"q":"她"}。返回：\n记忆：她喜欢猫')
     assert.equal(out[4].content, '看这个[图片]')
     assert.ok(out.every(m => !('tool_calls' in m)))
+    // 他的回复里不再出现能照着写的调用格式
+    assert.ok(out.filter(m => m.role === 'assistant').every(m => !/\[(调用工具|系统记录)/.test(String(m.content))))
+  })
+
+  it('不带话、连调两个工具：记录接在她那条后面，不出现空的回复，也不连着两条 user', () => {
+    const out = flattenTools([
+      { role: 'user', content: '在吗' },
+      { role: 'assistant', content: '', tool_calls: [
+        { id: 'a', type: 'function', function: { name: 'breath', arguments: '{}' } },
+        { id: 'b', type: 'function', function: { name: 'feel', arguments: '{"x":1}' } }] },
+      { role: 'tool', tool_call_id: 'a', name: 'breath', content: 'A' },
+      { role: 'tool', tool_call_id: 'b', name: 'feel', content: 'B' },
+      { role: 'assistant', content: '在。' }
+    ])
+    assert.deepEqual(out.map(m => m.role), ['user', 'assistant'])
+    assert.match(out[0].content, /^在吗\n\n\[系统记录，不是她说的\] 这一步你用了工具 breath，参数 \{\}。返回：\nA\n\n\[系统记录，不是她说的\] 这一步你用了工具 feel/)
   })
 
   it('取最近一次正常结束的聊天，跳过中途调工具的；接上他那轮的回复（剥思维链）', () => {

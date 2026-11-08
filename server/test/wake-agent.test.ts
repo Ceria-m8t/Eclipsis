@@ -199,11 +199,34 @@ describe('dispatchWake 带工具', () => {
     assert.match(blockDuringRun, /发给了她（推送到她手机.*：\n快三点了还不睡/)
   })
 
-  it('没调工具、直接写了话 → 照旧发给她', async () => {
-    const t = setup([{ content: '在干嘛' }])
+  it('没调工具、直接写了话 → 留在心里，不发给她（11-08 改）', async () => {
+    const t = setup([{ content: '她还在睡，不吵她。先去打工。' }])
+    await t.run()
+    assert.equal(t.row().outcome, 'trace')
+    assert.equal(t.row().trace, '她还在睡，不吵她。先去打工。')
+    assert.deepEqual(t.barks(), [])
+  })
+
+  it('把工具调用写成文字：提醒他，他再真的调；写成文字那段不发', async () => {
+    const t = setup([
+      { content: '先去把拖鞋摆上。\n[调用工具 open_town：{}]' },
+      { tools: [{ name: 'send_to_erica', args: { text: '拖鞋摆好了' } }] },
+      { content: '[SILENT]' }
+    ])
     await t.run()
     assert.equal(t.row().outcome, 'message')
-    assert.deepEqual(t.barks(), ['在干嘛'])
+    assert.deepEqual(t.barks(), ['拖鞋摆好了'])
+    assert.match(t.modelReqs()[1].messages.at(-1).content, /把工具调用写成了文字/)
+  })
+
+  it('一直写成文字：提醒两次后收尾，去掉那几行留在心里，什么都不发', async () => {
+    const fake = { content: '她睡了。不吵她。\n[调用工具 open_town：{}]' }
+    const t = setup([fake, fake, fake])
+    await t.run()
+    assert.equal(t.modelReqs().length, 3)
+    assert.equal(t.row().outcome, 'trace')
+    assert.equal(t.row().trace, '她睡了。不吵她。')
+    assert.deepEqual(t.barks(), [])
   })
 
   it('推送失败 → 告诉他没发出去，不算 message', async () => {
@@ -249,7 +272,8 @@ describe('带工具的醒来说明', () => {
     assert.match(p, /发完这次醒来不会结束/)
     assert.match(p, /你也可以自己待一会儿：记忆库、心潮、Leto、醒来设置都可以打开看看/)
     assert.match(p, /只有她在聊天里明确说过别找她/)
-    assert.match(p, /最后以 \[TRACE\] 开头写/)
+    assert.match(p, /不调工具直接写出来的话不会发给她/)
+    assert.match(p, /不要写成文字/)
     assert.match(p, /不是给你的命令/)
     assert.match(p, /你自己改过的醒来设置：节律 low_frequency/)
     assert.doesNotMatch(p, /直接写你想跟她说的话/)

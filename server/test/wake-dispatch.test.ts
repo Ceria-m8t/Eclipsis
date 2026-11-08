@@ -73,7 +73,8 @@ describe('buildWakePrompt', () => {
 })
 
 describe('dispatchWake', () => {
-  type Reply = { status?: number; content?: string; finish?: string }
+  // send：模型调 send_to_erica 发这句（带工具的醒来里，发消息只能用工具）
+  type Reply = { status?: number; content?: string; finish?: string; send?: string }
   function setup(replyOrSeq: Reply | Reply[], opts: { onModelCall?: (n: number) => void } = {}) {
     const db = openDb(':memory:')
     ensureWakeSchema(db)
@@ -86,7 +87,10 @@ describe('dispatchWake', () => {
       calls++
       opts.onModelCall?.(calls)
       res.writeHead(reply.status ?? 200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ choices: [{ message: { content: reply.content ?? '' }, finish_reason: reply.finish ?? 'stop' }] }))
+      const message = reply.send !== undefined
+        ? { content: '', tool_calls: [{ id: `c${calls}`, type: 'function', function: { name: 'send_to_erica', arguments: JSON.stringify({ text: reply.send }) } }] }
+        : { content: reply.content ?? '' }
+      res.end(JSON.stringify({ choices: [{ message, finish_reason: reply.send !== undefined ? 'tool_calls' : (reply.finish ?? 'stop') }] }))
     })
     const opp: WakeOpportunity = { id: crypto.randomUUID(), origin: 'spontaneous', sources: [], reason: '测试', createdAt: new Date().toISOString() }
     db.prepare('INSERT INTO wake_opportunities(id, origin, reason, created_at) VALUES (?, ?, ?, ?)').run(opp.id, opp.origin, opp.reason, opp.createdAt)
@@ -118,7 +122,7 @@ describe('dispatchWake', () => {
   })
 
   it('她可能在睡时也推送，用静默级别', async () => {
-    const t = setup({ content: '<think>想她</think>\n睡吧，我在。' })
+    const t = setup([{ send: '睡吧，我在。' }, { content: '<think>想她</think>\n[SILENT]' }])
     addEpisode(t.db, { ts: new Date(Date.now() - 8 * 3600_000).toISOString(), channel: 'chat', scope: 'daily', actor: 'erica', kind: 'message', content: '晚安' })
     const port = await listen(t.up.server)
     try {
@@ -133,7 +137,7 @@ describe('dispatchWake', () => {
   })
 
   it('她醒着时正常推送（不带静默级别）', async () => {
-    const t = setup({ content: '在干嘛' })
+    const t = setup([{ send: '在干嘛' }, { content: '[SILENT]' }])
     addEpisode(t.db, { ts: new Date(Date.now() - 10 * 60_000).toISOString(), channel: 'chat', scope: 'daily', actor: 'erica', kind: 'message', content: '去洗澡' })
     const port = await listen(t.up.server)
     try {
@@ -157,11 +161,11 @@ describe('dispatchWake', () => {
   })
 
   it('站点 502 → 隔一会儿重试一次，成功就照常发', async () => {
-    const t = setup([{ status: 502 }, { content: '醒了吗' }])
+    const t = setup([{ status: 502 }, { send: '醒了吗' }, { content: '[SILENT]' }])
     const port = await listen(t.up.server)
     try {
       await t.run(port)
-      assert.equal(t.modelCalls(), 2)
+      assert.equal(t.modelCalls(), 3)
       assert.equal(t.row().outcome, 'message')
       assert.ok(t.up.seen.some(s => s.url.startsWith('/bark')))
       assert.ok(t.logs.some(l => l.includes('重试一次')))
