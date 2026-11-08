@@ -25,6 +25,8 @@ export interface BookLook {
   cover: Img
   endpaper: Img
   page: Img
+  /** 主 prompt 那本封面右边的皮扣（单独一张，开书前先解开）。box 是它在封面上的位置（比例） */
+  clasp?: { file: string; w: number; h: number; box: Box }
   /** 书在书架上的高度，相对最高那本普通书 */
   heightScale: number
 }
@@ -51,6 +53,7 @@ export const MAIN_LOOK: BookLook = {
   cover: meta.main.cover,
   endpaper: meta.mainEndpaper,
   page: meta.page_main,
+  clasp: meta.main.clasp,
   heightScale: 1.14
 }
 

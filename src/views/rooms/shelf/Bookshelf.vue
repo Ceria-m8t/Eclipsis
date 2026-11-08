@@ -139,6 +139,11 @@ interface Anim {
   px: number; pt: number
 }
 
+// 书页比封面板子小一圈（真书的板子会比书页大一点），不然转书、翻开时纸从封面边上露出来
+const INSET_X = 0.035     // 书口那边
+const INSET_Y = 0.025     // 天头、地脚
+const pageSize = (a: { W: number; H: number }) => ({ w: a.W * (1 - INSET_X), h: a.H * (1 - 2 * INSET_Y) })
+
 function safeTop(): number {
   const d = document.createElement('div')
   d.style.cssText = 'position:fixed;visibility:hidden;padding-top:env(safe-area-inset-top)'
@@ -199,9 +204,15 @@ function zoomScale(W: number, H: number) {
   return Math.max(v.w / W, v.h / H) * 1.02
 }
 function zoomTransform(a: Anim) {
-  const s = zoomScale(a.W, a.H)
-  return `translate(${-s * a.W / 2}px, 0px) scale(${s})`
+  const pg = pageSize(a)
+  const s = zoomScale(pg.w, pg.h)
+  return `translate(${-s * pg.w / 2}px, 0px) scale(${s})`
 }
+
+// 皮扣：铰链在封面右边缘，往右翻开挂着
+const CLASP_CLOSED = (a: Anim) => `translateZ(${a.T / 2 + 0.8}px) rotateY(0deg)`
+const CLASP_OPEN = (a: Anim) => `translateZ(${a.T / 2 + 0.8}px) rotateY(150deg)`
+const clasp = ref<HTMLElement | null>(null)
 
 // 合上时书页在封面下面一摞；翻过去以后要压在封面衬页上面，而且角度和封面一样平，
 // 不然靠近书脊那一截书页会比衬页低，衬页从缝里露出来（11-09 iOS 上露了一条）。
@@ -222,11 +233,12 @@ async function openItem(it: Placed) {
   const H = W / aspect
   const T = H * (look.spine.w / look.spine.h) * WIDEN[look.kind]   // 和书架上一样粗
   const title = it.kind === 'add' ? NEW_TITLE : it.title
-  // 推近以后书页中心对着屏幕中心：屏幕左边缘在书页上的 x = W/2 - 屏宽/2/倍数
-  const zs = zoomScale(W, H)
+  // 推近以后书页中心对着屏幕中心：屏幕左边缘在书页上的 x = 页宽/2 - 屏宽/2/倍数
+  const pg = pageSize({ W, H })
+  const zs = zoomScale(pg.w, pg.h)
   const sideVw = it.kind === 'main' ? 0.10 : 0.13          // 和 BookPage 的左右边距一样
-  const px = W / 2 - v.w / 2 / zs + (v.w * sideVw + 3) / zs
-  const pt = H / 2 - v.h / 2 / zs + (safeTop() + v.h * 0.11 + 5) / zs - 3
+  const px = pg.w / 2 - v.w / 2 / zs + (v.w * sideVw + 3) / zs
+  const pt = pg.h / 2 - v.h / 2 / zs + (safeTop() + v.h * 0.11 + 5) / zs
   anim.value = { look, W, H, T, title, u: 1 / zs, px, pt }
 
   if (it.kind === 'main') {
@@ -247,6 +259,7 @@ async function openItem(it: Placed) {
   flyer.value!.style.transform = start.t
   turner.value!.style.transform = 'translateX(0px) rotateY(90deg)'
   cover.value!.style.transform = COVER_CLOSED(a)
+  if (clasp.value) clasp.value.style.transform = CLASP_CLOSED(a)
   leafEls.forEach((el, i) => (el.style.transform = LEAF_CLOSED(a, i)))
 
   // 1. 抽出来一点
@@ -260,6 +273,8 @@ async function openItem(it: Placed) {
     play(turner.value, [{ transform: 'translateX(0px) rotateY(90deg)' }, { transform: 'translateX(0px) rotateY(0deg)' }], 820),
     play(backdrop.value, [{ opacity: 0 }, { opacity: 1 }], 600)
   ])
+  // 2.5 有皮扣的先解开
+  if (clasp.value) await play(clasp.value, [{ transform: CLASP_CLOSED(a) }, { transform: CLASP_OPEN(a) }], 420, 'cubic-bezier(.4,.1,.3,1)')
   // 3. 掀开封面（书往右挪半本，摊开后两页居中）
   await Promise.all([
     play(turner.value, [{ transform: 'translateX(0px) rotateY(0deg)' }, { transform: `translateX(${W / 2}px) rotateY(0deg)` }], 620),
@@ -290,6 +305,7 @@ async function closeBook(after?: () => void) {
     play(turner.value, [{ transform: `translateX(${a.W / 2}px) rotateY(0deg)` }, { transform: 'translateX(0px) rotateY(0deg)' }], 560),
     play(cover.value, [{ transform: COVER_OPEN(a) }, { transform: COVER_CLOSED(a) }], 560, 'cubic-bezier(.5,.1,.3,1)')
   ])
+  if (clasp.value) await play(clasp.value, [{ transform: CLASP_OPEN(a) }, { transform: CLASP_CLOSED(a) }], 360, 'cubic-bezier(.5,.1,.3,1)')
   const target = shelfTransform(key, a)
   await Promise.all([
     play(flyer.value, [{ transform: 'translate(0px, 0px) scale(1)' }, { transform: target.t }], 780),
@@ -484,6 +500,15 @@ const animSpineLabel = computed(() => anim.value ? (void fontsReady.value, spine
                 <div class="page-text"><div class="pt-body">{{ pageChunk(i * 2) }}</div></div>
               </div>
             </div>
+            <div
+              v-if="anim.look.clasp"
+              ref="clasp"
+              class="clasp"
+              :style="{ left: `${anim.look.clasp.box.x * 100}%`, top: `${anim.look.clasp.box.y * 100}%`, width: `${anim.look.clasp.box.w * 100}%`, height: `${anim.look.clasp.box.h * 100}%`, '--clasp': `url(${ASSET + anim.look.clasp.file})` }"
+            >
+              <img class="face" :src="ASSET + anim.look.clasp.file" alt="" />
+              <div class="face clasp-back"></div>
+            </div>
             <div ref="cover" class="cover">
               <div class="face cf">
                 <img :src="ASSET + anim.look.cover.file" alt="" />
@@ -652,23 +677,24 @@ const animSpineLabel = computed(() => anim.value ? (void fontsReady.value, spine
 }
 .f-spine img { width: 100%; height: 100%; display: block; }
 /* 书口、天头、地脚：一摞纸的边，金边书口 */
+.book3d { --ix: calc(var(--W) * 0.035); --iy: calc(var(--H) * 0.025); }
 .f-fore {
-  left: calc((var(--W) - var(--T)) / 2); top: 3px;
-  width: calc(var(--T) - 2px); height: calc(var(--H) - 6px);
-  transform: rotateY(90deg) translateZ(calc(var(--W) / 2 - 3px));
+  left: calc((var(--W) - var(--T)) / 2 + 1px); top: var(--iy);
+  width: calc(var(--T) - 2px); height: calc(var(--H) - 2 * var(--iy));
+  transform: rotateY(90deg) translateZ(calc(var(--W) / 2 - var(--ix)));
   background: repeating-linear-gradient(to right, #e8d3a0 0 1px, #c9a75e 1px 2px), linear-gradient(#d8b874, #b08a40);
   background-blend-mode: multiply;
 }
 .f-top, .f-bottom {
-  left: 3px; top: calc((var(--H) - var(--T)) / 2);
-  width: calc(var(--W) - 6px); height: calc(var(--T) - 2px);
+  left: 0; top: calc((var(--H) - var(--T)) / 2 + 1px);
+  width: calc(var(--W) - var(--ix)); height: calc(var(--T) - 2px);
   background: repeating-linear-gradient(to bottom, #efe2c2 0 1px, #d7c39a 1px 2px);
 }
-.f-top { transform: rotateX(90deg) translateZ(calc(var(--H) / 2 - 3px)); }
-.f-bottom { transform: rotateX(-90deg) translateZ(calc(var(--H) / 2 - 3px)); }
+.f-top { transform: rotateX(90deg) translateZ(calc(var(--H) / 2 - var(--iy))); }
+.f-bottom { transform: rotateX(-90deg) translateZ(calc(var(--H) / 2 - var(--iy))); }
 .f-block {
-  left: 0; top: 3px;
-  width: calc(var(--W) - 3px); height: calc(var(--H) - 6px);
+  left: 0; top: var(--iy);
+  width: calc(var(--W) - var(--ix)); height: calc(var(--H) - 2 * var(--iy));
   transform: translateZ(calc(var(--T) / 2 - 3px));
   background-size: cover;
   background-position: center;
@@ -676,8 +702,8 @@ const animSpineLabel = computed(() => anim.value ? (void fontsReady.value, spine
 }
 .leaf {
   position: absolute;
-  left: 0; top: 3px;
-  width: calc(var(--W) - 4px); height: calc(var(--H) - 6px);
+  left: 0; top: var(--iy);
+  width: calc(var(--W) - var(--ix)); height: calc(var(--H) - 2 * var(--iy));
   transform-origin: left center;
   transform-style: preserve-3d;
 }
@@ -717,6 +743,19 @@ const animSpineLabel = computed(() => anim.value ? (void fontsReady.value, spine
 .page-text:not(.first) .pt-body { margin-top: 0; }
 .leaf .lf { box-shadow: inset 8px 0 12px -8px rgba(60, 40, 20, 0.35); }
 .leaf .lb { transform: rotateY(180deg); filter: brightness(0.93); }
+.clasp {
+  position: absolute;
+  transform-origin: right center;
+  transform-style: preserve-3d;
+}
+.clasp .face { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+/* 皮扣背面：深色皮子，形状跟正面一样 */
+.clasp-back {
+  transform: rotateY(180deg);
+  background: linear-gradient(#4a3320, #2e1f12);
+  -webkit-mask: var(--clasp) center / 100% 100% no-repeat;
+  mask: var(--clasp) center / 100% 100% no-repeat;
+}
 .cover {
   position: absolute;
   left: 0; top: 0; width: var(--W); height: var(--H);
