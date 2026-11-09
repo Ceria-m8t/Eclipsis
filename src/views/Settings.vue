@@ -1,9 +1,8 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref } from 'vue'
 import { getSettings, saveSettings, apiUrl, apiHeaders } from '../settings'
 import { loadMcpServers, saveMcpServers, discoverTools, type McpServer } from '../mcp'
 import { compressImage } from '../image'
-import { queueWorldbookPush } from '../prompt-store'
 import { isViewportDebug, setViewportDebug } from '../viewport'
 import { theme, THEME_PRESETS, DEFAULT_THEME } from '../theme'
 import { liquidEnabled, liquidActive, setLiquidEnabled } from '../liquid/global'
@@ -87,202 +86,9 @@ function showToast(text: string) {
   toastTimer = window.setTimeout(() => { toastVisible.value = false }, 1500)
 }
 
-// ===== Worldbook =====
-interface WorldbookEntry {
-  title: string
-  content: string
-  enabled: boolean
-  group: string
-  position: 'before' | 'after'
-  priority: number
-  id?: string
-  look?: number
-}
-
-interface GroupState {
-  collapsed: boolean
-  enabled: boolean
-}
-
 // 书房书架上的书名字体
 const bookFont = ref<string>(loadBookFont().id)
 function pickBookFont(id: string) { bookFont.value = id; saveBookFont(id) }
-
-const WORLDBOOK_KEY = 'worldbook'
-const GROUPS_KEY = 'worldbook-groups'
-const worldbook = ref<WorldbookEntry[]>([])
-const groupStates = ref<Record<string, GroupState>>({})
-const expandedEntry = ref<number | null>(null)
-const newGroupName = ref('')
-const showAddGroup = ref(false)
-
-function loadWorldbook() {
-  try {
-    const saved = localStorage.getItem(WORLDBOOK_KEY)
-    if (saved) {
-      const parsed = JSON.parse(saved)
-      // Migrate old format entries
-      worldbook.value = parsed.map((e: any) => ({
-        title: e.title || '',
-        content: e.content || '',
-        enabled: e.enabled ?? true,
-        group: e.group || '默认',
-        position: e.position || 'after',
-        priority: e.priority ?? 50,
-        // 书架用的：认书的 id、用哪种书脊（这里不显示，但要原样留着）
-        ...(e.id ? { id: e.id } : {}),
-        ...(Number.isInteger(e.look) ? { look: e.look } : {})
-      }))
-    }
-  } catch {}
-  try {
-    const saved = localStorage.getItem(GROUPS_KEY)
-    if (saved) groupStates.value = JSON.parse(saved)
-  } catch {}
-}
-
-function saveWorldbook() {
-  localStorage.setItem(WORLDBOOK_KEY, JSON.stringify(worldbook.value))
-  localStorage.setItem(GROUPS_KEY, JSON.stringify(groupStates.value))
-  queueWorldbookPush()
-}
-
-// Groups
-const groups = computed(() => {
-  const set = new Set<string>()
-  for (const e of worldbook.value) set.add(e.group)
-  return Array.from(set)
-})
-
-function getGroupState(name: string): GroupState {
-  if (!groupStates.value[name]) {
-    groupStates.value[name] = { collapsed: false, enabled: true }
-  }
-  return groupStates.value[name]
-}
-
-function toggleGroupCollapse(name: string) {
-  getGroupState(name).collapsed = !getGroupState(name).collapsed
-  saveWorldbook()
-}
-
-function toggleGroupEnabled(name: string) {
-  const state = getGroupState(name)
-  state.enabled = !state.enabled
-  // Sync entries
-  for (const e of worldbook.value) {
-    if (e.group === name) e.enabled = state.enabled
-  }
-  saveWorldbook()
-}
-
-function groupEntryCount(name: string): { enabled: number; total: number } {
-  let enabled = 0, total = 0
-  for (const e of worldbook.value) {
-    if (e.group === name) {
-      total++
-      if (e.enabled) enabled++
-    }
-  }
-  return { enabled, total }
-}
-
-function entriesInGroup(name: string): { entry: WorldbookEntry; index: number }[] {
-  const result: { entry: WorldbookEntry; index: number }[] = []
-  for (let i = 0; i < worldbook.value.length; i++) {
-    if (worldbook.value[i].group === name) {
-      result.push({ entry: worldbook.value[i], index: i })
-    }
-  }
-  // Sort by priority descending (higher = more important)
-  result.sort((a, b) => b.entry.priority - a.entry.priority)
-  return result
-}
-
-function addEntry(group: string) {
-  worldbook.value.push({
-    title: '新条目',
-    content: '',
-    enabled: getGroupState(group).enabled,
-    group,
-    position: 'after',
-    priority: 50
-  })
-  expandedEntry.value = worldbook.value.length - 1
-  saveWorldbook()
-}
-
-function addGroup() {
-  const name = newGroupName.value.trim()
-  if (!name) return
-  if (groups.value.includes(name)) {
-    showToast('分组已存在')
-    return
-  }
-  groupStates.value[name] = { collapsed: false, enabled: true }
-  // Add a default entry so the group shows up
-  worldbook.value.push({
-    title: '新条目',
-    content: '',
-    enabled: true,
-    group: name,
-    position: 'after',
-    priority: 50
-  })
-  expandedEntry.value = worldbook.value.length - 1
-  newGroupName.value = ''
-  showAddGroup.value = false
-  saveWorldbook()
-}
-
-function removeEntry(index: number) {
-  worldbook.value.splice(index, 1)
-  if (expandedEntry.value === index) expandedEntry.value = null
-  else if (expandedEntry.value !== null && expandedEntry.value > index) expandedEntry.value--
-  saveWorldbook()
-}
-
-function deleteGroup(name: string) {
-  worldbook.value = worldbook.value.filter(e => e.group !== name)
-  delete groupStates.value[name]
-  expandedEntry.value = null
-  saveWorldbook()
-}
-
-function toggleEntry(index: number) {
-  worldbook.value[index].enabled = !worldbook.value[index].enabled
-  saveWorldbook()
-}
-
-function toggleExpand(index: number) {
-  expandedEntry.value = expandedEntry.value === index ? null : index
-}
-
-function onEntryChange() {
-  saveWorldbook()
-}
-
-function moveEntryUp(index: number) {
-  const entry = worldbook.value[index]
-  entry.priority = Math.min(100, entry.priority + 10)
-  saveWorldbook()
-}
-
-function moveEntryDown(index: number) {
-  const entry = worldbook.value[index]
-  entry.priority = Math.max(0, entry.priority - 10)
-  saveWorldbook()
-}
-
-function positionLabel(pos: string): string {
-  return pos === 'before' ? '系统提示前' : '系统提示后'
-}
-
-function togglePosition(index: number) {
-  const entry = worldbook.value[index]
-  entry.position = entry.position === 'before' ? 'after' : 'before'
-  saveWorldbook()
-}
 
 // ===== MCP Servers =====
 const mcpList = ref<McpServer[]>(loadMcpServers())
@@ -330,9 +136,6 @@ async function refreshTools(index: number) {
   }
 }
 
-onMounted(() => {
-  loadWorldbook()
-})
 </script>
 
 <template>
@@ -547,107 +350,11 @@ onMounted(() => {
           在屏幕左上角显示尺寸数据（排查白条、键盘位置用）
         </label>
 
-        <!-- Worldbook -->
         <div class="section-title">世界书</div>
-        <p class="worldbook-hint">启用的条目按优先级排序后拼接到系统提示词前/后。数字越大越优先（token不够时先保高优先级）。</p>
-
-        <div class="worldbook-list">
-          <div v-for="groupName in groups" :key="groupName" class="wb-group">
-            <!-- Group header -->
-            <div class="wb-group-header">
-              <button
-                class="wb-group-toggle"
-                :class="{ enabled: getGroupState(groupName).enabled }"
-                @click.stop="toggleGroupEnabled(groupName)"
-                :title="getGroupState(groupName).enabled ? '禁用整组' : '启用整组'"
-              >{{ getGroupState(groupName).enabled ? '●' : '○' }}</button>
-              <span class="wb-group-name" @click="toggleGroupCollapse(groupName)">
-                {{ getGroupState(groupName).collapsed ? '▶' : '▼' }}
-                {{ groupName }}
-              </span>
-              <span class="wb-group-count">{{ groupEntryCount(groupName).enabled }}/{{ groupEntryCount(groupName).total }}</span>
-              <button class="wb-group-add" @click="addEntry(groupName)" title="添加条目">+</button>
-              <button class="wb-group-del" @click="deleteGroup(groupName)" title="删除整组">🗑</button>
-            </div>
-
-            <!-- Entries -->
-            <div v-if="!getGroupState(groupName).collapsed" class="wb-group-body">
-              <div v-for="{ entry, index } in entriesInGroup(groupName)" :key="index" class="wb-entry">
-                <div class="wb-header" @click="toggleExpand(index)">
-                  <button
-                    class="wb-toggle"
-                    :class="{ enabled: entry.enabled }"
-                    @click.stop="toggleEntry(index)"
-                  >{{ entry.enabled ? '●' : '○' }}</button>
-                  <span class="wb-title-text">{{ entry.title || '(无标题)' }}</span>
-                  <span class="wb-position-tag" :class="entry.position">{{ positionLabel(entry.position) }}</span>
-                  <span class="wb-priority">P{{ entry.priority }}</span>
-                  <span class="wb-expand">{{ expandedEntry === index ? '▼' : '▶' }}</span>
-                </div>
-
-                <div v-if="expandedEntry === index" class="wb-body">
-                  <input
-                    v-model="entry.title"
-                    class="wb-title-input"
-                    placeholder="条目标题"
-                    @input="onEntryChange"
-                  />
-
-                  <div class="wb-meta-row">
-                    <div class="wb-meta-item">
-                      <span class="wb-meta-label">注入位置</span>
-                      <button class="wb-meta-btn" @click="togglePosition(index)">
-                        {{ positionLabel(entry.position) }}
-                      </button>
-                    </div>
-                    <div class="wb-meta-item">
-                      <span class="wb-meta-label">优先级</span>
-                      <div class="wb-priority-ctrl">
-                        <button @click="moveEntryDown(index)">−</button>
-                        <input
-                          type="number"
-                          v-model.number="entry.priority"
-                          min="0"
-                          max="100"
-                          @input="onEntryChange"
-                          class="wb-priority-input"
-                        />
-                        <button @click="moveEntryUp(index)">+</button>
-                      </div>
-                    </div>
-                  </div>
-
-                  <textarea
-                    v-model="entry.content"
-                    class="wb-content-input"
-                    placeholder="条目内容"
-                    rows="8"
-                    @input="onEntryChange"
-                  ></textarea>
-                  <div class="wb-actions">
-                    <span class="wb-char-count">{{ entry.content.length }} 字</span>
-                    <button class="wb-delete" @click="removeEntry(index)">删除</button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Add group -->
-        <div v-if="showAddGroup" class="wb-add-group-form">
-          <input
-            v-model="newGroupName"
-            class="wb-title-input"
-            placeholder="新分组名称"
-            @keydown.enter="addGroup"
-          />
-          <div class="wb-add-group-btns">
-            <button class="wb-add-group-confirm" @click="addGroup">确定</button>
-            <button class="wb-add-group-cancel" @click="showAddGroup = false">取消</button>
-          </div>
-        </div>
-        <button v-else class="wb-add" @click="showAddGroup = true">+ 新建分组</button>
+        <RouterLink to="/study/shelf" class="prompt-entry">
+          <span>去书房的书架</span>
+          <small>世界书和主提示词都在书架上，一本书就是一本世界书</small>
+        </RouterLink>
       </div>
     </main>
 
