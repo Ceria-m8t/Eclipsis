@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 import { describe, it, expect } from 'vitest'
 import { coverPlacement, canvasWindow, windowCovers, pickTone, hexToRgb01 } from '../src/liquid/geometry'
 
@@ -51,5 +52,24 @@ describe('液态玻璃几何', () => {
   it('hexToRgb01', () => {
     expect(hexToRgb01('#ff8000')).toEqual([1, 128 / 255, 0])
     expect(hexToRgb01('bad')).toEqual([1, 1, 1])
+  })
+})
+
+describe('全站玻璃：认 CSS 渐变', () => {
+  it('计算后的 165deg 三段渐变（rgb 里的逗号不能拆开）', async () => {
+    const { parseLinearGradient } = await import('../src/liquid/global')
+    const g = parseLinearGradient('linear-gradient(165deg, rgb(233, 238, 247) 0%, rgb(240, 240, 242) 45%, rgb(247, 243, 238) 100%)')
+    expect(g).toEqual({ angle: 165, stops: [
+      { color: 'rgb(233, 238, 247)', pos: 0 }, { color: 'rgb(240, 240, 242)', pos: 0.45 }, { color: 'rgb(247, 243, 238)', pos: 1 },
+    ] })
+  })
+  it('方向关键字、没写位置', async () => {
+    const { parseLinearGradient } = await import('../src/liquid/global')
+    expect(parseLinearGradient('linear-gradient(to right, red, blue)')).toEqual({ angle: 90, stops: [{ color: 'red' }, { color: 'blue' }] })
+  })
+  it('不是渐变返回 null', async () => {
+    const { parseLinearGradient } = await import('../src/liquid/global')
+    expect(parseLinearGradient('none')).toBeNull()
+    expect(parseLinearGradient('url("a.jpg")')).toBeNull()
   })
 })

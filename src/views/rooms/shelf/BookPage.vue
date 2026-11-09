@@ -68,7 +68,7 @@ function remove() {
 <template>
   <div class="book-page" :class="kind">
     <!-- 纸单独一层，高度定在打开时的整屏高：键盘弹出来时页面变矮，纸不跟着缩放上移 -->
-    <div class="paper" :style="{ backgroundImage: `url(${page})`, height: paperH }"></div>
+    <div class="paper" data-glass-backdrop :style="{ backgroundImage: `url(${page})`, height: paperH }"></div>
     <div class="scroll">
       <div class="sheet">
         <textarea

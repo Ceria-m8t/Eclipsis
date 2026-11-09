@@ -136,7 +136,7 @@ function toast(t: string) {
     <main class="ed-body">
       <template v-if="tab === 'main'">
         <p class="hint">他是谁、你们的关系、说话的方式。每次对话都会发给他。</p>
-        <textarea v-model="main" class="ed-text glass" spellcheck="false" aria-label="主提示词"></textarea>
+        <div class="ed-wrap glass"><textarea v-model="main" class="ed-text" spellcheck="false" aria-label="主提示词"></textarea></div>
       </template>
       <template v-else>
         <p class="hint">告诉他这个家能做什么、怎么用。加了新功能就在这里补一句。会拼在人设后面。</p>
@@ -144,7 +144,7 @@ function toast(t: string) {
           <input v-model="featuresEnabled" type="checkbox" />
           发给他
         </label>
-        <textarea v-model="features" class="ed-text glass" :class="{ off: !featuresEnabled }" spellcheck="false" aria-label="功能说明"></textarea>
+        <div class="ed-wrap glass" :class="{ off: !featuresEnabled }"><textarea v-model="features" class="ed-text" spellcheck="false" aria-label="功能说明"></textarea></div>
         <button class="link-btn" @click="resetFeaturesOnly">恢复成默认的功能说明</button>
       </template>
       <p class="hint total">加上世界书，每次实际发给他的提示词约 {{ (totalSaved / 1000).toFixed(1) }}k tokens（按已保存的算）</p>
@@ -241,10 +241,20 @@ function toast(t: string) {
 }
 .hint { font-size: 12px; color: var(--text-2); line-height: 1.5; padding: 0 4px; }
 .hint.total { color: var(--text-3); }
+.ed-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  border-radius: 20px;
+}
+.ed-wrap.off { opacity: 0.5; }
 .ed-text {
   flex: 1;
   min-height: 0;
   width: 100%;
+  border: none;
+  background: transparent;
+  color: inherit;
   border-radius: 20px;
   padding: 14px;
   font-family: var(--mono);
@@ -254,7 +264,6 @@ function toast(t: string) {
   outline: none;
   -webkit-overflow-scrolling: touch;
 }
-.ed-text.off { opacity: 0.5; }
 .switch-row { display: flex; align-items: center; gap: 8px; font-size: 14px; padding: 0 4px; }
 .link-btn { align-self: flex-start; border: none; background: none; font-size: 12px; color: var(--accent); padding: 2px 4px; }
 

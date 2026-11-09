@@ -83,7 +83,7 @@ onMounted(() => {
       @pointercancel="onPointerUp"
     >
       <div class="room-canvas">
-        <img :src="BASE + 'base-night.webp'" alt="卧室" class="room-base" draggable="false" />
+        <img :src="BASE + 'base-night.webp'" alt="卧室" class="room-base" data-glass-backdrop draggable="false" />
 
         <!-- 人物层 -->
         <div class="people-layer">

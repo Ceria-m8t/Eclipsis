@@ -57,7 +57,7 @@ onMounted(() => {
         <img
           src="/assets/rooms/livingroom/base-night.jpg"
           alt="客厅"
-          class="room-base"
+          class="room-base" data-glass-backdrop
           draggable="false"
         />
 

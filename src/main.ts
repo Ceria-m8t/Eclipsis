@@ -7,6 +7,7 @@ import { installAuthGuard } from './auth-guard'
 import { startTheme } from './theme'
 import { startFont } from './font'
 import { upgradeFeatures, syncPromptsFromServer } from './prompt-store'
+import { startGlobalGlass } from './liquid/global'
 
 installAuthGuard()
 startViewportTracking()
@@ -16,3 +17,4 @@ startFont()
 void syncPromptsFromServer().finally(upgradeFeatures)
 
 createApp(App).use(router).mount('#app')
+startGlobalGlass()

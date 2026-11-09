@@ -6,6 +6,7 @@ import { compressImage } from '../image'
 import { queueWorldbookPush } from '../prompt-store'
 import { isViewportDebug, setViewportDebug } from '../viewport'
 import { theme, THEME_PRESETS, DEFAULT_THEME } from '../theme'
+import { liquidEnabled, liquidActive, setLiquidEnabled } from '../liquid/global'
 import { fontName, setFontFile, clearFont } from '../font'
 import { BOOK_FONTS, loadBookFont, saveBookFont } from './rooms/shelf/books'
 
@@ -427,6 +428,11 @@ onMounted(() => {
             <label class="theme-color">下端 <input type="color" v-model="theme.bgBottom" /></label>
             <button type="button" class="reset-btn" @click="Object.assign(theme, DEFAULT_THEME)">恢复默认</button>
           </div>
+          <label class="theme-color liquid-row">
+            <input type="checkbox" :checked="liquidEnabled" @change="setLiquidEnabled(($event.target as HTMLInputElement).checked)" />
+            液态玻璃（全站，水波）
+          </label>
+          <span class="hint">{{ liquidEnabled && !liquidActive ? '这台设备画不了液态玻璃，用的是磨砂。' : '打开时所有面板、按钮、底栏都是透明的水波玻璃，下面的「底栏透明度」不起作用；关掉回到磨砂。' }}</span>
           <label class="theme-range">
             底栏透明度 {{ Math.round((1 - theme.tabbarOpacity) * 100) }}%
             <input type="range" min="0.1" max="0.9" step="0.05" :value="1 - theme.tabbarOpacity"

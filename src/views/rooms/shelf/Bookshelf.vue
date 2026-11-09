@@ -470,7 +470,7 @@ const animSpineLabel = computed(() => anim.value ? (void fontsReady.value, spine
   <Teleport to="body">
   <div class="shelf-page">
     <div ref="stage" class="stage" :style="{ aspectRatio: `${SHELF_IMG.w} / ${SHELF_IMG.h}`, '--hw': H_OVER_W }">
-      <img class="shelf-img" :src="ASSET + SHELF_IMG.file" alt="书架" draggable="false" />
+      <img class="shelf-img" data-glass-backdrop :src="ASSET + SHELF_IMG.file" alt="书架" draggable="false" />
 
       <!-- 装饰用的书 -->
       <div

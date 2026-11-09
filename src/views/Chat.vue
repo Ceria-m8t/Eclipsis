@@ -14,6 +14,7 @@ import { pageBackdrop } from '../theme'
 import { aiStatus } from '../status'
 import { fontName, setFontFile, clearFont } from '../font'
 import { LiquidStage, type GlassParams } from '../liquid/stage'
+import { liquidActive } from '../liquid/global'
 import {
   type ChatMessage, type MessageVersion,
   getAllMessages, putMessage, deleteMessage as dbDelete, clearMessages,
@@ -63,7 +64,7 @@ const DEFAULT_STYLE: ChatStyle = {
   footerOpacity: 0.36,
   fontSize: 15,
   customCSS: '',
-  ...GLASS_PRESETS.clear,
+  ...GLASS_PRESETS.ripple,
   glass: true,
   glassTone: 'auto',
   glassShadow: 0.6,
@@ -882,12 +883,14 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
                     <input type="range" min="0" max="1.5" step="0.05" v-model.number="chatStyle.glassShadow" /></label>
                 </template>
               </div>
+              <template v-if="!liquidActive">
               <label class="full">顶栏透明度 {{ Math.round((1 - chatStyle.headerOpacity) * 100) }}%
                 <input type="range" min="0.05" max="0.95" step="0.05" :value="1 - chatStyle.headerOpacity"
                   @input="chatStyle.headerOpacity = +(1 - +($event.target as HTMLInputElement).value).toFixed(2)" /></label>
               <label class="full">输入栏透明度 {{ Math.round((1 - chatStyle.footerOpacity) * 100) }}%
                 <input type="range" min="0.05" max="0.95" step="0.05" :value="1 - chatStyle.footerOpacity"
                   @input="chatStyle.footerOpacity = +(1 - +($event.target as HTMLInputElement).value).toFixed(2)" /></label>
+              </template>
               <label class="full">字号 {{ chatStyle.fontSize }}px
                 <input type="range" min="12" max="22" step="1" v-model.number="chatStyle.fontSize" /></label>
               <label class="full">字体（全局）{{ fontName ? '：' + fontName : '' }}
@@ -940,7 +943,7 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
       <div v-if="loaded && !messages.length" class="chat-empty">说点什么吧</div>
 
       <template v-for="row in rows" :key="row.key">
-        <div v-if="row.divider" class="time-divider"><span>{{ row.divider }}</span></div>
+        <div v-if="row.divider" class="time-divider"><span data-glass>{{ row.divider }}</span></div>
 
         <div :class="['msg-row', row.msg.role, { first: row.showAvatar }]">
           <div class="avatar-slot">

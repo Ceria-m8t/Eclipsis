@@ -158,6 +158,30 @@ input, textarea, select { font-size: 16px; }
 
 .icon { width: 20px; height: 20px; flex-shrink: 0; }
 
+/* ===== 液态玻璃（src/liquid/global.ts）=====
+   画出来以后宿主挂 .liq-host：自己的底色、磨砂、内高光让掉，光学全交给垫在下面的画布。
+   data-glass-tone 按玻璃背后那块图的亮度给：暗处白字，亮处深字。 */
+.liq-canvas { position: absolute; left: 0; top: 0; z-index: -1; pointer-events: none; display: block; }
+.liq-host {
+  isolation: isolate;
+  background: transparent !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  border-color: transparent !important;
+  box-shadow: 0 6px 22px rgba(30, 36, 60, 0.10) !important;
+  --glass-bg-soft: rgba(255, 255, 255, 0.2);
+}
+.liq-host.glass::after, .liq-host.glass-strong::after, .liq-host.glass-btn::after { display: none; }
+.liq-host[data-glass-tone="dark"] {
+  --text: rgba(255, 255, 255, 0.95);
+  --text-2: rgba(255, 255, 255, 0.74);
+  --text-3: rgba(255, 255, 255, 0.52);
+  --glass-bg-soft: rgba(255, 255, 255, 0.12);
+  color: var(--text);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+.liq-host[data-glass-tone="light"] { --text: rgba(28, 32, 44, 0.9); color: var(--text); }
+
 /* 无障碍：仅屏幕阅读器可见 */
 .sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;

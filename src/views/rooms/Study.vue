@@ -74,7 +74,7 @@ onMounted(() => {
       @pointercancel="onPointerUp"
     >
       <div ref="canvas" class="room-canvas">
-        <img src="/assets/rooms/study/base-night.jpg" alt="书房" class="room-base" draggable="false" />
+        <img src="/assets/rooms/study/base-night.jpg" alt="书房" class="room-base" data-glass-backdrop draggable="false" />
 
         <div class="furniture-layer"></div>
         <div class="animation-layer"></div>

@@ -29,21 +29,22 @@ function go(t: (typeof tabs)[number]) {
   <!-- 应用外壳：上面是页面，下面是常驻底栏，两者上下排开，不重叠 -->
   <div class="app-shell app-screen">
     <!-- 背景层：铺满整屏（包括底栏下面），底栏的玻璃才透得出颜色 -->
-    <div class="shell-bg" aria-hidden="true"></div>
-    <div v-if="pageBackdrop" class="shell-bg page-backdrop" :style="pageBackdrop" aria-hidden="true"></div>
+    <div class="shell-bg" data-glass-backdrop aria-hidden="true"></div>
+    <div v-if="pageBackdrop" class="shell-bg page-backdrop" data-glass-backdrop :style="pageBackdrop" aria-hidden="true"></div>
 
     <div class="shell-main">
       <RouterView />
     </div>
 
     <!-- 键盘弹起时收起底栏，把空间留给输入框 -->
-    <nav v-show="!keyboardOpen" class="tabbar" aria-label="主导航">
+    <nav v-show="!keyboardOpen" class="tabbar" data-glass aria-label="主导航">
       <button
         v-for="t in tabs"
         :key="t.key"
         class="tab-btn press"
         :class="{ active: tab === t.key }"
         :aria-current="tab === t.key ? 'page' : undefined"
+        :data-glass="tab === t.key ? '' : undefined"
         @click="go(t)"
       >
         <span class="tab-icon" aria-hidden="true">{{ t.icon }}</span>
