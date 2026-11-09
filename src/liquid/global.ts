@@ -19,8 +19,23 @@ const KEY = 'eclipsis-liquid'
 const MARGIN = 160          // 超出屏幕这么多以内的部分也画（滚动时不露白）
 const WIN_STEP = 128        // 高玻璃只画看得见的那段，按这个步长取整，免得每帧改画布尺寸
 
-/** 水波（参考图一，Erica 选的）：全站统一 */
-const P = { refract: 1.5, bevel: 22, wobble: 0.7, tint: 0.04, shine: 1.1, dispersion: 0.14 }
+/** 水波（参考图一，Erica 选的）：全站统一。底色浓度跟着聊天样式里气泡的「底色浓度」（Erica：底栏跟着气泡） */
+const P = { refract: 1.5, bevel: 22, wobble: 0.7, tint: chatBubbleTint(), shine: 1.1, dispersion: 0.14 }
+
+function chatBubbleTint(): number {
+  try {
+    const t = JSON.parse(localStorage.getItem('eclipsis-chat-style-v2') || '{}').glassTint
+    if (typeof t === 'number' && t >= 0 && t <= 0.6) return t
+  } catch {}
+  return 0.04
+}
+/** 聊天样式里改了气泡的底色浓度：全站玻璃（底栏、顶栏、面板）一起变 */
+export function setGlobalTint(t: number) {
+  if (!(t >= 0 && t <= 0.6) || t === P.tint) return
+  P.tint = t
+  for (const st of states.values()) st.key = ''
+  poke(200)
+}
 
 function loadEnabled(): boolean {
   try { return localStorage.getItem(KEY) !== '0' } catch { return true }

@@ -13,7 +13,7 @@ import { pageBackdrop } from '../theme'
 import { aiStatus } from '../status'
 import { fontName, setFontFile, clearFont } from '../font'
 import { LiquidStage, measureLum, type GlassParams } from '../liquid/stage'
-import { liquidActive } from '../liquid/global'
+import { liquidActive, setGlobalTint } from '../liquid/global'
 import { type ChatMessage, type MessageVersion, newId } from '../db'
 import {
   loadLatest, loadBefore, loadAfter, deleteOnServer, mergeServer, contextTail,
@@ -165,8 +165,12 @@ watch(bgStyle, v => { pageBackdrop.value = v }, { immediate: true })
 let stage: LiquidStage | null = null
 const glassReady = ref(false)        // WebGL2 起来了，背景图也传上去了
 const glassUnsupported = ref(false)  // 这台设备画不了（没有 WebGL2 / 上下文一直被收走）
-const glassLum = ref(0.6)
-const glassActive = computed(() => glassReady.value && chatStyle.value.glass && !!chatStyle.value.bgImage)
+const glassBadBg = ref('')           // 解不出来的那张背景图
+// 背景图亮度：上次量过的先用上（不然一进来按亮的画白字/深字，量完才换，会闪一下）
+const LUM_KEY = 'eclipsis-chat-bg-lum'
+const glassLum = ref(Number(localStorage.getItem(LUM_KEY)) || 0.6)
+// 还没画上（刚进页面、背景图在解码）时也按玻璃算：气泡先透明，不先露一下磨砂；这台设备画不了才退回磨砂
+const glassActive = computed(() => chatStyle.value.glass && !!chatStyle.value.bgImage && !glassUnsupported.value && glassBadBg.value !== chatStyle.value.bgImage)
 const glassTone = computed<'light' | 'dark'>(() => {
   const t = chatStyle.value.glassTone
   return t === 'auto' ? (glassLum.value < 0.45 ? 'dark' : 'light') : t
@@ -204,6 +208,8 @@ async function syncGlass() {
   if (st !== stage) return
   st.setParams(glassParams.value)
   glassReady.value = ok
+  // 背景图解不出来：这张图退回磨砂（不然气泡一直是透明的）；换了图再试
+  glassBadBg.value = ok ? '' : s.bgImage
 }
 watch(() => [chatStyle.value.glass, chatStyle.value.bgImage], () => { syncGlass() })
 async function measureBg() {
@@ -212,12 +218,16 @@ async function measureBg() {
   const im = new Image()
   im.src = url
   try { await im.decode() } catch { return }
-  if (url === chatStyle.value.bgImage) glassLum.value = measureLum(im)
+  if (url === chatStyle.value.bgImage) {
+    glassLum.value = measureLum(im)
+    try { localStorage.setItem(LUM_KEY, String(glassLum.value)) } catch {}
+  }
 }
 watch(() => chatStyle.value.bgImage, measureBg, { immediate: true })
 // 气泡外面的字（工具、思考过程、时间、操作按钮）跟着背景深浅换颜色
 const chatDark = computed(() => !!chatStyle.value.bgImage && glassTone.value === 'dark')
 watch(glassParams, p => stage?.setParams(p))
+watch(() => chatStyle.value.glassTint, t => setGlobalTint(t), { immediate: true })
 watch(() => [chatStyle.value.aiBubbleBg, chatStyle.value.userBubbleBg, chatStyle.value.fontSize, chatStyle.value.customCSS], () => stage?.invalidate())
 function applyGlassPreset(k: keyof typeof GLASS_PRESETS) { Object.assign(chatStyle.value, GLASS_PRESETS[k]) }
 

@@ -195,8 +195,8 @@ function pickBookFont(id: string) { bookFont.value = id; saveBookFont(id) }
             <input type="checkbox" :checked="liquidEnabled" @change="setLiquidEnabled(($event.target as HTMLInputElement).checked)" />
             液态玻璃（全站，水波）
           </label>
-          <span class="hint">{{ liquidEnabled && !liquidActive ? '这台设备画不了液态玻璃，用的是磨砂。' : '打开时所有面板、按钮、底栏都是透明的水波玻璃，下面的「底栏透明度」不起作用；关掉回到磨砂。' }}</span>
-          <label class="theme-range">
+          <span class="hint">{{ liquidEnabled && !liquidActive ? '这台设备画不了液态玻璃，用的是磨砂。' : '打开时所有面板、按钮、底栏都是透明的水波玻璃，底色浓度跟着聊天样式里气泡的「底色浓度」走；关掉回到磨砂。' }}</span>
+          <label v-if="!liquidActive" class="theme-range">
             底栏透明度 {{ Math.round((1 - theme.tabbarOpacity) * 100) }}%
             <input type="range" min="0.1" max="0.9" step="0.05" :value="1 - theme.tabbarOpacity"
               @input="theme.tabbarOpacity = +(1 - +($event.target as HTMLInputElement).value).toFixed(2)" />
