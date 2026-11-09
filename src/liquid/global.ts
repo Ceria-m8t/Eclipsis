@@ -32,7 +32,8 @@ export const liquidActive = ref(false)
 
 interface Tex { tex: WebGLTexture; w: number; h: number; lum: Float32Array; ready: boolean; used: number }
 interface HostState { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D; key: string; seed: number }
-interface Back { el: Element; clip: Box; place: Box; tex: Tex }
+// pending：这张背景还在加载 / 还没传进显卡。压在它上面的玻璃先不画，免得拿别的背景（外壳浅色渐变）画成白的
+interface Back { el: Element; clip: Box; place: Box; tex: Tex; pending: boolean }
 
 let gl: WebGL2RenderingContext | null = null
 let U: Uniforms | null = null
@@ -198,11 +199,14 @@ function collectBacks(): Back[] {
     const cs = getComputedStyle(el)
     if (cs.visibility === 'hidden' || cs.display === 'none') continue
     const src = backSource(el, cs, r)
-    if (!src) continue
-    const tex = getTex(src.key, src.load)
-    if (!tex || !tex.ready) continue
+    const box = { x: r.left, y: r.top, w: r.width, h: r.height }
+    const tex = src && getTex(src.key, src.load)
+    if (!src || !tex || !tex.ready) {
+      out.push({ el, clip: clipRect(el), place: box, tex: tex as Tex, pending: true })
+      continue
+    }
     tex.used = performance.now()
-    out.push({ el, clip: clipRect(el), place: src.place(tex), tex })
+    out.push({ el, clip: clipRect(el), place: src.place(tex), tex, pending: false })
   }
   return out
 }
@@ -374,6 +378,7 @@ function frame() {
     const sx = r.width / lw, sy = r.height / lh
     const back = pickBack(backs, r.left + r.width / 2, r.top + r.height / 2)
     if (!back) { if (el.classList.contains('liq-host')) { el.classList.remove('liq-host'); st.key = '' } continue }
+    if (back.pending) { st.key = ''; continue }   // 等它加载完（图片 load / 纹理就绪都会再叫一次）
 
     // 这块玻璃要画哪一段（宿主自己能滚动时，画布跟着滚动量走）
     const cs = getComputedStyle(el)
