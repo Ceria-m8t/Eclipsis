@@ -44,6 +44,12 @@ describe('聊天记录在后端', () => {
     expect(contextTail([fromServer(u(1, '早')), fromServer(a(2, '早呀'))]).map(m => m.content)).toEqual(['早'])
   })
 
+  it('有图时去掉正文里的「[图片]」占位；没图（早先导入的）照样显示', () => {
+    expect(fromServer(u(1, '大成功！\n\n[图片]', { images: ['/api/eclipsis/blob/' + 'a'.repeat(64)] })).content).toBe('大成功！')
+    expect(fromServer(u(2, '[图片]', { images: ['/api/eclipsis/blob/' + 'a'.repeat(64)] })).content).toBe('')
+    expect(fromServer(u(3, '')).content).toBe('[图片]')
+  })
+
   it('发给他时用她的原文（带时间标记），后端来的图片地址不发', () => {
     const m = fromServer(u(1, '看图', { images: ['/api/eclipsis/blob/' + 'a'.repeat(64)] }))
     const ctx = buildContext([m, local('新的', { images: ['data:image/png;base64,AAA'] })], 100000)
