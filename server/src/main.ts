@@ -11,7 +11,7 @@ import { openDb, type DB } from './db.ts'
 import { BlobStore } from './blobs.ts'
 import { Recorder } from './recorder.ts'
 import { createTap, forwardHeaders, type Prepared } from './proxy.ts'
-import { stripWakeHistory, stripThinkHistory, stripOldImages, reorderByTime, type TimeLookup } from './transforms.ts'
+import { stripWakeHistory, stripThinkHistory, stripOldImages, reorderByTime, markMissingImages, type TimeLookup } from './transforms.ts'
 import { handleApi } from './api.ts'
 import { handleChatApi, xiaokeApi } from './chat-history.ts'
 import { handleToolboxApi, setToolboxFile } from './toolbox.ts'
@@ -151,6 +151,11 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
           transforms.strip_old_images = { stripped: r.stripped, saved_chars: r.savedChars }
           changed = true
         }
+      }
+      // 看不到的图写清楚是看不到（MARK_MISSING_IMAGES=0 关）
+      if (process.env.MARK_MISSING_IMAGES !== '0' && Array.isArray(out.messages)) {
+        const r = markMissingImages(out.messages)
+        if (r.marked) { out = { ...out, messages: r.messages }; transforms.mark_missing_images = { marked: r.marked }; changed = true }
       }
       // 组装器 v1：注入现场状态（时间+脉+天气）到 system message 末尾
       if (opts.assembler && Array.isArray(out.messages)) {

@@ -72,13 +72,46 @@ export function stripThinkHistory(messages: any[]): { messages: any[]; stripped:
 // 更早的替换成 [图片] 占位。减少发给模型的 token 数，不影响记录（记录的是改动前的）。
 const IMG_KEEP_RECENT = 4 // 保留最近 4 条 user 消息的图片
 
+// 他看不到的图：写清楚是「看不到」，不然一个「[图片]」他分不清自己看没看到，会照着上下文编出图里有什么（11-10）
+export const MISSING_IMAGE = '[图片：这张你现在看不到，只剩这个记号。别猜里面是什么，想知道就问她]'
+
+/**
+ * 历史里只剩文字「[图片]」占位的（xiaoke 补进来的不带图、早先导入的、上一轮没带上图的）换成上面那句。
+ * 结尾这一轮她说的不动（那几句会被记进经历表，要和 xiaoke 的原文对得上）。
+ */
+export function markMissingImages(messages: any[]): { messages: any[]; marked: number } {
+  let tail = messages.length
+  while (tail > 0 && (messages[tail - 1]?.role === 'tool' || (messages[tail - 1]?.role === 'assistant' && messages[tail - 1]?.tool_calls?.length))) tail--
+  while (tail > 0 && messages[tail - 1]?.role === 'user') tail--
+  let marked = 0
+  // 一行一个，或者一行好几个（一次发了好几张）
+  const fix = (t: string) => t.replace(/^[ \t]*\[图片\](?:[ \t]+\[图片\])*[ \t]*$/gm, (line) => {
+    marked++
+    const n = (line.match(/\[图片\]/g) || []).length
+    return n > 1 ? MISSING_IMAGE.replace('这张', `这 ${n} 张`) : MISSING_IMAGE
+  })
+  const out = messages.map((m, i) => {
+    if (i >= tail || m?.role !== 'user') return m
+    if (typeof m.content === 'string') { const c = fix(m.content); return c === m.content ? m : { ...m, content: c } }
+    if (Array.isArray(m.content)) {
+      // 带着真图的那条里的「[图片]」是同一张图的占位，不改
+      if (m.content.some((p: any) => p?.type === 'image_url' || p?.type === 'image')) return m
+      let changed = false
+      const parts = m.content.map((p: any) => { if (p?.type !== 'text' || typeof p.text !== 'string') return p; const t = fix(p.text); if (t !== p.text) changed = true; return t === p.text ? p : { ...p, text: t } })
+      return changed ? { ...m, content: parts } : m
+    }
+    return m
+  })
+  return { messages: marked ? out : messages, marked }
+}
+
 function replaceImages(content: any): { content: any; removed: number } {
   if (!Array.isArray(content)) return { content, removed: 0 }
   let removed = 0
   const out = content.map((p: any) => {
     if (p?.type === 'image_url' || p?.type === 'image') {
       removed++
-      return { type: 'text', text: '[图片]' }
+      return { type: 'text', text: MISSING_IMAGE }
     }
     return p
   })

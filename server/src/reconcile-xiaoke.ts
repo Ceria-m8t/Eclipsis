@@ -85,8 +85,11 @@ export function reconcile(db: DB, rows: XiaokeRow[], now = Date.now(), opts: { d
       retractedSeqs.push(e.seq)
       result.retractedDeleted++
     }
+    // 她说了、还没等到他回的那几句（上一轮停掉/失败了，她可能正在补话）：xiaoke 当然还没有，先别撤，等这一轮回完再对
+    const lastAi = (db.prepare(`SELECT COALESCE(MAX(seq), 0) AS s FROM episodes WHERE actor = 'ai' AND kind = 'message' AND channel = 'chat' AND retracted_at IS NULL`).get() as { s: number }).s
     for (const c of candidates) {
       if (usedSeq.has(c.seq)) continue
+      if (c.actor === 'erica' && c.seq > lastAi) { result.waiting++; continue }
       if (now - new Date(c.ts).getTime() < GRACE_MS) { result.waiting++; continue }
       retract.run(nowIso, 'not_in_xiaoke', c.seq)
       retractedSeqs.push(c.seq)

@@ -81,3 +81,17 @@ test('dry-run 不写入', () => {
   assert.equal(reconcile(db, [x('X1', 'user', 20 * MIN, '在吗')], NOW, { dryRun: true }).linked, 1)
   assert.equal(state(db)[0].xiaoke_id, null)
 })
+
+test('她说了还没等到他回的那几句（上一轮停掉了、正在补话）：过了宽限期也先别撤', () => {
+  const db = openDb(':memory:')
+  ep(db, { ago: 60 * MIN, actor: 'erica', content: '早', ref: 'u0', xiaokeId: 'X0' })
+  ep(db, { ago: 59 * MIN, actor: 'ai', content: '早呀', ref: 'a0', xiaokeId: 'X1' })
+  ep(db, { ago: 40 * MIN, actor: 'erica', content: '看图', ref: 'u1' })
+  const r = reconcile(db, [x('X0', 'user', 60 * MIN, '早'), x('X1', 'assistant', 59 * MIN, '早呀')], NOW)
+  assert.equal(r.retractedMissing, 0)
+  assert.equal(state(db)[2].retract_reason, null)
+  // 他回了以后还对不上 xiaoke（这一轮没进去），照常撤
+  ep(db, { ago: 30 * MIN, actor: 'ai', content: '看到了', ref: 'a1' })
+  const r2 = reconcile(db, [x('X0', 'user', 60 * MIN, '早'), x('X1', 'assistant', 59 * MIN, '早呀')], NOW)
+  assert.equal(r2.retractedMissing, 2)
+})

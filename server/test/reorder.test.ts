@@ -48,3 +48,21 @@ test('结尾这一轮正在调工具：整段留在最后', () => {
   const r = reorderByTime(msgs, () => [])
   assert.deepEqual(r.messages.map(m => m.content), ['（2026-11-10 01:00）早先的', '早', '（2026-11-10 02:40）后来的', '嗯', '（2026-11-10 03:00）这轮', '', 'ok'])
 })
+
+test('markMissingImages：历史里只剩「[图片]」的写清楚看不到；带真图的、结尾这一轮不动', async () => {
+  const { markMissingImages, MISSING_IMAGE } = await import('../src/transforms.ts')
+  const msgs = [
+    { role: 'system', content: '[图片]' },
+    { role: 'user', content: '[图片] [图片]\n（2026-11-10 06:51）你看' },
+    { role: 'user', content: '[图片]\n看这个' },
+    { role: 'user', content: [{ type: 'image_url', image_url: { url: 'data:x' } }, { type: 'text', text: '[图片]' }] },
+    { role: 'assistant', content: '[图片]' },
+    { role: 'user', content: '[图片]\n这一轮的' },
+  ]
+  const r = markMissingImages(msgs)
+  assert.equal(r.marked, 2)
+  assert.equal(r.messages[2].content, MISSING_IMAGE + '\n看这个')
+  assert.equal(r.messages[1].content, MISSING_IMAGE.replace('这张', '这 2 张') + '\n（2026-11-10 06:51）你看')
+  assert.equal(r.messages[3], msgs[3])
+  assert.equal(r.messages[5], msgs[5])
+})
