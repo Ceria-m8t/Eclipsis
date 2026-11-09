@@ -48,6 +48,7 @@ describe('聊天记录在后端', () => {
     expect(fromServer(u(1, '大成功！\n\n[图片]', { images: ['/api/eclipsis/blob/' + 'a'.repeat(64)] })).content).toBe('大成功！')
     expect(fromServer(u(2, '[图片]', { images: ['/api/eclipsis/blob/' + 'a'.repeat(64)] })).content).toBe('')
     expect(fromServer(u(3, '')).content).toBe('[图片]')
+    expect(fromServer(u(4, '（图片）', { images: ['/api/eclipsis/blob/' + 'a'.repeat(64)] })).content).toBe('', 'Eclipsis 自己发图时的占位')
   })
 
   it('发给他时用她的原文（带时间标记），后端来的图片地址不发', () => {
