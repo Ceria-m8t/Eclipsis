@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import Icon from '../components/Icon.vue'
+import PhotoStack from '../components/PhotoStack.vue'
 import { getSettings } from '../settings'
 import { renderMd, splitBubbles, splitThink } from '../markdown'
 import { generate, finalizeVersion, buildContext, type BuiltContext } from '../chat-engine'
@@ -852,6 +853,24 @@ async function onAreaClick(e: MouseEvent) {
 
 // ================= 图片预览 =================
 const previewImg = ref('')
+// 大图：一次发的好几张可以左右划着看
+const previewList = ref<string[]>([])
+const previewIndex = ref(0)
+function openPreview(list: string[], i: number) { previewList.value = list; previewIndex.value = i; previewImg.value = list[i] || '' }
+let pvStart: { x: number; y: number } | null = null
+function pvDown(e: PointerEvent) { pvStart = { x: e.clientX, y: e.clientY } }
+function pvUp(e: PointerEvent) {
+  const st = pvStart; pvStart = null
+  if (!st) return
+  const dx = e.clientX - st.x, dy = e.clientY - st.y
+  if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) {
+    const n = previewList.value.length
+    previewIndex.value = Math.max(0, Math.min(n - 1, previewIndex.value + (dx < 0 ? 1 : -1)))
+    previewImg.value = previewList.value[previewIndex.value] || ''
+    return
+  }
+  if (Math.abs(dx) < 8 && Math.abs(dy) < 8) previewImg.value = ''   // 点一下关掉
+}
 
 // ================= Toast =================
 const toastMsg = ref('')
@@ -1115,8 +1134,11 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
             <div v-if="row.noReply && !row.thinking" class="read-signal his">他看了，没回你</div>
 
             <div v-if="row.msg.images?.length" class="msg-images">
-              <button v-for="(img, j) in row.msg.images" :key="j" class="img-btn" @click="previewImg = img">
-                <img :src="img" class="msg-image" alt="图片" loading="lazy" />
+              <!-- 好几张：叠成一摞，左右划翻页；一张：照常 -->
+              <PhotoStack v-if="row.msg.images.length > 1" :images="row.msg.images" :side="row.msg.role === 'user' ? 'right' : 'left'"
+                @open="i => openPreview(row.msg.images!, i)" />
+              <button v-else class="img-btn" @click="openPreview(row.msg.images!, 0)">
+                <img :src="row.msg.images[0]" class="msg-image" alt="图片" loading="lazy" />
               </button>
             </div>
 
@@ -1351,8 +1373,9 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
 
     <!-- 图片预览 -->
     <transition name="fade">
-      <div v-if="previewImg" class="img-preview" role="dialog" aria-label="图片预览" @click="previewImg = ''">
-        <img :src="previewImg" alt="图片预览" />
+      <div v-if="previewImg" class="img-preview" role="dialog" aria-label="图片预览" @pointerdown="pvDown" @pointerup="pvUp">
+        <img :src="previewImg" alt="图片预览" draggable="false" />
+        <span v-if="previewList.length > 1" class="img-preview-count">{{ previewIndex + 1 }} / {{ previewList.length }}</span>
       </div>
     </transition>
 
@@ -1829,6 +1852,8 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
 
 /* ===== 图片 ===== */
 .msg-images { display: flex; flex-wrap: wrap; gap: 6px; }
+/* 她发的图靠右（以前一次好几张时会挤到中间） */
+.msg-row.user .msg-images { justify-content: flex-end; }
 .img-btn { border: none; background: none; padding: 0; border-radius: 14px; overflow: hidden; }
 .msg-image {
   display: block;
@@ -2171,7 +2196,12 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
   display: flex; align-items: center; justify-content: center;
   padding: 20px;
 }
-.img-preview img { max-width: 100%; max-height: 100%; border-radius: 12px; }
+.img-preview img { max-width: 100%; max-height: 100%; border-radius: 12px; pointer-events: none; }
+.img-preview { touch-action: none; }
+.img-preview-count {
+  position: absolute; left: 50%; bottom: calc(var(--safe-bottom) + 18px); transform: translateX(-50%);
+  font-size: 13px; color: #fff; background: rgba(0, 0, 0, 0.35); border-radius: 999px; padding: 3px 12px;
+}
 
 .toast {
   position: absolute;
