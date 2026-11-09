@@ -16,7 +16,7 @@ import { useRouter } from 'vue-router'
 import BookPage from './BookPage.vue'
 import {
   ASSET, SHELF_IMG, MAIN_LOOK, worldLook, loadWorldbook, saveWorldbook, spineTitle, coverTitle,
-  loadBookFont, type BookLook, type WorldbookEntry
+  loadBookFont, shelfOrder, applyShelfOrder, lastPriority, newBookId, type BookLook, type WorldbookEntry
 } from './books'
 import { loadPrompt, savePrompt } from '../../../prompt-store'
 
@@ -58,9 +58,14 @@ interface Item {
 }
 interface Placed extends Item { x: number; bottom: number; w: number; h: number }
 
+// 书架上的顺序就是拼进提示词的顺序（主 Prompt 左边的拼在它前面）。拖的时候用 dragOrder 临时排
+const dragOrder = ref<number[] | null>(null)
 const items = computed<Item[]>(() => [
-  { key: 'main', kind: 'main', index: -1, look: MAIN_LOOK, title: MAIN_TITLE, enabled: true },
-  ...entries.value.map((e, i): Item => ({ key: `w${i}`, kind: 'world', index: i, look: worldLook(i), title: e.title, enabled: e.enabled })),
+  ...(dragOrder.value ?? shelfOrder(entries.value)).map((i): Item => {
+    if (i < 0) return { key: 'main', kind: 'main', index: -1, look: MAIN_LOOK, title: MAIN_TITLE, enabled: true }
+    const e = entries.value[i]!
+    return { key: e.id || `w${i}`, kind: 'world', index: i, look: worldLook(e.look ?? i), title: e.title, enabled: e.enabled }
+  }),
   { key: 'add', kind: 'add', index: -1, look: worldLook(entries.value.length), title: '', enabled: true }
 ])
 
@@ -229,13 +234,82 @@ const LEAF_CLOSED = (a: Anim, i: number) => `translateZ(${a.T / 2 - 1 - i * 0.35
 const LEAF_OPEN = (a: Anim, i: number) => `translateZ(${a.T / 2 + 1 + i * 0.6}px) rotateY(${OPEN_DEG}deg)`
 
 // ── 按住一本书：书微微抽出来，上方浮出完整书名；松手不打开 ──
+// 按住以后接着拖：换位置。书架上的顺序就是拼接顺序，拖到主 Prompt 左边就拼在它前面
 const peek = ref<{ key: string; title: string; x: number; top: number } | null>(null)
 let pressTimer: ReturnType<typeof setTimeout> | null = null
 let pressStart: { x: number; y: number } | null = null
+let pressItem: Placed | null = null
 let suppressClick = false
+interface Drag { key: string; index: number; look: BookLook; title: string; kind: Item['kind']; w: number; h: number; x: number; y: number; dx: number; dy: number }
+const drag = ref<Drag | null>(null)
+let dragStartOrder: number[] = []
+
+function stagePoint(e: PointerEvent) {
+  const r = stage.value!.getBoundingClientRect()
+  return { px: (e.clientX - r.left) / r.width, py: (e.clientY - r.top) / r.height }
+}
+function startDrag(e: PointerEvent) {
+  const it = pressItem
+  if (!it || it.kind === 'add' || !stage.value) return
+  const { px, py } = stagePoint(e)
+  const top = it.bottom - it.h
+  dragStartOrder = shelfOrder(entries.value)
+  dragOrder.value = dragStartOrder.slice()
+  drag.value = { key: it.key, index: it.index, look: it.look, title: it.title, kind: it.kind, w: it.w, h: it.h,
+    x: it.x, y: top, dx: px - it.x, dy: py - top }
+  peek.value = null
+  // 手指拖着会离开这本书（别的书在让位），松手也可能落在书架空处：整页听
+  window.addEventListener('pointermove', moveDrag)
+  window.addEventListener('pointerup', onDragUp)
+  window.addEventListener('pointercancel', onDragCancel)
+  navigator.vibrate?.(10)
+}
+const onDragUp = () => endDrag(true)
+const onDragCancel = () => endDrag(false)
+function moveDrag(e: PointerEvent) {
+  const d = drag.value
+  if (!d || !dragOrder.value) return
+  const { px, py } = stagePoint(e)
+  d.x = px - d.dx
+  d.y = py - d.dy
+  // 落在哪一层：离手指最近的那层搁板
+  const cy = d.y + d.h / 2
+  let row = 0
+  ROWS.forEach((r, i) => { if (Math.abs(cy - (r.bottom - d.h / 2)) < Math.abs(cy - (ROWS[row]!.bottom - d.h / 2))) row = i })
+  const rest = dragOrder.value.filter(i => i !== d.index)
+  const keyOf = (i: number) => (i < 0 ? 'main' : entries.value[i]!.id || `w${i}`)
+  const inRow = layout.value.filter(p => p.bottom === ROWS[row]!.bottom && p.kind !== 'add' && p.key !== d.key)
+  const cx = d.x + d.w / 2
+  const hit = inRow.find(p => cx < p.x + p.w / 2)
+  let at: number
+  if (hit) at = rest.findIndex(i => keyOf(i) === hit.key)
+  else if (inRow.length) at = rest.findIndex(i => keyOf(i) === inRow[inRow.length - 1]!.key) + 1
+  else at = row === 0 ? 0 : rest.length
+  const next = [...rest.slice(0, at), d.index, ...rest.slice(at)]
+  if (next.join() !== dragOrder.value.join()) dragOrder.value = next
+}
+function endDrag(commit: boolean) {
+  window.removeEventListener('pointermove', moveDrag)
+  window.removeEventListener('pointerup', onDragUp)
+  window.removeEventListener('pointercancel', onDragCancel)
+  pressStart = null
+  pressItem = null
+  const order = dragOrder.value
+  drag.value = null
+  dragOrder.value = null
+  suppressClick = true
+  if (!commit || !order || order.join() === dragStartOrder.join()) return
+  const crossed = order.indexOf(-1) !== dragStartOrder.indexOf(-1)
+  const list = applyShelfOrder(entries.value, order)
+  entries.value = list
+  saveWorldbook(list)
+  toast(crossed ? '换好了。主 Prompt 左边的拼在它前面，右边的拼在后面' : '换好了，拼接也按这个顺序')
+}
+
 function onPressStart(it: Placed, e: PointerEvent) {
   if (busy.value) return
   suppressClick = false
+  pressItem = it
   pressStart = { x: e.clientX, y: e.clientY }
   if (pressTimer) clearTimeout(pressTimer)
   pressTimer = setTimeout(() => {
@@ -248,12 +322,21 @@ function onPressStart(it: Placed, e: PointerEvent) {
   }, 380)
 }
 function onPressMove(e: PointerEvent) {
-  if (pressStart && Math.hypot(e.clientX - pressStart.x, e.clientY - pressStart.y) > 10) onPressEnd()
+  if (drag.value) return   // 拖的时候整页在听（startDrag）
+  if (!pressStart || Math.hypot(e.clientX - pressStart.x, e.clientY - pressStart.y) <= 8) return
+  // 书名已经浮出来了（按够了）再动 = 开始拖；还没按够就动 = 不算按住
+  if (peek.value && pressItem?.kind !== 'add') startDrag(e)
+  else onPressEnd()
 }
 function onPressEnd() {
+  if (drag.value) return   // 拖的时候由整页的 pointerup 收尾
   if (pressTimer) { clearTimeout(pressTimer); pressTimer = null }
   pressStart = null
+  pressItem = null
   peek.value = null
+}
+function onPressLeave() {
+  if (!drag.value) onPressEnd()
 }
 function onSpineClick(it: Placed) {
   if (suppressClick) { suppressClick = false; return }
@@ -285,7 +368,8 @@ async function openItem(it: Placed) {
     editing.value = { kind: 'world', index: it.index, isNew: false, key: it.key, draft: { ...entries.value[it.index] } }
   } else {
     editing.value = { kind: 'world', index: -1, isNew: true, key: 'add',
-      draft: { title: NEW_TITLE, content: '', enabled: true, group: '默认', position: 'after', priority: 50 } }
+      draft: { title: NEW_TITLE, content: '', enabled: true, group: '默认', position: 'after', priority: lastPriority(entries.value),
+        id: newBookId(), look: entries.value.length } }
   }
 
   await nextTick()
@@ -394,7 +478,7 @@ async function onDone(v: WorldbookEntry) {
     const list = entries.value.map(e => ({ ...e }))
     if (ed.isNew) {
       list.push(v)
-      ed.key = `w${list.length - 1}`
+      ed.key = v.id || `w${list.length - 1}`
       hiddenKey.value = ed.key
     } else {
       list[ed.index] = v
@@ -488,7 +572,7 @@ const animSpineLabel = computed(() => anim.value ? (void fontsReady.value, spine
         :key="it.key"
         :ref="el => setSpineEl(it.key, el)"
         class="spine"
-        :class="[it.kind, { off: !it.enabled, hidden: hiddenKey === it.key, peeking: peek?.key === it.key }]"
+        :class="[it.kind, { off: !it.enabled, hidden: hiddenKey === it.key, peeking: peek?.key === it.key, placeholder: drag?.key === it.key, reflow: !!drag }]"
         :style="{ left: `${it.x * 100}%`, bottom: `${(1 - it.bottom) * 100}%`, width: `${it.w * 100}%`, height: `${it.h * 100}%`, '--mask': `url(${ASSET + it.look.spine.file}) center / 100% 100% no-repeat` }"
         :aria-label="it.kind === 'add' ? '添一本世界书' : it.title"
         @click="onSpineClick(it)"
@@ -496,7 +580,7 @@ const animSpineLabel = computed(() => anim.value ? (void fontsReady.value, spine
         @pointermove="onPressMove"
         @pointerup="onPressEnd"
         @pointercancel="onPressEnd"
-        @pointerleave="onPressEnd"
+        @pointerleave="onPressLeave"
         @contextmenu.prevent
       >
         <template v-if="it.kind !== 'add'">
@@ -508,6 +592,20 @@ const animSpineLabel = computed(() => anim.value ? (void fontsReady.value, spine
         </template>
         <span v-else class="add-slot"><span>＋</span></span>
       </button>
+
+      <!-- 拖着走的那本 -->
+      <div
+        v-if="drag"
+        class="spine dragging"
+        :class="drag.kind"
+        aria-hidden="true"
+        :style="{ left: `${drag.x * 100}%`, top: `${drag.y * 100}%`, width: `${drag.w * 100}%`, height: `${drag.h * 100}%` }"
+      >
+        <img :src="ASSET + drag.look.spine.file" alt="" draggable="false" />
+        <span v-if="drag.kind !== 'main'" class="spine-title" :style="{ ...labelBox(drag.look), fontFamily: font.family, fontWeight: font.weight }">
+          <span :style="{ fontSize: `${spineLabel(drag).size}cqh` }">{{ spineLabel(drag).text }}</span>
+        </span>
+      </div>
 
       <Transition name="peek">
         <div
@@ -672,6 +770,17 @@ const animSpineLabel = computed(() => anim.value ? (void fontsReady.value, spine
 .spine.hidden { visibility: hidden; }
 .spine:not(.decor):active { transform: translateY(-2%); }
 .spine.peeking { transform: translateY(-5%); }
+/* 能拿的书：手指在书上按住拖时，别让浏览器拿去滚动/缩放 */
+.spine:not(.decor) { touch-action: none; }
+/* 拖的时候：别的书滑着让位，原来的位置留个淡影 */
+.spine.reflow { transition: transform 0.2s ease, left 0.22s ease, bottom 0.22s ease; }
+.spine.placeholder { opacity: 0.28; }
+.spine.dragging {
+  z-index: 6;
+  pointer-events: none;
+  transform: translateY(-4%) scale(1.06) rotate(-2deg);
+  filter: drop-shadow(-4px 8px 8px rgba(0, 0, 0, 0.55));
+}
 .spine:not(.decor) {
   -webkit-touch-callout: none;
   -webkit-user-select: none;

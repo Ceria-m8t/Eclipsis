@@ -14,6 +14,10 @@ export interface WorldbookEntry {
   group: string
   position: 'before' | 'after'
   priority: number
+  /** 书架上认这本书用（排序时跟着书走）。旧数据没有，读的时候补上 */
+  id?: string
+  /** 用第几种书脊/封面（排序后样子不变）。旧数据没有 → 用它原来在数组里的位置，样子和以前一样 */
+  look?: number
 }
 
 interface Box { x: number; y: number; w: number; h: number }
@@ -68,17 +72,60 @@ export function loadWorldbook(): WorldbookEntry[] {
   try {
     const raw = localStorage.getItem(WB_KEY)
     if (!raw) return []
-    return (JSON.parse(raw) as any[]).map(e => ({
+    return (JSON.parse(raw) as any[]).map((e, i) => ({
       title: e.title || '',
       content: e.content || '',
       enabled: e.enabled ?? true,
       group: e.group || '默认',
       position: e.position === 'before' ? 'before' : 'after',
-      priority: e.priority ?? 50
+      priority: e.priority ?? 50,
+      id: typeof e.id === 'string' && e.id ? e.id : newBookId(),
+      look: Number.isInteger(e.look) ? e.look : i
     }))
   } catch {
     return []
   }
+}
+
+export function newBookId(): string {
+  return 'b' + Math.random().toString(36).slice(2, 10)
+}
+
+const pri = (e: WorldbookEntry) => (typeof e.priority === 'number' ? e.priority : 50)
+
+/**
+ * 书架上的顺序 = 拼进提示词的顺序：放在主 Prompt 前面的（按优先级从高到低），主 Prompt，放在后面的（同样）。
+ * 优先级一样时按数组里的先后（和 chat-engine / 后端 composeSystemPrompt 的稳定排序一致）。
+ * 返回 entries 的下标，主 Prompt 用 -1。
+ */
+export function shelfOrder(list: WorldbookEntry[]): number[] {
+  const idx = list.map((_, i) => i)
+  const before = idx.filter(i => list[i]!.position === 'before').sort((a, b) => pri(list[b]!) - pri(list[a]!))
+  const after = idx.filter(i => list[i]!.position !== 'before').sort((a, b) => pri(list[b]!) - pri(list[a]!))
+  return [...before, -1, ...after]
+}
+
+/**
+ * 按书架上拖好的顺序（下标，-1 是主 Prompt）改世界书：主 Prompt 左边的放到前面、右边的放到后面，
+ * 优先级按先后重新排成从高到低，数组也按这个顺序存。这样拼接顺序就和书架一模一样。
+ */
+export function applyShelfOrder(list: WorldbookEntry[], order: number[]): WorldbookEntry[] {
+  const m = order.indexOf(-1)
+  const groups = [order.slice(0, m), order.slice(m + 1)]
+  const out: WorldbookEntry[] = []
+  groups.forEach((g, gi) => {
+    g.forEach((i, k) => {
+      const priority = g.length === 1 ? 50 : Math.round(100 - k * 100 / (g.length - 1))
+      out.push({ ...list[i]!, position: gi === 0 ? 'before' : 'after', priority })
+    })
+  })
+  return out
+}
+
+/** 新添的一本放在书架最后：优先级取「后面」那组最低的（一样时排在数组最后） */
+export function lastPriority(list: WorldbookEntry[]): number {
+  const after = list.filter(e => e.position !== 'before').map(pri)
+  return after.length ? Math.min(...after) : 50
 }
 
 export function saveWorldbook(list: WorldbookEntry[]) {

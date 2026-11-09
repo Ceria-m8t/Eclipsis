@@ -95,6 +95,8 @@ interface WorldbookEntry {
   group: string
   position: 'before' | 'after'
   priority: number
+  id?: string
+  look?: number
 }
 
 interface GroupState {
@@ -126,7 +128,10 @@ function loadWorldbook() {
         enabled: e.enabled ?? true,
         group: e.group || '默认',
         position: e.position || 'after',
-        priority: e.priority ?? 50
+        priority: e.priority ?? 50,
+        // 书架用的：认书的 id、用哪种书脊（这里不显示，但要原样留着）
+        ...(e.id ? { id: e.id } : {}),
+        ...(Number.isInteger(e.look) ? { look: e.look } : {})
       }))
     }
   } catch {}
