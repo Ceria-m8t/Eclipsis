@@ -25,6 +25,7 @@ export interface MessageVersion {
   tools?: ToolEvent[]
   trail?: ApiTurn[]     // 有工具调用时才有
   createdAt: number
+  srvSeqs?: number[]    // 后端来的：这个版本对应的经历（删版本时用）
 }
 
 export interface ChatMessage {
@@ -37,6 +38,12 @@ export interface ChatMessage {
   versions?: MessageVersion[]  // assistant 的多个版本（重新生成）
   activeVersion?: number
   error?: string
+  /** 后端来的（经历表）：包含哪些经历、属于哪个 turn。没有 = 只在这台手机上（还没发/正在生成/出错） */
+  srv?: { seqs: number[]; turn: string; source: string }
+  /** 她的原文（带 Kelivo/前端加的时间标记）：重新发给他时用原文，xiaoke 才认得是同一条 */
+  raw?: string
+  /** 本地的这句已经跟着一轮发出去了（后端记下了，下次同步时换成后端那条） */
+  sent?: boolean
 }
 
 const DB_NAME = 'eclipsis'

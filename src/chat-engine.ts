@@ -46,12 +46,14 @@ export function buildSystemPrompt(): string {
 
 // ===== 把本地消息转成 API 消息 =====
 function userToApi(m: ChatMessage): any {
-  const text = timeLabel(m.createdAt) + (m.content || (m.images?.length ? '（图片）' : ''))
-  if (!m.images?.length) return { role: 'user', content: text }
+  const text = m.raw ?? timeLabel(m.createdAt) + (m.content || (m.images?.length ? '（图片）' : ''))
+  // 后端来的图片是 /api/eclipsis/blob/… 的地址，模型拿不到；只发这台手机上刚选的图（dataURL）
+  const imgs = (m.images || []).filter(u => u.startsWith('data:'))
+  if (!imgs.length) return { role: 'user', content: text }
   return {
     role: 'user',
     content: [
-      ...m.images.map(url => ({ type: 'image_url', image_url: { url } })),
+      ...imgs.map(url => ({ type: 'image_url', image_url: { url } })),
       { type: 'text', text }
     ]
   }

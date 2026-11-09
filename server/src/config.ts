@@ -11,6 +11,8 @@ export interface Config {
   retry429DelaysMs: number[] // 中转站回 429/502/503 时隔多久自动重试（逗号分隔的毫秒数，空 = 不重试）
   dbPath: string
   blobDir: string
+  xiaokeUrl: string       // xiaoke 本体（聊天页删消息时同步删它的记录）
+  xiaokeKey: string       // xiaoke 的 XIAOKE_API_KEY
 }
 
 function num(env: NodeJS.ProcessEnv, name: string, fallback: number): number {
@@ -30,7 +32,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     streamIdleMs: num(env, 'STREAM_IDLE_TIMEOUT_MS', 90_000),
     retry429DelaysMs: (env.RETRY_429_DELAYS_MS ?? '6000,12000').split(',').map(x => Number(x.trim())).filter(x => Number.isFinite(x) && x > 0),
     dbPath: (env.DB_PATH || '/var/lib/eclipsis/eclipsis.sqlite').trim(),
-    blobDir: (env.BLOB_DIR || '/var/lib/eclipsis/blobs').trim()
+    blobDir: (env.BLOB_DIR || '/var/lib/eclipsis/blobs').trim(),
+    xiaokeUrl: (env.XIAOKE_URL || 'http://127.0.0.1:3010').trim(),
+    xiaokeKey: (env.XIAOKE_KEY || '').trim()
   }
 }
 

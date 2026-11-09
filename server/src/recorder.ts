@@ -166,6 +166,8 @@ export class Recorder {
     const inserted: string[] = []
     if (!last) return inserted
     if (last.message?.role === 'user') {
+      // 重新生成：她的话第一次发的时候已经记过了（Kelivo 那边来的也一样），不再记一遍
+      if (ctx.turn && (ctx.version ?? 0) > 0) return inserted
       // 她这一次发送的所有话：结尾连在一起的 user（回车分条发、最后才点发送的几句），每句一条经历
       let first = stored.length - 1
       while (first > 0 && stored[first - 1].message?.role === 'user') first--

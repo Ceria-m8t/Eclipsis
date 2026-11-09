@@ -15,11 +15,11 @@ import { aiStatus } from '../status'
 import { fontName, setFontFile, clearFont } from '../font'
 import { LiquidStage, measureLum, type GlassParams } from '../liquid/stage'
 import { liquidActive } from '../liquid/global'
+import { type ChatMessage, type MessageVersion, newId } from '../db'
 import {
-  type ChatMessage, type MessageVersion,
-  getAllMessages, putMessage, deleteMessage as dbDelete, clearMessages,
-  migrateFromLocalStorage, requestPersist, exportJson, importJson, newId
-} from '../db'
+  loadLatest, loadBefore, loadAfter, deleteOnServer, mergeServer, contextTail,
+  lastServerSeq, firstServerSeq, savePending, loadPending
+} from '../chat-store'
 
 const settings = ref(getSettings())
 
@@ -231,16 +231,41 @@ function textOf(m: ChatMessage): string {
   return m.role === 'assistant' ? (curVersion(m)?.content ?? m.content) : m.content
 }
 
-// 防抖保存：流式输出过程中每 2 秒落盘一次，崩溃或刷新也不会全丢
-const saveTimers = new Map<string, number>()
-function persist(m: ChatMessage, immediate = false) {
-  const t = saveTimers.get(m.id)
-  if (t) clearTimeout(t)
-  saveTimers.delete(m.id)
-  const run = () => putMessage(m).catch(err => toast('保存失败：' + (err?.message || err)))
-  if (immediate) return run()
-  saveTimers.set(m.id, window.setTimeout(() => { saveTimers.delete(m.id); run() }, 2000))
+// 聊天记录在后端（chat-store.ts）。手机上只存还没发出去的那几句
+function persist(_m?: ChatMessage, _immediate = false) {
+  savePending(messages.value)
 }
+
+// ---- 和后端同步 ----
+const hasMore = ref(false)
+let syncing: Promise<void> | null = null
+const dropOnSync = new Set<ChatMessage>()   // 发完一轮的本地回复：后端那条回来了就换掉
+/** 拿后端新来的合进来。dropLocal：这一轮已经发完，本地那条等后端记下的回来后换掉 */
+function syncNew(dropLocal: ChatMessage[] = []): Promise<void> {
+  for (const m of dropLocal) dropOnSync.add(m)
+  const run = async () => {
+    try {
+      const fresh = await loadAfter(lastServerSeq(messages.value))
+      // 只有后端真的记下了才换（直连别的 API、后端没记上时，本地那条留着）
+      const gotUser = fresh.some(m => m.role === 'user')
+      const gotAi = fresh.some(m => m.role === 'assistant')
+      const list = messages.value.filter(m => {
+        if (m.srv) return true
+        if (m.role === 'assistant' && dropOnSync.has(m)) return !gotAi
+        if (m.role === 'user' && m.sent) return !gotUser
+        return true
+      })
+      if (gotAi) dropOnSync.clear()
+      if (fresh.length || list.length !== messages.value.length) messages.value = mergeServer(list, fresh)
+      if (fresh.length) scrollToBottom()
+      persist()
+    } catch { /* 下次再同步 */ }
+  }
+  syncing = (syncing || Promise.resolve()).then(run).finally(() => { syncing = null })
+  return syncing
+}
+let pollTimer = 0
+function onVisible() { if (!document.hidden && !generating.value) syncNew() }
 
 function nextSeq(): number {
   const last = messages.value[messages.value.length - 1]
@@ -264,21 +289,25 @@ interface Row {
 const GAP_MS = 5 * 60 * 1000
 
 // 只渲染最近的若干条，记录很长时手机不卡；往上翻可以加载更早的
-const PAGE = 150
-const visibleCount = ref(PAGE)
-const hiddenCount = computed(() => Math.max(0, messages.value.length - visibleCount.value))
-function loadEarlier() {
+const loadingEarlier = ref(false)
+async function loadEarlier() {
+  const first = firstServerSeq(messages.value)
+  if (first === null || loadingEarlier.value) return
+  loadingEarlier.value = true
   const el = chatArea.value
   const before = el ? el.scrollHeight - el.scrollTop : 0
-  visibleCount.value += PAGE
-  nextTick(() => { if (el) el.scrollTop = el.scrollHeight - before })
+  try {
+    const r = await loadBefore(first)
+    messages.value = [...r.messages, ...messages.value]
+    hasMore.value = r.hasMore
+    nextTick(() => { if (el) el.scrollTop = el.scrollHeight - before })
+  } catch (e: any) { toast(e.message) }
+  finally { loadingEarlier.value = false }
 }
 
 const rows = computed<Row[]>(() => {
   const list = messages.value
-  const start = hiddenCount.value
-  const out: Row[] = list.slice(start).map((m, j) => {
-    const i = start + j
+  const out: Row[] = list.map((m, i) => {
     const prev = list[i - 1]
     const next = list[i + 1]
     const gapBefore = !prev || m.createdAt - prev.createdAt > GAP_MS
@@ -441,9 +470,9 @@ async function runGeneration(target?: ChatMessage) {
   if (target) {
     msg = target
     const idx = messages.value.indexOf(target)
-    history = messages.value.slice(0, idx)
+    history = contextTail(messages.value.slice(0, idx))
   } else {
-    history = messages.value.slice()
+    history = contextTail(messages.value)
     msg = { id: newId(), seq: nextSeq(), role: 'assistant', createdAt: Date.now(), content: '', versions: [], activeVersion: 0 }
     messages.value.push(msg)
     // 拿到响应式代理，后续改动才会刷新界面
@@ -456,6 +485,9 @@ async function runGeneration(target?: ChatMessage) {
   msg.activeVersion = msg.versions.length - 1
   msg.error = undefined
   const live = msg.versions[msg.activeVersion]   // 响应式版本
+  // 这几句跟着这一轮发出去了：后端会记下，同步回来时换成后端那条
+  for (const h of history) if (!h.srv) h.sent = true
+  persist()
   stickToBottom = true
   scrollToBottom()
 
@@ -466,7 +498,7 @@ async function runGeneration(target?: ChatMessage) {
         persist(msg)
         scrollToBottom()
       }
-    }, { scene: 'chat', conversation: 'main', turn: msg.id, version: msg.activeVersion ?? 0 })
+    }, { scene: 'chat', conversation: 'main', turn: msg.srv?.turn ?? msg.id, version: msg.activeVersion ?? 0 })
   } catch (err: any) {
     if (err?.name !== 'AbortError') {
       msg.error = err?.message || String(err)
@@ -480,11 +512,11 @@ async function runGeneration(target?: ChatMessage) {
       msg.activeVersion = Math.max(0, msg.versions.length - 1)
       if (!msg.versions.length) removeLocal(msg)
     }
-    if (messages.value.includes(msg)) await persist(msg, true)
-    else saveTimers.delete(msg.id)
     generating.value = false
     abortCtrl = null
     stopKeepAlive()
+    // 后端已经记下这一轮：本地这条换成后端的（出错的留着，方便重试）
+    await syncNew(!msg.error && !msg.srv ? [msg] : [])
     scrollToBottom()
   }
 }
@@ -494,11 +526,9 @@ function stopGenerating() {
 }
 
 function removeLocal(m: ChatMessage) {
-  const t = saveTimers.get(m.id)
-  if (t) { clearTimeout(t); saveTimers.delete(m.id) }
   const i = messages.value.indexOf(m)
   if (i >= 0) messages.value.splice(i, 1)
-  dbDelete(m.id).catch(() => {})
+  persist()
 }
 
 // ================= 输入栏 + 功能面板 =================
@@ -521,8 +551,6 @@ const plusItems = computed<PlusItem[]>(() => [
   // 第二页：管理（原来侧栏里的）
   { key: 'style', label: '聊天样式', icon: 'palette', ready: true, run: () => { showPlus.value = false; showStylePanel.value = true } },
   { key: 'export', label: '导出记录', icon: 'download', ready: true, run: doExport },
-  { key: 'import', label: '导入记录', icon: 'upload', ready: true, run: () => { showPlus.value = false; importInput.value?.click() } },
-  { key: 'clear', label: '清空记录', icon: 'trash', ready: !!messages.value.length, run: () => { showPlus.value = false; showClearConfirm.value = true } },
 ])
 const PLUS_PER_PAGE = 8
 const plusPages = computed(() => {
@@ -670,17 +698,32 @@ function saveEdit() {
   toast('已修改')
 }
 
-function confirmDelete() {
-  if (!sheet.value) return
-  removeLocal(sheet.value.msg)
+const deleting = ref(false)
+async function confirmDelete() {
+  if (!sheet.value || deleting.value) return
+  const m = sheet.value.msg
+  if (m.srv) {
+    deleting.value = true
+    try { await deleteOnServer(m.srv.seqs) }
+    catch (e: any) { toast('删除失败：' + e.message); return }
+    finally { deleting.value = false }
+  }
+  removeLocal(m)
   closeSheet()
-  toast('已删除')
+  toast('已删除，他也不会再看到')
 }
 
-function confirmDeleteVersion() {
-  if (!sheet.value) return
+async function confirmDeleteVersion() {
+  if (!sheet.value || deleting.value) return
   const m = sheet.value.msg
   if (!m.versions || m.versions.length <= 1) { confirmDelete(); return }
+  const seqs = curVersion(m)?.srvSeqs
+  if (seqs?.length) {
+    deleting.value = true
+    try { await deleteOnServer(seqs) }
+    catch (e: any) { toast('删除失败：' + e.message); return }
+    finally { deleting.value = false }
+  }
   m.versions.splice(m.activeVersion ?? 0, 1)
   m.activeVersion = Math.min(m.activeVersion ?? 0, m.versions.length - 1)
   m.content = curVersion(m)?.content ?? ''
@@ -701,21 +744,17 @@ async function shareMsg(m: ChatMessage) {
 
 // ================= 聊天样式面板 / 记录管理 =================
 const showStylePanel = ref(false)
-const showClearConfirm = ref(false)
-const importInput = ref<HTMLInputElement | null>(null)
 
 const ctxInfo = computed(() => {
-  const c = lastCtx.value || (loaded.value ? buildContext(messages.value, settings.value.contextTokens) : null)
+  const c = lastCtx.value || (loaded.value ? buildContext(contextTail(messages.value), settings.value.contextTokens) : null)
   if (!c) return ''
-  const total = c.historyTokens + c.systemTokens
-  let s = `约 ${(total / 1000).toFixed(1)}k tokens（提示词 ${(c.systemTokens / 1000).toFixed(1)}k + 聊天 ${(c.historyTokens / 1000).toFixed(1)}k）`
-  if (c.droppedCount > 0) s += `，最早的 ${c.droppedCount} 条没有发送`
-  return s
+  return `提示词约 ${(c.systemTokens / 1000).toFixed(1)}k tokens；前面的聊天由 xiaoke 接上（和 Kelivo 一样）`
 })
 
 async function doExport() {
   showPlus.value = false
-  const json = await exportJson()
+  // 导出当前加载出来的这一段（往上翻加载更多再导出就更全）
+  const json = JSON.stringify({ app: 'eclipsis', exportedAt: new Date().toISOString(), messages: messages.value }, null, 2)
   const d = new Date()
   const name = `eclipsis-${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}.json`
   // iOS 主屏幕模式下下载链接不可靠，优先用系统分享面板（可以存到"文件"）
@@ -726,27 +765,6 @@ async function doExport() {
   downloadText(name, json)
 }
 
-async function doImport(e: Event) {
-  const input = e.target as HTMLInputElement
-  const file = input.files?.[0]
-  input.value = ''
-  if (!file) return
-  try {
-    const n = await importJson(await file.text())
-    messages.value = await getAllMessages()
-    toast(`导入了 ${n} 条`)
-    scrollToBottom(true)
-  } catch (err: any) {
-    toast('导入失败：' + err.message)
-  }
-}
-
-async function doClear() {
-  await clearMessages()
-  messages.value = []
-  showClearConfirm.value = false
-  toast('已清空')
-}
 
 // 键盘开合时保持在底部
 watch(keyboardOpen, () => scrollToBottom())
@@ -780,16 +798,20 @@ onMounted(async () => {
   document.documentElement.classList.add('chat-open')
   heartRaf = requestAnimationFrame(heartTick)
   applyCustomCSS()
+  // 以前存在这台手机里的旧聊天（测试消息）不再读，Erica 说不要了
+  const pending = loadPending()
   try {
-    const migrated = await migrateFromLocalStorage()
-    messages.value = await getAllMessages()
-    if (migrated) toast(`已把 ${migrated} 条旧记录搬进新存储`)
+    const r = await loadLatest()
+    messages.value = mergeServer(pending, r.messages)
+    hasMore.value = r.hasMore
   } catch (err: any) {
-    toast('读取聊天记录失败：' + err.message)
+    messages.value = pending
+    toast(err.message)
   }
   loaded.value = true
-  requestPersist()
   scrollToBottom(true)
+  pollTimer = window.setInterval(onVisible, 20_000)
+  document.addEventListener('visibilitychange', onVisible)
 
   if (footerEl.value && 'ResizeObserver' in window) {
     ro = new ResizeObserver(() => {
@@ -803,16 +825,13 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   stopGlass()
+  clearInterval(pollTimer)
+  document.removeEventListener('visibilitychange', onVisible)
   document.documentElement.classList.remove('chat-open')
   cancelAnimationFrame(heartRaf)
   pageBackdrop.value = null
   ro?.disconnect()
-  // 离开页面前把待保存的写进去
-  for (const [id, t] of saveTimers) {
-    clearTimeout(t)
-    const m = messages.value.find(x => x.id === id)
-    if (m) putMessage(m)
-  }
+  persist()
   abortCtrl?.abort()
 })
 
@@ -940,23 +959,7 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
         </div>
       </transition>
 
-      <!-- 清空确认 -->
-      <transition name="fade">
-        <div v-if="showClearConfirm" class="scrim" @click="showClearConfirm = false"></div>
-      </transition>
-      <transition name="sheet">
-        <div v-if="showClearConfirm" class="sheet glass-strong" role="alertdialog" aria-modal="true" aria-label="清空聊天记录">
-          <div class="sheet-grip" aria-hidden="true"></div>
-          <div class="sheet-title">清空全部 {{ messages.length }} 条聊天记录？</div>
-          <div class="sheet-hint">只删这台设备上的记录，删了找不回来。想留底的话先用"导出记录"。</div>
-          <div class="sheet-row">
-            <button class="sheet-btn ghost" @click="showClearConfirm = false">取消</button>
-            <button class="sheet-btn danger" @click="doClear">清空</button>
-          </div>
-        </div>
-      </transition>
     </Teleport>
-    <input ref="importInput" type="file" accept="application/json,.json" hidden @change="doImport" />
 
     <!-- ===== 消息区 ===== -->
     <main
@@ -966,8 +969,8 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
       @scroll.passive="onScroll"
       @click="onAreaClick"
     >
-      <button v-if="hiddenCount" class="load-earlier" @click="loadEarlier">
-        还有 {{ hiddenCount }} 条更早的消息
+      <button v-if="hasMore" class="load-earlier" :disabled="loadingEarlier" @click="loadEarlier">
+        {{ loadingEarlier ? '正在加载…' : '加载更早的消息' }}
       </button>
       <div v-if="loaded && !messages.length" class="chat-empty">说点什么吧</div>
 
@@ -1155,7 +1158,7 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
         <template v-if="sheet.mode === 'menu'">
           <button class="sheet-item" @click="doCopy(sheet.msg)"><Icon name="copy" />复制全文</button>
           <button class="sheet-item" @click="editText = textOf(sheet.msg); sheet.mode = 'select'"><Icon name="select" />选择复制</button>
-          <button class="sheet-item" @click="startEdit"><Icon name="edit" />编辑</button>
+          <button v-if="!sheet.msg.srv && !sheet.msg.sent" class="sheet-item" @click="startEdit"><Icon name="edit" />编辑</button>
           <button class="sheet-item" @click="shareMsg(sheet.msg)"><Icon name="share" />分享</button>
           <button v-if="sheet.msg.role === 'assistant'" class="sheet-item" :disabled="generating" @click="regenerate(sheet.msg)"><Icon name="refresh" />重新生成</button>
           <button v-if="sheet.msg.role === 'assistant' && !settings.apiBase" class="sheet-item" @click="sheet.mode = 'debug'"><Icon name="tool" />这一轮发了什么</button>
@@ -1168,7 +1171,7 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
         </template>
 
         <template v-else-if="sheet.mode === 'debug'">
-          <TurnDebug :turn="sheet.msg.id" :version="sheet.msg.activeVersion ?? 0" @close="closeSheet" />
+          <TurnDebug :turn="sheet.msg.srv?.turn ?? sheet.msg.id" :version="sheet.msg.activeVersion ?? 0" @close="closeSheet" />
         </template>
 
         <template v-else-if="sheet.mode === 'select'">
@@ -1193,10 +1196,10 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
               : '只删除当前这个版本？' }}
           </div>
           <div class="sheet-preview">{{ textOf(sheet.msg).slice(0, 120) || '（图片）' }}</div>
-          <div class="sheet-hint">删除后找不回来</div>
+          <div class="sheet-hint">{{ sheet.msg.srv ? '他那边的记忆（xiaoke）里也一起删掉，删了找不回来。Kelivo 里还开着的那个窗口自己带着的那份删不到' : '删除后找不回来' }}</div>
           <div class="sheet-row">
             <button class="sheet-btn ghost" @click="closeSheet">取消</button>
-            <button class="sheet-btn danger" @click="sheet.mode === 'confirm-delete' ? confirmDelete() : confirmDeleteVersion()">删除</button>
+            <button class="sheet-btn danger" :disabled="deleting" @click="sheet.mode === 'confirm-delete' ? confirmDelete() : confirmDeleteVersion()">{{ deleting ? '正在删…' : '删除' }}</button>
           </div>
         </template>
       </div>

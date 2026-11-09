@@ -149,6 +149,15 @@ test('重新生成：同一 turn 的 user 只记一次，第二个回复标 rege
   assert.equal(JSON.parse(ai[1].meta).regenerated, true)
 })
 
+test('重新生成一条 Kelivo 来的回复（turn 是 e<seq>、她的话在别的键下记过）：她的话不再记一遍', async () => {
+  const body = { model: 'm', stream: true, messages: [{ role: 'user', content: '（Kelivo 发的）在吗' }] }
+  await (await chat(body, { 'x-eclipsis-turn': 'e123', 'x-eclipsis-version': '1' })).text()
+  await settle()
+  const ep = episodes()
+  assert.equal(ep.filter(e => e.actor === 'erica').length, 0)
+  assert.equal(ep.filter(e => e.actor === 'ai').length, 1)
+})
+
 test('分条发的几句（回车分条、最后点发送）：每句一条经历，按顺序；重新生成不重复记', async () => {
   const body = { model: 'm', stream: true, messages: [
     { role: 'user', content: '旧的' }, { role: 'assistant', content: '嗯' },

@@ -1,0 +1,126 @@
+// 聊天记录放在后端（经历表）：Kelivo、Eclipsis、醒来以外的日常聊天都在同一条时间线上。
+// 这里只管读、删、把后端的样子转成聊天页用的 ChatMessage。
+// 手机上只留两样：还没发出去的那几句（回车分条、还没点发送），和正在生成的那一条。
+import type { ChatMessage, MessageVersion } from './db'
+
+interface SrvTool { id: string; name: string; args: string; result?: string }
+interface SrvVersion { seq: number; seqs: number[]; ts: string; content: string; thinking: string; tools: SrvTool[]; partial?: boolean }
+export interface SrvItem {
+  id: string; seq: number; seqs: number[]; role: 'user' | 'assistant'; ts: string; turn: string
+  content: string; raw?: string; images?: string[]; versions?: SrvVersion[]; source: string
+}
+
+const BASE = '/api/eclipsis/chat'
+
+async function getJson(url: string): Promise<any> {
+  const r = await fetch(url, { cache: 'no-store' })
+  if (!r.ok) throw new Error(`读取聊天记录失败（HTTP ${r.status}）`)
+  return r.json()
+}
+
+export function fromServer(it: SrvItem): ChatMessage {
+  const createdAt = Date.parse(it.ts)
+  const srv = { seqs: it.seqs, turn: it.turn, source: it.source }
+  if (it.role === 'user') {
+    return { id: it.id, seq: it.seq, role: 'user', createdAt, content: it.content, raw: it.raw, images: it.images, srv }
+  }
+  const versions: MessageVersion[] = (it.versions || []).map(v => {
+    const out: MessageVersion = { content: v.content, createdAt: Date.parse(v.ts), srvSeqs: v.seqs }
+    if (v.thinking) out.thinking = v.thinking
+    if (v.tools.length) out.tools = v.tools.map(t => ({ id: t.id, name: t.name, args: t.args, result: t.result, status: 'done' as const }))
+    return out
+  })
+  return { id: it.id, seq: it.seq, role: 'assistant', createdAt, content: it.content, versions, activeVersion: Math.max(0, versions.length - 1), srv }
+}
+
+export async function loadLatest(limit = 150): Promise<{ messages: ChatMessage[]; hasMore: boolean }> {
+  const d = await getJson(`${BASE}/history?limit=${limit}`)
+  return { messages: (d.items as SrvItem[]).map(fromServer), hasMore: !!d.hasMore }
+}
+
+export async function loadBefore(seq: number, limit = 150): Promise<{ messages: ChatMessage[]; hasMore: boolean }> {
+  const d = await getJson(`${BASE}/history?before=${seq}&limit=${limit}`)
+  return { messages: (d.items as SrvItem[]).map(fromServer), hasMore: !!d.hasMore }
+}
+
+export async function loadAfter(seq: number): Promise<ChatMessage[]> {
+  const d = await getJson(`${BASE}/history?after=${seq}`)
+  return (d.items as SrvItem[]).map(fromServer)
+}
+
+/** 删：后端撤回 + 从 xiaoke 里删（他以后看不到） */
+export async function deleteOnServer(seqs: number[]): Promise<void> {
+  const r = await fetch(`${BASE}/delete`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ seqs }) })
+  if (!r.ok) {
+    let msg = `HTTP ${r.status}`
+    try { msg = (await r.json()).error || msg } catch {}
+    throw new Error(msg)
+  }
+}
+
+/** 后端那一段里最新的 seq（只看后端来的） */
+export function lastServerSeq(list: ChatMessage[]): number {
+  let s = 0
+  for (const m of list) if (m.srv) s = Math.max(s, m.seq)
+  return s
+}
+
+/** 第一条后端来的 seq（往前翻用） */
+export function firstServerSeq(list: ChatMessage[]): number | null {
+  for (const m of list) if (m.srv) return m.seq
+  return null
+}
+
+/**
+ * 把后端新来的合进列表：同一个 turn 的回复（重新生成出来的新版本）替换掉原来那一项，其余按 seq 接上。
+ * 本地的（还没发的、正在生成/出错的）seq 是时间戳，比后端的大，排序后自然在最后。
+ */
+export function mergeServer(list: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] {
+  const out = list.slice()
+  for (const m of incoming) {
+    const same = out.findIndex(x => x.srv && x.id === m.id)
+    if (same >= 0) { out[same] = m; continue }
+    // 重新生成出来的新版本：单独取回来时是一项新的，但 turn 和原来那条一样 → 接到原来那条的版本后面
+    const old = m.role === 'assistant' ? out.findIndex(x => x.srv && x.role === 'assistant' && x.srv.turn === m.srv!.turn) : -1
+    if (old >= 0) {
+      const x = out[old]!
+      const versions = [...(x.versions || []).filter(v => v.srvSeqs), ...(m.versions || [])]
+      out[old] = { ...x, seq: Math.max(x.seq, m.seq), content: m.content, versions, activeVersion: versions.length - 1, error: undefined,
+        srv: { ...x.srv!, seqs: [...x.srv!.seqs, ...m.srv!.seqs] } }
+      continue
+    }
+    out.push(m)
+  }
+  return out.sort((a, b) => a.seq - b.seq)
+}
+
+/**
+ * 这一轮要发给他的：最后一条他的回复之后、她说的那几句（xiaoke 会补上前面的历史，和 Kelivo 一样）。
+ * 一句都没有（重新生成一条前面紧挨着也是他的回复）时，往回找最近的一句她的话。
+ */
+export function contextTail(before: ChatMessage[]): ChatMessage[] {
+  const tail: ChatMessage[] = []
+  for (let i = before.length - 1; i >= 0; i--) {
+    const m = before[i]!
+    if (m.role === 'assistant') break
+    tail.unshift(m)
+  }
+  if (tail.length) return tail
+  for (let i = before.length - 1; i >= 0; i--) if (before[i]!.role === 'user') return [before[i]!]
+  return []
+}
+
+// ---- 还没发出去的几句：存在本机，刷新/切走不会丢 ----
+const PENDING_KEY = 'eclipsis-chat-pending'
+
+export function savePending(list: ChatMessage[]) {
+  const pending = list.filter(m => !m.srv && m.role === 'user' && !m.sent)
+  try {
+    if (pending.length) localStorage.setItem(PENDING_KEY, JSON.stringify(pending))
+    else localStorage.removeItem(PENDING_KEY)
+  } catch { /* 图片太大存不下就算了 */ }
+}
+
+export function loadPending(): ChatMessage[] {
+  try { return JSON.parse(localStorage.getItem(PENDING_KEY) || '[]') } catch { return [] }
+}
