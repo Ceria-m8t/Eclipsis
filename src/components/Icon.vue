@@ -1,9 +1,11 @@
 <script setup lang="ts">
 // 线性图标集合（24x24，描边），避免 emoji 在不同系统上显示不一致
-defineProps<{ name: string; size?: number }>()
+defineProps<{ name: string; size?: number; weight?: number }>()
 
 const paths: Record<string, string> = {
   back: 'M15 5l-7 7 7 7',
+  home: 'M4 10.5L12 4l8 6.5M6 9v10.5h12V9M10 19.5V14h4v5.5',
+  chat: 'M12 4.5c4.7 0 8 3 8 6.8s-3.3 6.8-8 6.8c-.9 0-1.8-.1-2.6-.3L5 19.5l1.2-3.6C4.8 14.7 4 13.1 4 11.3 4 7.5 7.3 4.5 12 4.5z',
   menu: 'M4 7h16M4 12h16M4 17h16',
   more: 'M5 12h.01M12 12h.01M19 12h.01',
   copy: 'M9 9h10v10H9zM5 15V5h10',
@@ -53,7 +55,7 @@ const paths: Record<string, string> = {
     viewBox="0 0 24 24"
     fill="none"
     stroke="currentColor"
-    stroke-width="1.7"
+    :stroke-width="weight || 1.7"
     stroke-linecap="round"
     stroke-linejoin="round"
     aria-hidden="true"

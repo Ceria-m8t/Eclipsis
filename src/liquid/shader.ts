@@ -20,11 +20,14 @@ uniform sampler2D uTex;
 uniform vec2 uImgOrigin;
 uniform vec2 uImgSize;
 uniform vec4 uRect;
-uniform float uRadius, uBevel, uRefract, uWobble, uDisp, uShine, uShadow, uTint, uDark, uDpr, uSeed;
+uniform vec4 uRadii;   // 左上、右上、右下、左下（CSS 像素）
+uniform float uBevel, uRefract, uWobble, uDisp, uShine, uShadow, uTint, uDark, uDpr, uSeed;
 uniform vec3 uTintColor;
 out vec4 outColor;
 
-float sdRound(vec2 p, vec2 b, float r) {
+// 四个角圆角不一样的圆角矩形（y 向下）
+float sdRound(vec2 p, vec2 b, vec4 r4) {
+  float r = p.x > 0.0 ? (p.y > 0.0 ? r4.z : r4.y) : (p.y > 0.0 ? r4.w : r4.x);
   vec2 q = abs(p) - b + r;
   return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
 }
@@ -36,7 +39,7 @@ float angDiff(float a, float b) { float d = a - b; return atan(sin(d), cos(d)); 
 void main() {
   vec2 hb = uRect.zw * 0.5;
   vec2 lp = vP - (uRect.xy + hb);
-  float r = min(uRadius, min(hb.x, hb.y));
+  vec4 r = min(uRadii, vec4(min(hb.x, hb.y)));
   float d = sdRound(lp, hb, r);                 // <0 在玻璃里
   float cov = clamp(0.5 - d * uDpr, 0.0, 1.0);  // 抗锯齿覆盖率
 
@@ -102,7 +105,7 @@ void main() {
   outColor = vec4(col * cov, cov + (1.0 - cov) * sa);
 }`
 
-export const UNIFORMS = ['uTex', 'uImgOrigin', 'uImgSize', 'uRect', 'uRadius', 'uBevel', 'uRefract', 'uWobble', 'uDisp', 'uShine', 'uShadow', 'uTint', 'uDark', 'uDpr', 'uSeed', 'uTintColor', 'uQuad', 'uView'] as const
+export const UNIFORMS = ['uTex', 'uImgOrigin', 'uImgSize', 'uRect', 'uRadii', 'uBevel', 'uRefract', 'uWobble', 'uDisp', 'uShine', 'uShadow', 'uTint', 'uDark', 'uDpr', 'uSeed', 'uTintColor', 'uQuad', 'uView'] as const
 export type Uniforms = Record<(typeof UNIFORMS)[number], WebGLUniformLocation | null>
 
 /** 编译着色器、建单位四边形、开预乘混合。失败返回 null（调用方退回 CSS） */

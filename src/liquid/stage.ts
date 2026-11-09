@@ -44,7 +44,6 @@ export class LiquidStage {
   private hosts: Element[] = []
   private visible = new Set<Element>()
   private seeds = new WeakMap<Element, number>()
-  private radius = new WeakMap<Element, number>()
   private seedCounter = 0
   private io: IntersectionObserver
   private ro: ResizeObserver
@@ -162,7 +161,6 @@ export class LiquidStage {
       if (!this.seeds.has(el)) this.seeds.set(el, (this.seedCounter++ * 2.399) % 6.283)
     }
     this.hosts = list
-    this.radius = new WeakMap()
   }
 
   private draw() {
@@ -179,13 +177,14 @@ export class LiquidStage {
     const contentH = last ? (last as HTMLElement).offsetTop + (last as HTMLElement).offsetHeight : clientH
     const scRect = sc.getBoundingClientRect()
     const bRect = back.getBoundingClientRect()
-    const hosts: { r: DOMRect; el: Element }[] = []
+    const hosts: { r: DOMRect; el: Element; radii: number[] }[] = []
     for (const el of this.hosts) {
       if (!this.visible.has(el)) continue
       const r = el.getBoundingClientRect()
       if (r.width < 2 || r.height < 2) continue
-      hosts.push({ r, el })
-      if (!this.radius.has(el)) this.radius.set(el, parseFloat(getComputedStyle(el).borderTopLeftRadius) || 0)
+      // 气泡四个角不一样（同一组里挨着的那侧是小角），新消息进来时会变，每次都读
+      const cs = getComputedStyle(el)
+      hosts.push({ r, el, radii: [cs.borderTopLeftRadius, cs.borderTopRightRadius, cs.borderBottomRightRadius, cs.borderBottomLeftRadius].map(v => parseFloat(v) || 0) })
       if (hosts.length >= MAX_HOSTS) break
     }
 
@@ -223,13 +222,13 @@ export class LiquidStage {
     gl.uniform1f(U.uTint, P.tint)
     gl.uniform1f(U.uDark, P.tone === 'dark' ? 1 : 0)
     let n = 0
-    for (const { r, el } of hosts) {
+    for (const { r, el, radii } of hosts) {
       const x = r.left - cx, y = r.top - cy
       if (y + r.height < -QUAD_PAD || y > cssH + QUAD_PAD) continue
       const [tr, tg, tb] = hexToRgb01(this.opts.tintOf(el))
       gl.uniform4f(U.uRect, x, y, r.width, r.height)
       gl.uniform4f(U.uQuad, x - QUAD_PAD, y - QUAD_PAD, r.width + 2 * QUAD_PAD, r.height + 2 * QUAD_PAD)
-      gl.uniform1f(U.uRadius, this.radius.get(el) || 0)
+      gl.uniform4f(U.uRadii, radii[0]!, radii[1]!, radii[2]!, radii[3]!)
       gl.uniform1f(U.uSeed, this.seeds.get(el) || 0)
       gl.uniform3f(U.uTintColor, tr, tg, tb)
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
@@ -264,7 +263,7 @@ function lastContentChild(sc: Element, skip: Element): Element | null {
   return el
 }
 
-function measureLum(im: HTMLImageElement): number {
+export function measureLum(im: HTMLImageElement): number {
   try {
     const c = document.createElement('canvas')
     c.width = 24; c.height = 24

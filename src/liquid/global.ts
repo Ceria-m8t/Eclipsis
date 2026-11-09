@@ -389,7 +389,8 @@ function frame() {
 
     const lum = regionLum(back.tex, back.place, { x: r.left, y: r.top, w: r.width, h: r.height })
     const tone = lum < 0.45 ? 'dark' : 'light'
-    const radius = parseFloat(cs.borderTopLeftRadius) || 0
+    const radii = [cs.borderTopLeftRadius, cs.borderTopRightRadius, cs.borderBottomRightRadius, cs.borderBottomLeftRadius].map(v => parseFloat(v) || 0)
+    const radius = radii.join(',')
     const strong = el.classList.contains('glass-strong')
     const key = [r.left, r.top, r.width, r.height].map(v => Math.round(v * 2)).join(',') +
       `|${wt},${wh},${canvasTop}|${texKeyOf(back.tex)}|${back.place.x | 0},${back.place.y | 0},${back.place.w | 0}|${radius}|${tone}|${strong}`
@@ -420,7 +421,7 @@ function frame() {
     gl.uniform2f(U.uImgOrigin, ox, scrolls ? oy : oy - wt)
     gl.uniform2f(U.uImgSize, back.place.w / sx, back.place.h / sy)
     gl.uniform1f(U.uDpr, dpr)
-    gl.uniform1f(U.uRadius, radius)
+    gl.uniform4f(U.uRadii, radii[0]!, radii[1]!, radii[2]!, radii[3]!)
     gl.uniform1f(U.uBevel, Math.min(P.bevel, Math.max(4, minSide * 0.32)))
     gl.uniform1f(U.uRefract, P.refract)
     gl.uniform1f(U.uWobble, P.wobble * small)

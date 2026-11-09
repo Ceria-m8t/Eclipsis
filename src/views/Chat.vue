@@ -13,7 +13,7 @@ import { keyboardOpen } from '../viewport'
 import { pageBackdrop } from '../theme'
 import { aiStatus } from '../status'
 import { fontName, setFontFile, clearFont } from '../font'
-import { LiquidStage, type GlassParams } from '../liquid/stage'
+import { LiquidStage, measureLum, type GlassParams } from '../liquid/stage'
 import { liquidActive } from '../liquid/global'
 import {
   type ChatMessage, type MessageVersion,
@@ -201,11 +201,21 @@ async function syncGlass() {
   const st = stage
   const ok = await st.setWallpaper(s.bgImage)
   if (st !== stage) return
-  glassLum.value = st.avgLum
   st.setParams(glassParams.value)
   glassReady.value = ok
 }
 watch(() => [chatStyle.value.glass, chatStyle.value.bgImage], () => { syncGlass() })
+async function measureBg() {
+  const url = chatStyle.value.bgImage
+  if (!url) { glassLum.value = 0.6; return }
+  const im = new Image()
+  im.src = url
+  try { await im.decode() } catch { return }
+  if (url === chatStyle.value.bgImage) glassLum.value = measureLum(im)
+}
+watch(() => chatStyle.value.bgImage, measureBg, { immediate: true })
+// 气泡外面的字（工具、思考过程、时间、操作按钮）跟着背景深浅换颜色
+const chatDark = computed(() => !!chatStyle.value.bgImage && glassTone.value === 'dark')
 watch(glassParams, p => stage?.setParams(p))
 watch(() => [chatStyle.value.aiBubbleBg, chatStyle.value.userBubbleBg, chatStyle.value.fontSize, chatStyle.value.customCSS], () => stage?.invalidate())
 function applyGlassPreset(k: keyof typeof GLASS_PRESETS) { Object.assign(chatStyle.value, GLASS_PRESETS[k]) }
@@ -247,6 +257,8 @@ interface Row {
   showAvatar: boolean      // 连续消息只有第一条显示头像
   divider?: string         // 上方的居中时间
   isLastOfGroup: boolean
+  joinPrev: boolean        // 第一个气泡和上一条消息的最后一个气泡是一组（只有她连着发时）
+  joinNext: boolean
 }
 
 const GAP_MS = 5 * 60 * 1000
@@ -265,7 +277,7 @@ function loadEarlier() {
 const rows = computed<Row[]>(() => {
   const list = messages.value
   const start = hiddenCount.value
-  return list.slice(start).map((m, j) => {
+  const out: Row[] = list.slice(start).map((m, j) => {
     const i = start + j
     const prev = list[i - 1]
     const next = list[i + 1]
@@ -290,10 +302,27 @@ const rows = computed<Row[]>(() => {
       thinking,
       showAvatar: gapBefore || prev.role !== m.role,
       divider: gapBefore ? dividerTime(m.createdAt) : undefined,
-      isLastOfGroup: gapAfter || next.role !== m.role
+      isLastOfGroup: gapAfter || next.role !== m.role,
+      joinPrev: false,
+      joinNext: false,
     }
   })
+  // 她连着发的几条算一组（中间夹了图片就断开）；他一条回复拆出来的几个气泡算一组，
+  // 两条回复之间隔着操作栏，不连
+  for (let k = 1; k < out.length; k++) {
+    const a = out[k - 1]!, b = out[k]!
+    if (b.msg.role === 'user' && a.msg.role === 'user' && !b.showAvatar && a.parts.length && b.parts.length && !b.msg.images?.length) {
+      a.joinNext = true; b.joinPrev = true
+    }
+  }
+  return out
 })
+function bubbleClass(row: Row, j: number) {
+  return {
+    'join-prev': j > 0 || (j === 0 && row.joinPrev),
+    'join-next': j < row.parts.length - 1 || (j === row.parts.length - 1 && row.joinNext),
+  }
+}
 
 // ================= 输入 =================
 const inputText = ref('')
@@ -791,7 +820,7 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
 </script>
 
 <template>
-  <div class="chat-page shell-page" :class="{ 'liquid-on': glassActive, 'liquid-dark': glassActive && glassTone === 'dark' }" :style="pageStyle">
+  <div class="chat-page shell-page" :class="{ 'liquid-on': glassActive, 'liquid-dark': glassActive && glassTone === 'dark', 'chat-dark': chatDark }" :style="pageStyle">
     <!-- ===== 顶栏：通栏卡片，头像在两端，中间心电图爱心、名字、状态 ===== -->
     <header class="chat-header">
       <div class="header-card glass header-glass">
@@ -946,15 +975,6 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
         <div v-if="row.divider" class="time-divider"><span data-glass>{{ row.divider }}</span></div>
 
         <div :class="['msg-row', row.msg.role, { first: row.showAvatar }]">
-          <div class="avatar-slot">
-            <img
-              v-if="row.showAvatar"
-              :src="row.msg.role === 'assistant' ? settings.avatarAI : settings.avatarUser"
-              class="msg-avatar"
-              alt=""
-            />
-          </div>
-
           <div class="msg-col">
             <!-- 思考过程 -->
             <template v-if="row.msg.role === 'assistant' && row.thinking">
@@ -1002,7 +1022,7 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
             <div
               v-for="(part, j) in row.parts"
               :key="j"
-              :class="['bubble', row.msg.role === 'assistant' ? 'ai markdown-body' : 'user']"
+              :class="['bubble', row.msg.role === 'assistant' ? 'ai markdown-body' : 'user', bubbleClass(row, j)]"
               @pointerdown="onPressStart($event, row.msg)"
               @pointermove="onPressMove"
               @pointerup="cancelPress"
@@ -1238,6 +1258,23 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
   box-shadow: none;
 }
 .chat-page.liquid-on .chat-area { isolation: isolate; }
+.chat-page.chat-dark .chat-area {
+  --text: rgba(255, 255, 255, 0.95);
+  --text-2: rgba(255, 255, 255, 0.78);
+  --text-3: rgba(255, 255, 255, 0.6);
+  --accent: #c9d5ff;
+}
+.chat-page.chat-dark .fold-chip, .chat-page.chat-dark .msg-actions, .chat-page.chat-dark .user-time,
+.chat-page.chat-dark .load-earlier, .chat-page.chat-dark .chat-empty {
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+}
+/* 玻璃关着时气泡是浅色底，字要留深色 */
+.chat-page.chat-dark:not(.liquid-on) .bubble {
+  --text: rgba(28, 32, 44, 0.86);
+  --text-2: rgba(28, 32, 44, 0.55);
+  --text-3: rgba(28, 32, 44, 0.36);
+  color: var(--text);
+}
 .chat-page.liquid-dark .bubble {
   --text: rgba(255, 255, 255, 0.95);
   --text-2: rgba(255, 255, 255, 0.72);
@@ -1393,21 +1430,13 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
 .msg-row.first { margin-top: 10px; }
 .msg-row.user { flex-direction: row-reverse; }
 
-.avatar-slot { width: 36px; flex-shrink: 0; }
-.msg-avatar {
-  width: 36px; height: 36px;
-  border-radius: 50%;
-  object-fit: cover;
-  border: 1.5px solid rgba(255, 255, 255, 0.85);
-  box-shadow: 0 2px 6px rgba(60, 72, 110, 0.12);
-}
 
 .msg-col {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 4px;
-  max-width: calc(100% - 88px);
+  max-width: 80%;
   min-width: 0;
 }
 .msg-row.user .msg-col { align-items: flex-end; }
@@ -1417,7 +1446,10 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
   max-width: 100%;
   /* 形状参考 Erica 给的图三：圆角矩形（不是胶囊），左右留白多一点。跟着字号走（15px 时 7/13、圆角 12） */
   padding: 0.45em 0.88em;
-  border-radius: 0.78em;
+  /* 图三的形状：外侧四个角都圆；同一组里挨着的那侧（他左、她右）变小角，一组的头尾那个角还是圆的 */
+  --r-big: 0.95em;
+  --r-small: 4px;
+  border-radius: var(--r-big);
   font-size: var(--bubble-font-size, 15px);
   font-family: inherit;
   line-height: 1.5;
@@ -1433,6 +1465,10 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
   -webkit-touch-callout: none;
 }
 .bubble.ai { background: var(--bubble-ai); }
+.bubble.ai.join-prev { border-top-left-radius: var(--r-small); }
+.bubble.ai.join-next { border-bottom-left-radius: var(--r-small); }
+.bubble.user.join-prev { border-top-right-radius: var(--r-small); }
+.bubble.user.join-next { border-bottom-right-radius: var(--r-small); }
 .bubble.user { background: var(--bubble-user); white-space: pre-wrap; }
 
 .bubble.typing { display: flex; gap: 4px; padding: 13px 16px; }
@@ -1673,6 +1709,14 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
 .plus-dots { display: flex; justify-content: center; gap: 6px; padding-top: 10px; }
 .plus-dots span { width: 6px; height: 6px; border-radius: 3px; background: rgba(60, 72, 110, 0.18); transition: width 0.25s, background 0.25s; }
 .plus-dots span.on { width: 16px; background: rgba(60, 72, 110, 0.5); }
+.input-capsule[data-glass-tone="dark"] .plus-dots span { background: rgba(255, 255, 255, 0.28); }
+.input-capsule[data-glass-tone="dark"] .plus-dots span.on { background: rgba(255, 255, 255, 0.75); }
+.input-capsule[data-glass-tone="dark"] .plus-icon { border-color: rgba(255, 255, 255, 0.28); }
+.input-capsule[data-glass-tone="dark"] .send-btn:not(.ready):not(.stop) {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.38);
+  color: var(--text-2);
+}
 .plus-enter-active, .plus-leave-active { transition: transform 0.28s cubic-bezier(0.2, 0.9, 0.3, 1), opacity 0.2s; }
 .plus-enter-from, .plus-leave-to { transform: translateY(16px); opacity: 0; }
 
@@ -1688,7 +1732,7 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
 /* 收矮（Erica 红线：上沿落到原来「+」那一行的位置） */
 .input-capsule {
   border-radius: 24px;
-  padding: 9px 8px 7px 16px;
+  padding: 13px 8px 10px 16px;
   display: flex;
   flex-direction: column;
 }
@@ -1714,7 +1758,7 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
   font-size: 16px;   /* 小于 16px 时 iOS 聚焦会自动放大页面 */
   line-height: 1.4;
   max-height: 120px;
-  padding: 3px 0 4px;
+  padding: 4px 0 7px;
 }
 .input-text::placeholder { color: var(--text-3); }
 .input-tools { display: flex; align-items: center; gap: 6px; }

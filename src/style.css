@@ -36,8 +36,8 @@
   --press-scale: 0.95;
   --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 
-  --tabbar-h: 33px;   /* 底栏内容高度（不含安全区）。Erica 红线：上沿压到原来「家」字下面 */
-  --tabbar-safe: max(calc(var(--safe-bottom) * 0.55), 4px);   /* 底栏只让出 Home 横条那一点，不让整个安全区 */
+  --tabbar-h: 42px;   /* 底栏内容高度（不含安全区）。Erica 红线：上沿压到原来「家」字下面 */
+  --tabbar-safe: max(calc(var(--safe-bottom) * 0.7), 6px);   /* 底栏只让出 Home 横条那一点，不让整个安全区 */
 
   /* 默认背景：浅雾蓝到奶白 */
   --page-bg: linear-gradient(165deg, #e9eef7 0%, #f3f1f6 45%, #f7f3ee 100%);
@@ -178,10 +178,17 @@ input, textarea, select { font-size: 16px; }
   --text-2: rgba(255, 255, 255, 0.74);
   --text-3: rgba(255, 255, 255, 0.52);
   --glass-bg-soft: rgba(255, 255, 255, 0.12);
+  --accent: #c9d5ff;
   color: var(--text);
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
 }
-.liq-host[data-glass-tone="light"] { --text: rgba(28, 32, 44, 0.9); color: var(--text); }
+.liq-host[data-glass-tone="light"] {
+  --text: rgba(28, 32, 44, 0.9);
+  --text-2: rgba(28, 32, 44, 0.58);
+  --text-3: rgba(28, 32, 44, 0.4);
+  color: var(--text);
+  text-shadow: none;
+}
 
 /* 无障碍：仅屏幕阅读器可见 */
 .sr-only {

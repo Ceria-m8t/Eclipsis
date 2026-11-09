@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { keyboardOpen } from '../viewport'
 import { pageBackdrop } from '../theme'
+import Icon from '../components/Icon.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -15,9 +16,9 @@ const tab = computed(() => {
 })
 
 const tabs = [
-  { key: 'home', icon: '🏠', label: '家', to: '/living-room' },
-  { key: 'chat', icon: '💬', label: '聊天', to: '/chat' },
-  { key: 'settings', icon: '⚙️', label: '设置', to: '/settings' },
+  { key: 'home', icon: 'home', label: '家', to: '/living-room' },
+  { key: 'chat', icon: 'chat', label: '聊天', to: '/chat' },
+  { key: 'settings', icon: 'settings', label: '设置', to: '/settings' },
 ] as const
 
 function go(t: (typeof tabs)[number]) {
@@ -47,7 +48,7 @@ function go(t: (typeof tabs)[number]) {
         :data-glass="tab === t.key ? '' : undefined"
         @click="go(t)"
       >
-        <span class="tab-icon" aria-hidden="true">{{ t.icon }}</span>
+        <Icon :name="t.icon" :size="21" :weight="tab === t.key ? 2.1 : 1.6" class="tab-icon" />
         <span class="tab-label">{{ t.label }}</span>
       </button>
     </nav>
@@ -117,8 +118,8 @@ function go(t: (typeof tabs)[number]) {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 1px;
-  margin: 0 4px;
+  gap: 2px;
+  margin: 3px 4px;
   border: none;
   border-radius: 16px;
   background: none;
@@ -132,8 +133,8 @@ function go(t: (typeof tabs)[number]) {
     inset 0 -1px 1px rgba(255, 255, 255, 0.3),
     0 2px 10px rgba(60, 72, 110, 0.08);
 }
-.tab-icon { font-size: 16px; line-height: 1; }
-.tab-label { font-size: 10px; line-height: 1.1; }
+.tab-icon { display: block; }
+.tab-label { font-size: 10.5px; line-height: 1.1; }
 .tab-btn.active .tab-label { font-weight: 600; }
 </style>
 
