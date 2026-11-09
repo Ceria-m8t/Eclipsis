@@ -1382,6 +1382,10 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
   inset: 0;
   z-index: 1;
   overflow-y: auto;
+  /* 只许上下滚：iOS 上内容哪怕宽出一点点，手指斜着划就会左右晃 */
+  overflow-x: hidden;
+  touch-action: pan-y;
+  overscroll-behavior-x: none;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
   /* 卡片下沿 + 10px */
@@ -1731,8 +1735,8 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
 
 /* 收矮（Erica 红线：上沿落到原来「+」那一行的位置） */
 .input-capsule {
-  border-radius: 24px;
-  padding: 13px 8px 10px 16px;
+  border-radius: 18px;
+  padding: 16px 8px 12px 16px;
   display: flex;
   flex-direction: column;
 }
@@ -1758,7 +1762,7 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
   font-size: 16px;   /* 小于 16px 时 iOS 聚焦会自动放大页面 */
   line-height: 1.4;
   max-height: 120px;
-  padding: 4px 0 7px;
+  padding: 5px 0 9px;
 }
 .input-text::placeholder { color: var(--text-3); }
 .input-tools { display: flex; align-items: center; gap: 6px; }

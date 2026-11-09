@@ -338,9 +338,12 @@ export function parseLinearGradient(bg: string): { angle: number; stops: { color
 }
 
 function pickBack(backs: Back[], cx: number, cy: number): Back | null {
+  const inside = (c: Box) => cx >= c.x && cx <= c.x + c.w && cy >= c.y && cy <= c.y + c.h
+  for (let i = backs.length - 1; i >= 0; i--) if (inside(backs[i]!.clip)) return backs[i]!
+  // 还在屏幕外的（房间里没划到的那几块）：按整张图（不裁剪）找，免得先拿外壳渐变画成白的，划进来才变
   for (let i = backs.length - 1; i >= 0; i--) {
-    const c = backs[i]!.clip
-    if (cx >= c.x && cx <= c.x + c.w && cy >= c.y && cy <= c.y + c.h) return backs[i]!
+    const r = backs[i]!.el.getBoundingClientRect()
+    if (inside({ x: r.left, y: r.top, w: r.width, h: r.height })) return backs[i]!
   }
   return backs[0] ?? null
 }

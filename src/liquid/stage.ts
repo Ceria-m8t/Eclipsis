@@ -202,7 +202,7 @@ export class LiquidStage {
       this.canvas.style.width = cssW + 'px'; this.canvas.style.height = cssH + 'px'
     }
     // 画布左上角在屏幕上的位置（不再读 DOM：滚动区左上 + 画布在内容里的偏移 - 滚动量）
-    const cx = scRect.left + sc.clientLeft, cy = scRect.top + sc.clientTop + this.winTop - scrollTop
+    const cx = scRect.left + sc.clientLeft - sc.scrollLeft, cy = scRect.top + sc.clientTop + this.winTop - scrollTop
 
     gl.viewport(0, 0, pw, ph)
     gl.clearColor(0, 0, 0, 0)

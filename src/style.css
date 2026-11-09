@@ -162,6 +162,10 @@ input, textarea, select { font-size: 16px; }
 /* ===== 液态玻璃（src/liquid/global.ts）=====
    画出来以后宿主挂 .liq-host：自己的底色、磨砂、内高光让掉，光学全交给垫在下面的画布。
    data-glass-tone 按玻璃背后那块图的亮度给：暗处白字，亮处深字。 */
+:root.liq-on :is(.glass, .glass-strong, .glass-btn, [data-glass]):not(.liq-host) {
+  /* 玻璃还没画上的那一两帧：别先露出白磨砂再变透明 */
+  background: rgba(255, 255, 255, 0.1);
+}
 .liq-canvas { position: absolute; left: 0; top: 0; z-index: -1; pointer-events: none; display: block; }
 .liq-host {
   isolation: isolate;
