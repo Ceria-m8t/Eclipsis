@@ -66,7 +66,8 @@ function go(t: (typeof tabs)[number]) {
 
 .shell-bg {
   position: absolute;
-  inset: 0;
+  top: 0; left: 0; right: 0;
+  height: max(100%, var(--app-full-h, 100%));
   z-index: 0;
   background: var(--page-bg);
   background-size: cover;

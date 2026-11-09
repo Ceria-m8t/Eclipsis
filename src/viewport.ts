@@ -68,6 +68,8 @@ function update() {
     if (standalone) h = Math.max(h, screen.height)
   }
   root.style.setProperty('--app-h', `${Math.round(h)}px`)
+  // 背景图按没键盘时的整屏高画：键盘弹起只是被挡住下半截，不跟着缩放、上移
+  if (!kb || !root.style.getPropertyValue('--app-full-h')) root.style.setProperty('--app-full-h', `${Math.round(kb ? Math.max(window.innerHeight, lvh) : h)}px`)
   // 主屏幕模式且没键盘时，把文档撑到整屏高（见 style.css 里的说明）
   root.classList.toggle('fill-screen', standalone && !kb)
   // 键盘收起后，iOS 可能把文档滚动过的距离留着，归零
