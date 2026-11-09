@@ -20,6 +20,7 @@ import {
   lastServerSeq, firstServerSeq, savePending, loadPending, readCache, writeCache,
   looksNoReply, splitHeart, READ_SIGNAL
 } from '../chat-store'
+import { splitMoment, parseMoment, type MomentView } from '../moment'
 
 const settings = ref(getSettings())
 
@@ -291,6 +292,7 @@ interface Row {
   joinPrev: boolean        // 第一个气泡和上一条消息的最后一个气泡是一组（只有她连着发时）
   joinNext: boolean
   noReply: boolean         // 他这一轮已读不回（不画气泡）
+  moment: { locked: boolean; view: MomentView | null } | null   // 他写的「这一刻」
   read: boolean            // 她这一串的最后一条，他已经看过（后面有他的回复，或他已读不回）
 }
 
@@ -324,10 +326,14 @@ const rows = computed<Row[]>(() => {
     let parts: string[]
     let thinking = ''
     let noReply = false
+    let moment: Row['moment'] = null
     if (m.role === 'assistant') {
       const sp = splitThink(text)
-      // 他学着写她的心声格式：不显示
-      text = splitHeart(sp.body).text
+      // 他学着写她的心声格式：不显示；「这一刻」拆出来挂在气泡下面（后端拆过的用后端的，本地生成中的自己拆）
+      const mo = splitMoment(splitHeart(sp.body).text)
+      text = mo.text
+      const raw = curVersion(m)?.moment ?? mo.moment
+      moment = raw ? { locked: raw.locked, view: raw.locked ? null : parseMoment(raw.text) } : null
       thinking = [curVersion(m)?.thinking?.trim(), sp.think].filter(Boolean).join('\n\n')
       noReply = !!m.noReply || looksNoReply(text)
       parts = text && !noReply ? (settings.value.splitBubbles ? splitBubbles(text) : [text]) : []
@@ -347,6 +353,7 @@ const rows = computed<Row[]>(() => {
       joinPrev: false,
       joinNext: false,
       noReply,
+      moment,
       // 她连着说的最后一句、后面紧跟着他（回了或已读不回）：双勾
       read: m.role === 'user' && !m.signal && next?.role === 'assistant' && !next.wake?.silent && !(generating.value && i + 1 === list.length - 1 && !next.content && !next.noReply),
     }
@@ -721,7 +728,7 @@ function cancelPress() {
 
 async function doCopy(m: ChatMessage) {
   // 复制时不带 <think> 里的内容
-  const ok = await copyText(m.role === 'assistant' ? splitThink(textOf(m)).body : textOf(m))
+  const ok = await copyText(m.role === 'assistant' ? splitMoment(splitThink(textOf(m)).body).text : textOf(m))
   toast(ok ? '已复制' : '复制失败，可以用"选择复制"')
   if (sheet.value) closeSheet()
 }
@@ -1117,6 +1124,26 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
               <div v-if="row.msg.role === 'assistant'" v-html="renderMd(part)"></div>
               <span v-else v-text="part"></span>
             </div>
+
+            <!-- 他的「这一刻」：只露气味名，点开看；锁着的只有一把锁 -->
+            <template v-if="row.moment && !(generating && row.index === messages.length - 1)">
+              <button class="moment-chip" :aria-expanded="!!expanded[row.key + ':moment']" :disabled="row.moment.locked"
+                :aria-label="row.moment.locked ? '这一刻（锁着）' : '这一刻'" @click="toggle(row.key + ':moment')">
+                <span aria-hidden="true">✦</span>
+                <span>{{ row.moment.locked ? '🔒' : (row.moment.view?.scent || '这一刻') }}</span>
+                <Icon v-if="!row.moment.locked" name="chevron" :size="12" :class="['chev', { open: expanded[row.key + ':moment'] }]" />
+              </button>
+              <div v-if="expanded[row.key + ':moment'] && row.moment.view" class="moment-body glass">
+                <div v-for="(mv, k) in row.moment.view.moves" :key="'m' + k" class="moment-move">
+                  <span>{{ mv.name }}</span><span class="moment-dir" :class="mv.dir === '↑' ? 'up' : 'down'">{{ mv.dir }} {{ mv.note }}</span>
+                </div>
+                <div v-if="row.moment.view.moves.length && (row.moment.view.picks.length || row.moment.view.lines.length)" class="moment-rule"></div>
+                <div v-for="(p, k) in row.moment.view.picks" :key="'p' + k" class="moment-pick" :class="{ held: p.key === '忍住' }">
+                  <span class="moment-key">{{ p.key }}</span><span>{{ p.text }}</span>
+                </div>
+                <p v-for="(l, k) in row.moment.view.lines" :key="'l' + k" class="moment-line">{{ l }}</p>
+              </div>
+            </template>
 
             <!-- 她的心声：低调的小猫爪，点开才看 -->
             <template v-if="row.msg.role === 'user' && row.msg.thought">
@@ -1604,6 +1631,33 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
 .wake-tag.silent { font-size: 12.5px; color: var(--text-2); }
 .wake-tools { margin-top: 6px; font-size: 12px; color: var(--text-3); }
 /* 她的心声 */
+.moment-chip {
+  align-self: flex-start;
+  display: inline-flex; align-items: center; gap: 4px;
+  border: none; background: none;
+  font-size: 12px; color: var(--text-2);
+  padding: 0 4px;
+  letter-spacing: 0.02em;
+}
+.moment-chip:disabled { opacity: 0.8; }
+.moment-body {
+  align-self: flex-start;
+  min-width: 160px; max-width: 100%;
+  border-radius: 14px;
+  padding: 9px 12px;
+  font-size: 13px; line-height: 1.6;
+  color: var(--text);
+  display: flex; flex-direction: column; gap: 2px;
+}
+.moment-move { display: flex; justify-content: space-between; gap: 16px; }
+.moment-dir { color: var(--text-2); }
+.moment-dir.up { color: #d9849a; }
+.moment-dir.down { color: #7e9cc8; }
+.moment-rule { height: 1px; margin: 4px 0; background: rgba(127, 127, 127, 0.25); }
+.moment-pick { display: flex; gap: 10px; }
+.moment-key { color: var(--text-3); flex-shrink: 0; }
+.moment-pick.held { font-weight: 600; }
+.moment-line { color: var(--text-2); }
 .heart-chip {
   align-self: flex-end;
   display: inline-flex; align-items: center; gap: 3px;

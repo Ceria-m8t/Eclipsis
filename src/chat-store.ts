@@ -23,7 +23,7 @@ export function splitHeart(text: string): { text: string; thought: string } {
 }
 
 interface SrvTool { id: string; name: string; args: string; result?: string }
-interface SrvVersion { seq: number; seqs: number[]; ts: string; content: string; thinking: string; tools: SrvTool[]; partial?: boolean }
+interface SrvVersion { seq: number; seqs: number[]; ts: string; content: string; thinking: string; tools: SrvTool[]; partial?: boolean; moment?: { locked: boolean; text: string } }
 export interface SrvItem {
   id: string; seq: number; seqs: number[]; role: 'user' | 'assistant'; ts: string; turn: string
   content: string; raw?: string; images?: string[]; versions?: SrvVersion[]; source: string
@@ -54,6 +54,7 @@ export function fromServer(it: SrvItem): ChatMessage {
   const versions: MessageVersion[] = (it.versions || []).map(v => {
     const out: MessageVersion = { content: v.content, createdAt: Date.parse(v.ts), srvSeqs: v.seqs }
     if (v.thinking) out.thinking = v.thinking
+    if (v.moment) out.moment = v.moment
     if (v.tools.length) out.tools = v.tools.map(t => ({ id: t.id, name: t.name, args: t.args, result: t.result, status: 'done' as const }))
     return out
   })

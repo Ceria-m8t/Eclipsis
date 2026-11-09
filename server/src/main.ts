@@ -15,6 +15,8 @@ import { stripWakeHistory, stripThinkHistory, stripOldImages, reorderByTime, typ
 import { handleApi } from './api.ts'
 import { handleChatApi, xiaokeApi } from './chat-history.ts'
 import { handleToolboxApi, setToolboxFile } from './toolbox.ts'
+import { shadowCompare } from './assembler/history.ts'
+import { stripMomentHistory } from './moment.ts'
 import { handleLlmRelay } from './llm-relay.ts'
 import { initStations, bindStationToConfig } from './station.ts'
 import { ensureWakeSchema, WakeScheduler, dispatchWake, handleWakeApi } from './wake/index.ts'
@@ -106,6 +108,10 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
       let changed = 'eclipsis_rid' in json
       const transforms: Record<string, unknown> = {}
       if (changed) { const { eclipsis_rid: _drop, ...rest } = json; out = rest }
+      // 影子：后端自己接前文的话会给哪些，和 xiaoke 拼的这份比一比（只记录，不改请求）。SHADOW_CONTEXT=0 关
+      if (process.env.SHADOW_CONTEXT !== '0' && Array.isArray(out.messages) && out.messages.length > 2) {
+        try { transforms.shadow_context = shadowCompare(db, out.messages); changed = true } catch { /* 影子出错不影响请求 */ }
+      }
       // 先按时间排（要用原文去经历表里对时间，所以在剪思考、剪图之前）
       if (opts.reorderByTime && Array.isArray(out.messages)) {
         try {
@@ -124,6 +130,11 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
           transforms.strip_wake_history = { stripped: r.stripped, saved_chars: r.savedChars }
           changed = true
         }
+      }
+      // 他以前写的「这一刻」不再发回给他（MOMENT_HISTORY=0 关）
+      if (process.env.MOMENT_HISTORY !== '0' && Array.isArray(out.messages)) {
+        const r = stripMomentHistory(out.messages)
+        if (r.stripped) { out = { ...out, messages: r.messages }; transforms.strip_moment_history = { stripped: r.stripped }; changed = true }
       }
       if (opts.stripThinkHistory && Array.isArray(out.messages)) {
         const r = stripThinkHistory(out.messages)

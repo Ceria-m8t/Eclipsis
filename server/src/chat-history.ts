@@ -10,9 +10,10 @@ import { createReadStream, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { type DB, tx } from './db.ts'
 import { cleanHerText } from './recorder.ts'
+import { splitMoment, type Moment } from './moment.ts'
 
 export interface ChatTool { id: string; name: string; args: string; result?: string }
-export interface ChatVersion { seq: number; seqs: number[]; ts: string; content: string; thinking: string; tools: ChatTool[]; partial?: boolean }
+export interface ChatVersion { moment?: Moment; seq: number; seqs: number[]; ts: string; content: string; thinking: string; tools: ChatTool[]; partial?: boolean }
 export interface ChatItem {
   id: string            // e<第一条的 seq>
   seq: number           // 这一项最后一条经历的 seq（翻页、轮询用）
@@ -114,7 +115,7 @@ export function buildItems(db: DB, rows: Row[]): ChatItem[] {
     if (typeof meta.wake_id === 'string' && (r.kind === 'note' || (r.actor === 'ai' && r.kind === 'message'))) {
       const it = wakeItem(r, meta.wake_id)
       if (r.kind === 'note') { it.wake!.trace = (it.wake!.trace ? it.wake!.trace + '\n\n' : '') + r.content.trim(); continue }
-      const body = r.content.replace(HEART_RE, '').trim()
+      const body = splitMoment(r.content.replace(HEART_RE, '').trim()).text
       it.content = it.content ? it.content + '\n\n' + body : body
       it.versions![0]!.content = it.content
       it.wake!.silent = false
@@ -153,10 +154,13 @@ export function buildItems(db: DB, rows: Row[]): ChatItem[] {
     if (r.actor !== 'ai') continue
     const split = splitThink(r.content)
     const think = split.think
-    const body = split.body.replace(HEART_RE, '').trim()
+    // 这一刻拆出来单独给；锁着的只说「锁着」，原文不给
+    const mo = splitMoment(split.body.replace(HEART_RE, '').trim())
+    const body = mo.text
+    const moment: Moment | undefined = mo.moment ? (mo.moment.locked ? { locked: true, text: '' } : mo.moment) : undefined
     const seqs = [...toolSeqs, r.seq]
     const v: ChatVersion = {
-      seq: r.seq, seqs, ts: r.ts, content: body, thinking: think || thinkOf.get(meta.rid) || '', tools,
+      seq: r.seq, seqs, ts: r.ts, content: body, thinking: think || thinkOf.get(meta.rid) || '', tools, moment,
       partial: meta.partial || undefined
     }
     tools = []; toolSeqs = []

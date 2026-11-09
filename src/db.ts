@@ -26,6 +26,8 @@ export interface MessageVersion {
   trail?: ApiTurn[]     // 有工具调用时才有
   createdAt: number
   srvSeqs?: number[]    // 后端来的：这个版本对应的经历（删版本时用）
+  /** 他在这条回复最后写的「这一刻」（后端已经拆出来；锁着的没有原文） */
+  moment?: { locked: boolean; text: string }
 }
 
 export interface ChatMessage {
