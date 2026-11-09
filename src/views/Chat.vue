@@ -18,7 +18,8 @@ import { liquidActive } from '../liquid/global'
 import { type ChatMessage, type MessageVersion, newId } from '../db'
 import {
   loadLatest, loadBefore, loadAfter, deleteOnServer, mergeServer, contextTail,
-  lastServerSeq, firstServerSeq, savePending, loadPending, readCache, writeCache
+  lastServerSeq, firstServerSeq, savePending, loadPending, readCache, writeCache,
+  looksNoReply, splitHeart, READ_SIGNAL
 } from '../chat-store'
 
 const settings = ref(getSettings())
@@ -290,6 +291,8 @@ interface Row {
   isLastOfGroup: boolean
   joinPrev: boolean        // 第一个气泡和上一条消息的最后一个气泡是一组（只有她连着发时）
   joinNext: boolean
+  noReply: boolean         // 他这一轮已读不回（不画气泡）
+  read: boolean            // 她这一串的最后一条，他已经看过（后面有他的回复，或他已读不回）
 }
 
 const GAP_MS = 5 * 60 * 1000
@@ -321,13 +324,17 @@ const rows = computed<Row[]>(() => {
     let text = textOf(m)
     let parts: string[]
     let thinking = ''
+    let noReply = false
     if (m.role === 'assistant') {
       const sp = splitThink(text)
-      text = sp.body
+      // 他学着写她的心声格式：不显示
+      text = splitHeart(sp.body).text
       thinking = [curVersion(m)?.thinking?.trim(), sp.think].filter(Boolean).join('\n\n')
-      parts = text ? (settings.value.splitBubbles ? splitBubbles(text) : [text]) : []
+      noReply = !!m.noReply || looksNoReply(text)
+      parts = text && !noReply ? (settings.value.splitBubbles ? splitBubbles(text) : [text]) : []
     } else {
-      parts = text ? [text] : []
+      // 她按的「已读不回」是信号，不画气泡；只有心声、嘴上没说话时画一个「……」
+      parts = m.signal ? [] : text ? [text] : m.thought && !m.images?.length ? ['……'] : []
     }
     return {
       key: m.id,
@@ -340,6 +347,9 @@ const rows = computed<Row[]>(() => {
       isLastOfGroup: gapAfter || next.role !== m.role,
       joinPrev: false,
       joinNext: false,
+      noReply,
+      // 她连着说的最后一句、后面紧跟着他（回了或已读不回）：双勾
+      read: m.role === 'user' && !m.signal && next?.role === 'assistant' && !next.wake?.silent && !(generating.value && i + 1 === list.length - 1 && !next.content && !next.noReply),
     }
   })
   // 她连着发的几条算一组（中间夹了图片就断开）；他一条回复拆出来的几个气泡算一组，
@@ -365,6 +375,11 @@ const pendingImages = ref<string[]>([])
 const inputEl = ref<HTMLTextAreaElement | null>(null)
 const composing = ref(false)
 
+function autoGrowEl(e: Event) {
+  const el = e.target as HTMLTextAreaElement
+  el.style.height = 'auto'
+  el.style.height = Math.min(el.scrollHeight, 90) + 'px'
+}
 function autoGrow() {
   const el = inputEl.value
   if (!el) return
@@ -381,17 +396,31 @@ function onInputKeydown(e: KeyboardEvent) {
   pushUserMessage()
 }
 
+// 心声：发消息时附一段没说出口的心里话（他隐约感知，默认不点破）
+const heartOpen = ref(false)
+const heartText = ref('')
+const heartInputEl = ref<HTMLTextAreaElement | null>(null)
+function toggleHeart() {
+  showPlus.value = false
+  heartOpen.value = !heartOpen.value
+  if (heartOpen.value) nextTick(() => heartInputEl.value?.focus())
+}
+
 async function pushUserMessage(): Promise<boolean> {
   const text = inputText.value.trim()
-  if (!text && !pendingImages.value.length) return false
+  const thought = heartText.value.trim()
+  if (!text && !pendingImages.value.length && !thought) return false
   const now = Date.now()
   const msg: ChatMessage = {
     id: newId(), seq: nextSeq(), role: 'user', createdAt: now,
     content: text,
-    images: pendingImages.value.length ? [...pendingImages.value] : undefined
+    images: pendingImages.value.length ? [...pendingImages.value] : undefined,
+    thought: thought || undefined
   }
   messages.value.push(msg)
   inputText.value = ''
+  heartText.value = ''
+  heartOpen.value = false
   pendingImages.value = []
   nextTick(autoGrow)
   stickToBottom = true
@@ -409,6 +438,23 @@ const unanswered = computed(() => {
   }
   return n
 })
+
+// 她的「已读不回」：最后一条是他的、她什么都还没写时出现。按了 = 给他一个"她看了没回"的信号，由他决定怎么办
+const canLeaveOnRead = computed(() => {
+  // 他醒来过但没找她（只留了念头）不算他说了话
+  const last = [...messages.value].reverse().find(m => !m.wake?.silent)
+  return !!last && last.role === 'assistant' && !generating.value && !last.error && !last.noReply
+    && !inputText.value.trim() && !heartText.value.trim() && !pendingImages.value.length
+})
+async function leaveOnRead() {
+  if (!canLeaveOnRead.value) return
+  if (getSettings().keepAlive) startKeepAlive(`${settings.value.nameAI}正在想…`)
+  const msg: ChatMessage = { id: newId(), seq: nextSeq(), role: 'user', createdAt: Date.now(), content: READ_SIGNAL, signal: 'read' }
+  messages.value.push(msg)
+  stickToBottom = true
+  scrollToBottom()
+  await runGeneration()
+}
 
 async function onSendButton() {
   if (generating.value) { stopGenerating(); return }
@@ -548,6 +594,7 @@ const plusItems = computed<PlusItem[]>(() => [
   // 第一页：聊天里常用
   { key: 'image', label: '图片', icon: 'image', ready: true, run: () => imageInput.value?.click() },
   { key: 'camera', label: '拍照', icon: 'camera', ready: true, run: () => cameraInput.value?.click() },
+  { key: 'heart', label: '心声', icon: 'heart', ready: true, run: toggleHeart },
   { key: 'sticker', label: '表情包', icon: 'smile', ready: false },
   { key: 'voice', label: '语音', icon: 'mic', ready: false },
   { key: 'video', label: '视频', icon: 'video', ready: false },
@@ -995,11 +1042,28 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
 
         <div :class="['msg-row', row.msg.role, { first: row.showAvatar }]">
           <div class="msg-col">
+            <!-- 醒来时发的：小记号 -->
+            <div v-if="row.msg.wake" class="wake-tag" :class="{ silent: row.msg.wake.silent }">
+              <Icon name="moon" :size="13" />
+              <span>{{ row.msg.wake.silent ? '他醒来过，没找你' : '他醒来时发的' }}</span>
+            </div>
+            <template v-if="row.msg.wake && (row.msg.wake.trace || row.msg.wake.tools?.length)">
+              <button class="fold-chip" :aria-expanded="!!expanded[row.key + ':wake']" @click="toggle(row.key + ':wake')">
+                <Icon name="thought" :size="15" />
+                <span>当时在想{{ row.msg.wake.tools?.length ? ` · 用了 ${[...new Set(row.msg.wake.tools)].length} 样东西` : '' }}</span>
+                <Icon name="chevron" :size="14" :class="['chev', { open: expanded[row.key + ':wake'] }]" />
+              </button>
+              <div v-if="expanded[row.key + ':wake']" class="fold-body glass">
+                <div v-if="row.msg.wake.trace">{{ row.msg.wake.trace }}</div>
+                <div v-if="row.msg.wake.tools?.length" class="wake-tools">用了：{{ [...new Set(row.msg.wake.tools)].join('、') }}</div>
+              </div>
+            </template>
+
             <!-- 思考过程 -->
             <template v-if="row.msg.role === 'assistant' && row.thinking">
               <button class="fold-chip" :aria-expanded="!!expanded[row.key + ':think']" @click="toggle(row.key + ':think')">
                 <Icon name="thought" :size="15" />
-                <span>思考过程</span>
+                <span>{{ row.noReply ? '他看了，没回你 · 当时在想' : '思考过程' }}</span>
                 <Icon name="chevron" :size="14" :class="['chev', { open: expanded[row.key + ':think'] }]" />
               </button>
               <div v-if="expanded[row.key + ':think']" class="fold-body glass">{{ row.thinking }}</div>
@@ -1032,6 +1096,9 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
               </div>
             </template>
 
+            <div v-if="row.msg.signal" class="read-signal">你看了，没回他</div>
+            <div v-if="row.noReply && !row.thinking" class="read-signal his">他看了，没回你</div>
+
             <div v-if="row.msg.images?.length" class="msg-images">
               <button v-for="(img, j) in row.msg.images" :key="j" class="img-btn" @click="previewImg = img">
                 <img :src="img" class="msg-image" alt="图片" loading="lazy" />
@@ -1053,6 +1120,14 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
               <span v-else v-text="part"></span>
             </div>
 
+            <!-- 她的心声：低调的小猫爪，点开才看 -->
+            <template v-if="row.msg.role === 'user' && row.msg.thought">
+              <button class="heart-chip" :aria-expanded="!!expanded[row.key + ':heart']" aria-label="心声" @click="toggle(row.key + ':heart')">
+                <span aria-hidden="true">🐾</span><span>心声</span>
+              </button>
+              <div v-if="expanded[row.key + ':heart']" class="heart-body glass">{{ row.msg.thought }}</div>
+            </template>
+
             <!-- 正在输入 -->
             <div
               v-if="row.msg.role === 'assistant' && generating && row.index === messages.length - 1 && !row.parts.length && !curVersion(row.msg)?.tools?.some(t => t.status === 'running')"
@@ -1072,7 +1147,7 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
               class="msg-actions"
             >
               <button aria-label="复制" @click="doCopy(row.msg)"><Icon name="copy" :size="17" /></button>
-              <button aria-label="重新生成" :disabled="generating" @click="regenerate(row.msg)"><Icon name="refresh" :size="17" /></button>
+              <button v-if="!row.msg.wake" aria-label="重新生成" :disabled="generating" @click="regenerate(row.msg)"><Icon name="refresh" :size="17" /></button>
               <span v-if="(row.msg.versions?.length || 0) > 1" class="ver-switch">
                 <button aria-label="上一个版本" @click="switchVersion(row.msg, -1)"><Icon name="left" :size="15" /></button>
                 <span>{{ (row.msg.activeVersion ?? 0) + 1 }}/{{ row.msg.versions!.length }}</span>
@@ -1081,8 +1156,11 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
               <button aria-label="更多" @click="openSheet(row.msg)"><Icon name="more" :size="17" /></button>
               <span class="msg-time">{{ hhmm(row.msg.createdAt) }}</span>
             </div>
-            <div v-else-if="row.msg.role === 'user' && row.isLastOfGroup" class="msg-time user-time">
-              {{ hhmm(row.msg.createdAt) }}
+            <div v-else-if="row.msg.role === 'user' && !row.msg.signal && (row.isLastOfGroup || row.read)" class="msg-time user-time">
+              <svg v-if="row.read" class="read-ticks" viewBox="0 0 22 12" aria-label="已读" role="img">
+                <path d="M1.5 6.6 4.6 9.6 10.6 2.6" /><path d="M8.2 8.4 9.6 9.6 15.6 2.6" />
+              </svg>
+              <span v-if="row.isLastOfGroup">{{ hhmm(row.msg.createdAt) }}</span>
             </div>
           </div>
         </div>
@@ -1101,11 +1179,21 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
           </div>
         </div>
         <textarea
+          v-if="heartOpen"
+          ref="heartInputEl"
+          v-model="heartText"
+          class="heart-input"
+          rows="1"
+          placeholder="🐾 心里想的、没说出口的（他能隐约感觉到）"
+          aria-label="心声"
+          @input="autoGrowEl($event)"
+        ></textarea>
+        <textarea
           ref="inputEl"
           v-model="inputText"
           class="input-text"
           rows="1"
-          :placeholder="unanswered ? `已发 ${unanswered} 条，点右边让他回复` : '说点什么…'"
+          :placeholder="unanswered ? `已发 ${unanswered} 条，点右边让他回复` : heartOpen ? '说出口的话（可以不写）' : '说点什么…'"
           enterkeyhint="send"
           aria-label="输入消息"
           @input="autoGrow"
@@ -1127,6 +1215,10 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
           <input ref="imageInput" type="file" accept="image/*" multiple hidden @change="handleImageSelect" />
           <input ref="cameraInput" type="file" accept="image/*" capture="environment" hidden @change="handleImageSelect" />
           <span class="input-model">{{ settings.model }}</span>
+          <button v-if="canLeaveOnRead" class="read-btn" aria-label="已读不回" @click="leaveOnRead">
+            <svg class="read-ticks" viewBox="0 0 22 12" aria-hidden="true"><path d="M1.5 6.6 4.6 9.6 10.6 2.6" /><path d="M8.2 8.4 9.6 9.6 15.6 2.6" /></svg>
+            <span>已读不回</span>
+          </button>
           <button
             :class="['send-btn', { stop: generating, ready: inputText.trim() || unanswered || pendingImages.length }]"
             :aria-label="generating ? '停止生成' : '让他回复'"
@@ -1495,6 +1587,62 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
 .bubble.user { background: var(--bubble-user); white-space: pre-wrap; }
 
 .bubble.typing { display: flex; gap: 4px; padding: 13px 16px; }
+
+/* 已读：简约的双勾（她那边每一串的最后一句，他回了或已读不回以后出现） */
+.read-ticks { width: 17px; height: 10px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; vertical-align: -1px; }
+.user-time { display: inline-flex; align-items: center; gap: 4px; }
+.user-time .read-ticks { color: var(--accent); opacity: 0.85; }
+/* 已读不回：一行小字，不占气泡 */
+.read-signal {
+  align-self: flex-end;
+  font-size: 12px;
+  color: var(--text-3);
+  padding: 2px 6px;
+}
+.read-signal.his { align-self: flex-start; }
+/* 醒来时发的 */
+.wake-tag { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--text-3); padding: 0 4px; }
+.wake-tag.silent { font-size: 12.5px; color: var(--text-2); }
+.wake-tools { margin-top: 6px; font-size: 12px; color: var(--text-3); }
+/* 她的心声 */
+.heart-chip {
+  align-self: flex-end;
+  display: inline-flex; align-items: center; gap: 3px;
+  border: none; background: none;
+  font-size: 11.5px; color: var(--text-3);
+  padding: 0 4px;
+}
+.heart-body {
+  align-self: flex-end;
+  max-width: 100%;
+  border-radius: 14px;
+  padding: 8px 12px;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--text-2);
+  white-space: pre-wrap;
+}
+.heart-input {
+  display: block; width: 100%;
+  border: none; outline: none; resize: none; background: transparent;
+  font-size: 16px; line-height: 1.4;
+  color: var(--text-2);
+  font-style: italic;
+  padding: 2px 0 6px;
+  margin-bottom: 4px;
+  border-bottom: 1px dashed rgba(127, 127, 127, 0.25);
+  max-height: 90px;
+}
+.read-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 999px;
+  padding: 4px 10px;
+  background: var(--glass-bg-soft);
+  color: var(--text-2);
+  font-size: 12px;
+}
 .bubble.typing i {
   width: 6px; height: 6px; border-radius: 50%;
   background: var(--text-3);

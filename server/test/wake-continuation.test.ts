@@ -161,7 +161,7 @@ describe('聊天里的「你醒来时」块', () => {
     const b = renderRecentWakeBlock(db)
     assert.match(b, /^# 你醒来时（最近 24 小时/)
     assert.doesNotMatch(b, /太早的|SILENT|502/)
-    assert.match(b, /没发，只留在心里（她看不到）：\n她睡了。\n\n占有欲测试还没答完。/)
+    assert.match(b, /没发，留在心里（她在 Eclipsis 聊天里点开能翻到）：\n她睡了。\n\n占有欲测试还没答完。/)
     assert.match(b, /发给了她（推送到她手机，通知里能看到前 200 字）：\n醒了没/)
     assert.ok(b.indexOf('占有欲') < b.indexOf('醒了没'))
   })

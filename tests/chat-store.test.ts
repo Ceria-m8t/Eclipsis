@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, it, expect } from 'vitest'
-import { fromServer, mergeServer, contextTail, type SrvItem } from '../src/chat-store'
+import { fromServer, mergeServer, contextTail, splitHeart, looksNoReply, READ_SIGNAL, heartMarker, type SrvItem } from '../src/chat-store'
 import { buildContext } from '../src/chat-engine'
 import type { ChatMessage } from '../src/db'
 
@@ -55,5 +55,30 @@ describe('聊天记录在后端', () => {
     const ctx = buildContext([m, local('新的', { images: ['data:image/png;base64,AAA'] })], 100000)
     expect(ctx.messages[1]).toEqual({ role: 'user', content: '（2026-11-10 08:00）看图' })
     expect(ctx.messages[2].content[0]).toEqual({ type: 'image_url', image_url: { url: 'data:image/png;base64,AAA' } })
+  })
+
+  it('心声：拆出来单独显示；只有心声时正文空；发给他时拼在末尾', () => {
+    expect(splitHeart('哼\n\n' + heartMarker('快来哄我'))).toEqual({ text: '哼', thought: '快来哄我' })
+    const m = fromServer(u(1, heartMarker('想他')))
+    expect(m.content).toBe('')
+    expect(m.thought).toBe('想他')
+    const ctx = buildContext([local('嗯', { thought: '其实很想他' })], 100000)
+    expect(ctx.messages[1].content).toMatch(/嗯\n\n〔她心里想的，没说出口：其实很想他〕$/)
+  })
+
+  it('已读不回：她的信号认成 signal；他的 [NO_REPLY] 流式时一出 "[NO" 就先藏起来', () => {
+    expect(fromServer(u(1, READ_SIGNAL)).signal).toBe('read')
+    expect(looksNoReply('[NO_REPLY]')).toBe(true)
+    expect(looksNoReply('[NO')).toBe(true)
+    expect(looksNoReply('[图片]')).toBe(false)
+    expect(looksNoReply('好')).toBe(false)
+  })
+
+  it('醒来：消息和后到的念头拼回一项', () => {
+    const w = (seq: number, content: string, wake: any): SrvItem => ({ ...a(seq, content, 'wake:W'), source: 'wake', wake })
+    const list = mergeServer([fromServer(w(5, '花园浇了', { id: 'W', silent: false }))], [fromServer(w(6, '', { id: 'W', trace: '等她醒', silent: true }))])
+    expect(list.length).toBe(1)
+    expect(list[0]!.wake).toMatchObject({ id: 'W', trace: '等她醒', silent: false })
+    expect(list[0]!.content).toBe('花园浇了')
   })
 })

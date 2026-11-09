@@ -3,11 +3,32 @@
 // 手机上只留两样：还没发出去的那几句（回车分条、还没点发送），和正在生成的那一条。
 import type { ChatMessage, MessageVersion } from './db'
 
+/** 他已读不回时整条回复就是这个 */
+export const NO_REPLY = '[NO_REPLY]'
+/** 正文（去掉思考以后）是不是已读不回；流式还没写完、只出了 "[NO_" 时也先当成是，免得闪一下 */
+export function looksNoReply(body: string): boolean {
+  const b = body.trim()
+  return b.startsWith(NO_REPLY) || (b.length > 0 && b.length < NO_REPLY.length && NO_REPLY.startsWith(b))
+}
+/** 她按「已读不回」时发给他的信号 */
+export const READ_SIGNAL = '〔她看了你的消息，没有回。〕'
+/** 她的心声拼在消息末尾的样子 */
+export const heartMarker = (t: string) => `〔她心里想的，没说出口：${t}〕`
+const HEART_TAIL = /\n*〔她心里想的，没说出口：([\s\S]*?)〕\s*$/
+/** 拆出她消息里的心声；他的回复里要是学着写了，也用这个剥掉 */
+export function splitHeart(text: string): { text: string; thought: string } {
+  const m = HEART_TAIL.exec(text)
+  if (!m) return { text, thought: '' }
+  return { text: text.slice(0, m.index).trim(), thought: m[1]!.trim() }
+}
+
 interface SrvTool { id: string; name: string; args: string; result?: string }
 interface SrvVersion { seq: number; seqs: number[]; ts: string; content: string; thinking: string; tools: SrvTool[]; partial?: boolean }
 export interface SrvItem {
   id: string; seq: number; seqs: number[]; role: 'user' | 'assistant'; ts: string; turn: string
   content: string; raw?: string; images?: string[]; versions?: SrvVersion[]; source: string
+  wake?: { id: string; trace?: string; tools?: string[]; silent?: boolean }
+  noReply?: boolean
 }
 
 const BASE = '/api/eclipsis/chat'
@@ -25,8 +46,10 @@ export function fromServer(it: SrvItem): ChatMessage {
     // 早先从 xiaoke 导入的图片只剩「[图片]」两个字（xiaoke 不存图），照样显示出来，别成空的
     // Kelivo 发图时正文里会带一行「[图片]」占位（图另外显示在上面），有图时去掉，不然气泡里多一个框
     const text = it.images?.length ? it.content.split('\n').filter(l => l.trim() !== '[图片]').join('\n').trim() : it.content
-    const content = text || (it.images?.length ? '' : '[图片]')
-    return { id: it.id, seq: it.seq, role: 'user', createdAt, content, raw: it.raw, images: it.images, srv }
+    const heart = splitHeart(text)
+    if (heart.text.trim() === READ_SIGNAL) return { id: it.id, seq: it.seq, role: 'user', createdAt, content: '', raw: it.raw, signal: 'read', srv }
+    const content = heart.text || (it.images?.length || heart.thought ? '' : '[图片]')
+    return { id: it.id, seq: it.seq, role: 'user', createdAt, content, raw: it.raw, images: it.images, thought: heart.thought || undefined, srv }
   }
   const versions: MessageVersion[] = (it.versions || []).map(v => {
     const out: MessageVersion = { content: v.content, createdAt: Date.parse(v.ts), srvSeqs: v.seqs }
@@ -34,7 +57,8 @@ export function fromServer(it: SrvItem): ChatMessage {
     if (v.tools.length) out.tools = v.tools.map(t => ({ id: t.id, name: t.name, args: t.args, result: t.result, status: 'done' as const }))
     return out
   })
-  return { id: it.id, seq: it.seq, role: 'assistant', createdAt, content: it.content, versions, activeVersion: Math.max(0, versions.length - 1), srv }
+  return { id: it.id, seq: it.seq, role: 'assistant', createdAt, content: it.content, versions, activeVersion: Math.max(0, versions.length - 1), srv,
+    wake: it.wake, noReply: it.noReply }
 }
 
 export async function loadLatest(limit = 150): Promise<{ messages: ChatMessage[]; hasMore: boolean }> {
@@ -84,6 +108,20 @@ export function mergeServer(list: ChatMessage[], incoming: ChatMessage[]): ChatM
   for (const m of incoming) {
     const same = out.findIndex(x => x.srv && x.id === m.id)
     if (same >= 0) { out[same] = m; continue }
+    // 同一次醒来分几次取回来的（先发的消息、后写的念头）：拼回一项
+    if (m.wake) {
+      const w = out.findIndex(x => x.wake?.id === m.wake!.id)
+      if (w >= 0) {
+        const x = out[w]!
+        const content = [x.content, m.content].filter(Boolean).join('\n\n')
+        const trace = [x.wake!.trace, m.wake.trace].filter(Boolean).join('\n\n') || undefined
+        out[w] = { ...x, seq: Math.max(x.seq, m.seq), content,
+          versions: [{ ...(x.versions?.[0] || { createdAt: x.createdAt }), content, srvSeqs: [...(x.versions?.[0]?.srvSeqs || []), ...(m.versions?.[0]?.srvSeqs || [])] }],
+          wake: { ...x.wake!, trace, silent: x.wake!.silent && m.wake.silent, tools: m.wake.tools || x.wake!.tools },
+          srv: { ...x.srv!, seqs: [...x.srv!.seqs, ...m.srv!.seqs] } }
+        continue
+      }
+    }
     // 重新生成出来的新版本：单独取回来时是一项新的，但 turn 和原来那条一样 → 接到原来那条的版本后面
     const old = m.role === 'assistant' ? out.findIndex(x => x.srv && x.role === 'assistant' && x.srv.turn === m.srv!.turn) : -1
     if (old >= 0) {

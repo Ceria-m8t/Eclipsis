@@ -1,6 +1,7 @@
 // 聊天引擎：拼上下文、流式解析、多轮工具调用
 import { composePrompt } from './prompt-store'
 import { type Settings, apiUrl, apiHeaders } from './settings'
+import { heartMarker } from './chat-store'
 import { type McpServer, type ToolCall, buildToolDefinitions, executeToolCall } from './mcp'
 import { localToolDefinitions, isLocalTool, runLocalTool } from './local-tools'
 import type { ChatMessage, MessageVersion, ToolEvent, ApiTurn } from './db'
@@ -46,7 +47,9 @@ export function buildSystemPrompt(): string {
 
 // ===== 把本地消息转成 API 消息 =====
 function userToApi(m: ChatMessage): any {
-  const text = m.raw ?? timeLabel(m.createdAt) + (m.content || (m.images?.length ? '（图片）' : ''))
+  // 心声拼在她这条的末尾（他隐约感知）；只有心声、嘴上什么都没说时正文是空的
+  const heart = m.thought ? (m.content ? '\n\n' : '') + heartMarker(m.thought) : ''
+  const text = m.raw ?? timeLabel(m.createdAt) + (m.content || (m.thought ? '' : m.images?.length ? '（图片）' : '')) + heart
   // 后端来的图片是 /api/eclipsis/blob/… 的地址，模型拿不到；只发这台手机上刚选的图（dataURL）
   const imgs = (m.images || []).filter(u => u.startsWith('data:'))
   if (!imgs.length) return { role: 'user', content: text }

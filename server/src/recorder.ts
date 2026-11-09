@@ -240,7 +240,8 @@ export class Recorder {
       }
     })
     if (status === 'ok' && ctx.derive && ctx.herText && reply && !reply.toolCalls.length && this.onTurnComplete) {
-      const his = reply.content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
+      let his = reply.content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
+      if (his.startsWith('[NO_REPLY]')) his = '（他看了，没有回）'
       if (his) { try { this.onTurnComplete(ctx.herText, his) } catch { /* 通知失败不影响记录 */ } }
     }
     return reply

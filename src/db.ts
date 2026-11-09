@@ -44,6 +44,14 @@ export interface ChatMessage {
   raw?: string
   /** 本地的这句已经跟着一轮发出去了（后端记下了，下次同步时换成后端那条） */
   sent?: boolean
+  /** 她的心声：附在这条消息上、没说出口的心里话（发给他时拼在末尾，他隐约感知） */
+  thought?: string
+  /** 她按了「已读不回」：这一条不是她说的话，是给他的信号 */
+  signal?: 'read'
+  /** 他自己醒来时发的 / 醒来了没找她：当时的念头、用过的工具 */
+  wake?: { id: string; trace?: string; tools?: string[]; silent?: boolean }
+  /** 他这一轮已读不回 */
+  noReply?: boolean
 }
 
 const DB_NAME = 'eclipsis'

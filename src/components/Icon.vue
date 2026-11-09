@@ -4,6 +4,8 @@ defineProps<{ name: string; size?: number; weight?: number }>()
 
 const paths: Record<string, string> = {
   back: 'M15 5l-7 7 7 7',
+  moon: 'M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z',
+  heart: 'M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z',
   home: 'M4 10.5L12 4l8 6.5M6 9v10.5h12V9M10 19.5V14h4v5.5',
   chat: 'M12 4.5c4.7 0 8 3 8 6.8s-3.3 6.8-8 6.8c-.9 0-1.8-.1-2.6-.3L5 19.5l1.2-3.6C4.8 14.7 4 13.1 4 11.3 4 7.5 7.3 4.5 12 4.5z',
   menu: 'M4 7h16M4 12h16M4 17h16',

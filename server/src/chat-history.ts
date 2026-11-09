@@ -24,11 +24,24 @@ export interface ChatItem {
   raw?: string          // 她的原文（重新生成时原样发回去，xiaoke 才认得出是同一条）
   images?: string[]     // 图片地址
   versions?: ChatVersion[]
-  source: 'eclipsis' | 'kelivo' | 'import'
+  source: 'eclipsis' | 'kelivo' | 'import' | 'wake'
+  /** 他自己醒来时发的（或醒来了没找她）：当时留下的念头、用过的工具 */
+  wake?: { id: string; trace?: string; tools?: string[]; silent?: boolean }
+  /** 他这一轮选择已读不回（整条回复只有 [NO_REPLY]） */
+  noReply?: boolean
 }
 
+/** 他已读不回时整条回复就是这个（思考照常写） */
+export const NO_REPLY = '[NO_REPLY]'
+export const isNoReply = (body: string) => body.trim() === NO_REPLY || body.trim().startsWith(NO_REPLY)
+/** 她的心声（发消息时附的心里话）：拼在她这条消息末尾，他隐约感知。他要是学着写，显示时剥掉 */
+export const HEART_RE = /\n*〔她心里想的，没说出口：[\s\S]*?〕\s*$/
+
 const MSG_KINDS = "('message','tool_call','tool_result')"
-const BASE = `channel = 'chat' AND scope = 'daily' AND retracted_at IS NULL`
+// 列表里的行：日常聊天 + 他醒来时留的念头（醒来发给她的消息本来就记在 chat 里）
+const LIST = `scope = 'daily' AND retracted_at IS NULL AND (
+  (channel = 'chat' AND kind IN ${MSG_KINDS})
+  OR (channel = 'wake' AND kind = 'note' AND source_ref LIKE 'wake:trace:%'))`
 
 interface Row { seq: number; ts: string; actor: string; kind: string; content: string; meta: string | null; source_ref: string | null }
 
@@ -43,6 +56,7 @@ export function splitThink(text: string): { body: string; think: string } {
 
 function sourceOf(ref: string | null): ChatItem['source'] {
   if (!ref) return 'kelivo'
+  if (ref.startsWith('wake:')) return 'wake'
   if (ref.startsWith('front:')) return 'eclipsis'
   if (ref.startsWith('xiaoke:')) return 'import'
   return 'kelivo'
@@ -70,8 +84,42 @@ export function buildItems(db: DB, rows: Row[]): ChatItem[] {
   }
 
   let skipReply = false
+  const byWake = new Map<string, ChatItem>()
+  const wakeIds = [...new Set(rows.map(r => parseMeta(r.meta).wake_id).filter((x): x is string => typeof x === 'string'))]
+  const toolsOf = new Map<string, string[]>()
+  if (wakeIds.length) {
+    const q = db.prepare(`SELECT id, tools_used FROM wake_opportunities WHERE id IN (${wakeIds.map(() => '?').join(',')})`)
+    try {
+      for (const w of q.all(...wakeIds) as { id: string; tools_used: string | null }[]) {
+        try { const t = JSON.parse(w.tools_used || '[]'); if (Array.isArray(t) && t.length) toolsOf.set(w.id, t.map(String)) } catch {}
+      }
+    } catch { /* 老库没有这张表 */ }
+  }
+  const wakeItem = (r: Row, wid: string): ChatItem => {
+    let it = byWake.get(wid)
+    if (!it) {
+      it = { id: 'e' + r.seq, seq: r.seq, seqs: [], role: 'assistant', ts: r.ts, turn: 'wake:' + wid, content: '',
+        versions: [{ seq: r.seq, seqs: [], ts: r.ts, content: '', thinking: '', tools: [] }], source: 'wake',
+        wake: { id: wid, tools: toolsOf.get(wid), silent: true } }
+      items.push(it)
+      byWake.set(wid, it)
+    }
+    it.seqs.push(r.seq)
+    it.versions![0]!.seqs.push(r.seq)
+    it.seq = Math.max(it.seq, r.seq)
+    return it
+  }
   for (const r of rows) {
     const meta = parseMeta(r.meta)
+    if (typeof meta.wake_id === 'string' && (r.kind === 'note' || (r.actor === 'ai' && r.kind === 'message'))) {
+      const it = wakeItem(r, meta.wake_id)
+      if (r.kind === 'note') { it.wake!.trace = (it.wake!.trace ? it.wake!.trace + '\n\n' : '') + r.content.trim(); continue }
+      const body = r.content.replace(HEART_RE, '').trim()
+      it.content = it.content ? it.content + '\n\n' + body : body
+      it.versions![0]!.content = it.content
+      it.wake!.silent = false
+      continue
+    }
     if (r.kind === 'message' && r.actor === 'erica' && (INJECTED.test(r.content) || TITLE_REQUEST.test(r.content))) {
       if (TITLE_REQUEST.test(r.content)) skipReply = true
       continue
@@ -103,7 +151,9 @@ export function buildItems(db: DB, rows: Row[]): ChatItem[] {
       continue
     }
     if (r.actor !== 'ai') continue
-    const { body, think } = splitThink(r.content)
+    const split = splitThink(r.content)
+    const think = split.think
+    const body = split.body.replace(HEART_RE, '').trim()
     const seqs = [...toolSeqs, r.seq]
     const v: ChatVersion = {
       seq: r.seq, seqs, ts: r.ts, content: body, thinking: think || thinkOf.get(meta.rid) || '', tools,
@@ -117,12 +167,14 @@ export function buildItems(db: DB, rows: Row[]): ChatItem[] {
       same.seqs.push(...seqs)
       same.seq = Math.max(same.seq, r.seq)
       same.content = body
+      same.noReply = isNoReply(body) || undefined
       continue
     }
     const it: ChatItem = {
       id: 'e' + r.seq, seq: r.seq, seqs, role: 'assistant', ts: r.ts, turn,
       content: body, versions: [v], source: sourceOf(r.source_ref)
     }
+    if (isNoReply(body)) it.noReply = true
     items.push(it)
     byTurn.set(turn, it)
   }
@@ -133,17 +185,17 @@ export function chatHistory(db: DB, opts: { before?: number; after?: number; lim
   const limit = Math.min(Math.max(opts.limit ?? 150, 1), 500)
   const cols = 'seq, ts, actor, kind, content, meta, source_ref'
   if (opts.after != null) {
-    const rows = db.prepare(`SELECT ${cols} FROM episodes WHERE ${BASE} AND kind IN ${MSG_KINDS} AND seq > ? ORDER BY seq LIMIT 1000`).all(opts.after) as unknown as Row[]
+    const rows = db.prepare(`SELECT ${cols} FROM episodes WHERE ${LIST} AND seq > ? ORDER BY seq LIMIT 1000`).all(opts.after) as unknown as Row[]
     return { items: buildItems(db, rows), hasMore: false }
   }
   // 先按"她的话 + 他的回复"数够 limit 条，再把这一段里的工具记录一起取出来
   const before = opts.before ?? Number.MAX_SAFE_INTEGER
-  const msgs = db.prepare(`SELECT seq FROM episodes WHERE ${BASE} AND kind = 'message' AND seq < ? ORDER BY seq DESC LIMIT ?`).all(before, limit + 1) as { seq: number }[]
+  const msgs = db.prepare(`SELECT seq FROM episodes WHERE ${LIST} AND kind IN ('message', 'note') AND seq < ? ORDER BY seq DESC LIMIT ?`).all(before, limit + 1) as { seq: number }[]
   const hasMore = msgs.length > limit
   const shown = msgs.slice(0, limit)
   if (!shown.length) return { items: [], hasMore: false }
   const from = shown[shown.length - 1]!.seq
-  const rows = db.prepare(`SELECT ${cols} FROM episodes WHERE ${BASE} AND kind IN ${MSG_KINDS} AND seq >= ? AND seq < ? ORDER BY seq`).all(from, before) as unknown as Row[]
+  const rows = db.prepare(`SELECT ${cols} FROM episodes WHERE ${LIST} AND seq >= ? AND seq < ? ORDER BY seq`).all(from, before) as unknown as Row[]
   return { items: buildItems(db, rows), hasMore }
 }
 
@@ -182,10 +234,10 @@ const LINK_WINDOW_MS = 30 * 60_000
  * xiaoke 删失败时经历表也不动，返回错误，免得这边看不到了他那边还记得。
  */
 export async function deleteChat(db: DB, xk: XiaokeApi | null, seqs: number[]): Promise<{ deleted: number; xiaoke: number }> {
-  const rows = db.prepare(`SELECT seq, ts, actor, kind, content, meta, xiaoke_id FROM episodes WHERE seq IN (${seqs.map(() => '?').join(',')}) AND ${BASE}`)
-    .all(...seqs) as { seq: number; ts: string; actor: string; kind: string; content: string; meta: string | null; xiaoke_id: string | null }[]
+  const rows = db.prepare(`SELECT seq, ts, actor, kind, content, meta, xiaoke_id, source_ref FROM episodes WHERE seq IN (${seqs.map(() => '?').join(',')}) AND ${LIST}`)
+    .all(...seqs) as { seq: number; ts: string; actor: string; kind: string; content: string; meta: string | null; xiaoke_id: string | null; source_ref: string | null }[]
   if (!rows.length) return { deleted: 0, xiaoke: 0 }
-  const messages = rows.filter(r => r.kind === 'message' && (r.actor === 'erica' || r.actor === 'ai'))
+  const messages = rows.filter(r => r.kind === 'message' && (r.actor === 'erica' || r.actor === 'ai') && !String(r.source_ref || '').startsWith('wake:'))
   const ids: string[] = messages.map(r => r.xiaoke_id).filter((x): x is string => !!x)
   const unlinked = messages.filter(r => !r.xiaoke_id)
   if (messages.length && !xk) throw new Error('没配置 xiaoke（XIAOKE_URL / XIAOKE_KEY），删不了他那边的记录')

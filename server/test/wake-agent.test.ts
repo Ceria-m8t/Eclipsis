@@ -290,7 +290,7 @@ describe('聊天里的「你醒来时」块（带工具以后的记录）', () =
     const b = renderRecentWakeBlock(db)
     assert.match(b, /发给了她 2 条（推送到她手机/)
     assert.match(b, /醒了没\n\n想你/)
-    assert.match(b, /同一次醒来，只留在心里的（她看不到）：\n她还在睡。/)
+    assert.match(b, /同一次醒来，没发给她、留在心里的（她在 Eclipsis 聊天里点开能翻到）：\n她还在睡。/)
     assert.match(b, /这次醒来还用了：breath_search×2、leto_read/)
   })
 })

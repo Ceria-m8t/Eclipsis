@@ -3,7 +3,7 @@
 // 不带这块，聊天里的他不知道自己醒来时说过、想过什么，她回应或骂他醒来发的那条，他接不上。
 // 上游入口（main.ts）把它追加在「此刻」块后面。Wake 接着聊天醒来时，这块和此刻块一起被剪掉、换成新的。
 //
-// 前端有地方显示念头之后，要改"她看不到"那句（见 README：功能说明由开发方维护）。
+// 11-10 起 Eclipsis 聊天里能显示醒来的消息和念头（A3），所以写成「她翻得到」。
 import type { DB } from '../db.ts'
 import { shortBeijing } from './dispatch.ts'
 
@@ -42,7 +42,7 @@ export function renderRecentWakeBlock(db: DB, opts: WakeBlockOptions = {}): stri
       lines.push(messages.join('\n\n'))
     }
     if (trace) {
-      lines.push(messages.length ? '  同一次醒来，只留在心里的（她看不到）：' : `· ${at} 没发，只留在心里（她看不到）：`)
+      lines.push(messages.length ? '  同一次醒来，没发给她、留在心里的（她在 Eclipsis 聊天里点开能翻到）：' : `· ${at} 没发，留在心里（她在 Eclipsis 聊天里点开能翻到）：`)
       lines.push(trace)
     }
     const used = usedTools(parseList(r.tools_used))
