@@ -2,6 +2,7 @@
 import { composePrompt } from './prompt-store'
 import { type Settings, apiUrl, apiHeaders } from './settings'
 import { heartMarker } from './chat-store'
+import { boxEntries, entryDefinition, openBox, callBoxTool } from './toolbox'
 import { type McpServer, type ToolCall, buildToolDefinitions, executeToolCall } from './mcp'
 import { localToolDefinitions, isLocalTool, runLocalTool } from './local-tools'
 import type { ChatMessage, MessageVersion, ToolEvent, ApiTurn } from './db'
@@ -239,13 +240,48 @@ export async function generate(
 ): Promise<BuiltContext> {
   const ctx = buildContext(history, settings.contextTokens)
   const messages = [...ctx.messages]
-  // MCP 工具在前，前端内置工具（状态等）在后
-  const tools = [...buildToolDefinitions(servers), ...localToolDefinitions()]
+  // 工具：后端工具箱的入口（打开了才有里面的工具，和醒来同一份）→ 设置页里直接连的旧 MCP → 前端内置（状态等）
+  // 直连别的 API（设置里填了 apiBase）时没有后端，不给箱子
+  const entries = settings.apiBase ? [] : await boxEntries()
+  const entryOf = new Map(entries.map(b => [b.entryName, b]))
+  const boxToolOwner = new Map<string, string>()   // 打开过的箱子里的工具名 → 箱子入口
+  const tools: any[] = [...entries.map(entryDefinition), ...buildToolDefinitions(servers), ...localToolDefinitions()]
   version.content = ''
   version.thinking = ''
   version.tools = []
   version.trail = []
   const emit = () => cb.onUpdate(version)
+
+  // 打开一个箱子：这一轮接下来都能用里面的工具（和旧 MCP 撞名的，以箱子里的为准）
+  async function openBoxForTurn(c: ToolCall) {
+    if ([...boxToolOwner.values()].includes(c.name)) return { tool_call_id: c.id, content: '这个箱子已经开着了，里面的工具直接用。' }
+    try {
+      const r = await openBox(c.name)
+      for (const def of r.tools) {
+        const name = def.function?.name
+        if (!name || entryOf.has(name)) continue
+        const i = tools.findIndex(t => t.function?.name === name)
+        if (i >= 0) tools.splice(i, 1)
+        tools.push(def)
+        boxToolOwner.set(name, c.name)
+      }
+      const names = r.tools.map((d: any) => d.function?.name).filter(Boolean)
+      return { tool_call_id: c.id, content: names.length ? `打开了「${r.title}」，里面有：${names.join('、')}。下一步直接调用它们。` : `「${r.title}」里现在没有能用的工具。` }
+    } catch (e: any) {
+      return { tool_call_id: c.id, content: `打不开：${e.message}`, is_error: true }
+    }
+  }
+  async function runBoxTool(c: ToolCall) {
+    let args: Record<string, unknown> = {}
+    try { args = c.arguments ? JSON.parse(c.arguments) : {} } catch { return { tool_call_id: c.id, content: `参数不是合法 JSON：${c.arguments}`, is_error: true } }
+    try {
+      const r = await callBoxTool(boxToolOwner.get(c.name)!, c.name, args)
+      const text = r.text.length > 20000 ? r.text.slice(0, 20000) + `\n…[结果过长，已截断，原长 ${r.text.length} 字]` : r.text
+      return { tool_call_id: c.id, content: text || '（没有返回内容）', is_error: r.isError }
+    } catch (e: any) {
+      return { tool_call_id: c.id, content: `调用失败：${e.message}`, is_error: true }
+    }
+  }
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     const body: any = { model: settings.model, messages, stream: true }
@@ -273,7 +309,9 @@ export async function generate(
       const ev: ToolEvent = { id: c.id, name: c.name, args: c.arguments, status: 'running' }
       version.tools!.push(ev)
       emit()
-      const res = isLocalTool(c.name) ? runLocalTool(c) : await executeToolCall(servers, c)
+      const res = entryOf.has(c.name) ? await openBoxForTurn(c)
+        : boxToolOwner.has(c.name) ? await runBoxTool(c)
+        : isLocalTool(c.name) ? runLocalTool(c) : await executeToolCall(servers, c)
       if (signal.aborted) throw new DOMException('aborted', 'AbortError')
       ev.result = res.content
       ev.isError = res.is_error

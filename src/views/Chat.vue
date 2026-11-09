@@ -953,10 +953,10 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
                 </span>
               </label>
               <label>他的气泡 <input type="color" v-model="chatStyle.aiBubbleBg" /></label>
-              <label>透明度 {{ Math.round(chatStyle.aiBubbleOpacity * 100) }}%
+              <label v-if="!glassActive">透明度 {{ Math.round(chatStyle.aiBubbleOpacity * 100) }}%
                 <input type="range" min="0.1" max="1" step="0.05" v-model.number="chatStyle.aiBubbleOpacity" /></label>
               <label>我的气泡 <input type="color" v-model="chatStyle.userBubbleBg" /></label>
-              <label>透明度 {{ Math.round(chatStyle.userBubbleOpacity * 100) }}%
+              <label v-if="!glassActive">透明度 {{ Math.round(chatStyle.userBubbleOpacity * 100) }}%
                 <input type="range" min="0.1" max="1" step="0.05" v-model.number="chatStyle.userBubbleOpacity" /></label>
               <div class="full glass-sec">
                 <div class="glass-head">
@@ -965,7 +965,6 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
                 </div>
                 <p class="glass-note" v-if="chatStyle.glass && !chatStyle.bgImage">先在上面设一张背景图，玻璃才看得出弯；没有背景图时用磨砂。</p>
                 <p class="glass-note" v-else-if="chatStyle.glass && glassUnsupported">这台设备画不了液态玻璃，先用磨砂（上面两个透明度管它）。</p>
-                <p class="glass-note" v-else-if="chatStyle.glass">打开时上面两个「透明度」不起作用，用下面的「底色浓度」。</p>
                 <template v-if="chatStyle.glass">
                   <span class="row">
                     <button class="mini" @click="applyGlassPreset('clear')">清透（图二）</button>
@@ -1589,9 +1588,10 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
 .bubble.typing { display: flex; gap: 4px; padding: 13px 16px; }
 
 /* 已读：简约的双勾（她那边每一串的最后一句，他回了或已读不回以后出现） */
-.read-ticks { width: 17px; height: 10px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; vertical-align: -1px; }
+.read-ticks { width: 21px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; vertical-align: -1px; }
 .user-time { display: inline-flex; align-items: center; gap: 4px; }
-.user-time .read-ticks { color: var(--accent); opacity: 0.85; }
+.user-time .read-ticks { color: var(--accent); filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.3)); }
+.chat-page.chat-dark .user-time .read-ticks { color: #dfe7ff; }
 /* 已读不回：一行小字，不占气泡 */
 .read-signal {
   align-self: flex-end;

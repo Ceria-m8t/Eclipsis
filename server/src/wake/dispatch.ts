@@ -16,7 +16,7 @@ import { assembleSceneBlock } from '../assembler/index.ts'
 import { loadChatContinuation } from './continuation.ts'
 import { chooseModel } from '../station.ts'
 import { runWakeAgent } from './agent.ts'
-import { buildWakeBoxes } from './boxes.ts'
+import { boxesFor } from '../toolbox.ts'
 import { inspectWakeControl } from './tools.ts'
 import { parseModelResponse } from '../leto/model-call.ts'
 import type { ChatMessage, ModelResponse } from '../leto/responder.ts'
@@ -425,7 +425,8 @@ export async function dispatchWake(opp: WakeOpportunity, db: DB, cfg: DispatchCo
   `).get() as { at: string; content: string } | undefined
 
   const withTools = process.env.WAKE_TOOLS !== '0'
-  const boxes = withTools ? buildWakeBoxes(db) : []
+  // 和聊天共用一份箱子（toolbox.ts）；她在设置页关掉「醒来」的箱子这里不出现
+  const boxes = withTools ? boxesFor(db, 'wake') : []
   const missedAlarms = loadMissedAlarms(db)
   const ctxBase = {
     threads, recentWakes, lastMessage, userState, userEvidence: uEst.evidence, reason: opp.reason,
@@ -534,7 +535,7 @@ export function stripMarkers(text: string): string {
 
 async function runWithTools(
   opp: WakeOpportunity, db: DB, cfg: DispatchConfig, model: string, messages: ChatMessage[],
-  boxes: ReturnType<typeof buildWakeBoxes>, sleeping: boolean, threads: { id: string; text: string }[]
+  boxes: ReturnType<typeof boxesFor>, sleeping: boolean, threads: { id: string; text: string }[]
 ): Promise<WakeOutcome> {
   const sent: string[] = []
 

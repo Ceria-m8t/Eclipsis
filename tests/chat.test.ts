@@ -217,7 +217,8 @@ describe('generate', () => {
 
   it('同源 /api 时带上场景/轮次 header；直连其他 API 时不带', async () => {
     const seen: any[] = []
-    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: any) => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: any) => {
+      if (!String(url).includes('/chat/completions')) return new Response('{"boxes":[]}')   // 工具箱入口
       seen.push(init.headers)
       return sse([delta({ content: 'hi' }), delta({}, 'stop')])
     }))
@@ -257,5 +258,34 @@ describe('splitThink', () => {
     const r = splitThink('<think>a</thinking>b</think>c')
     expect(r.think).toBe('a</thinking>b')
     expect(r.body).toBe('c')
+  })
+
+  it('工具箱：手边只有入口；打开以后这一轮才有里面的工具，调用走后端', async () => {
+    const { forgetBoxEntries } = await import('../src/toolbox')
+    forgetBoxEntries()
+    const bodies: any[] = []
+    const posts: any[] = []
+    let round = 0
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: any) => {
+      const u = String(url)
+      if (u.endsWith('/api/eclipsis/tools')) return new Response(JSON.stringify({ boxes: [{ entryName: 'open_music', title: '网易云', description: '放歌' }] }))
+      if (u.endsWith('/tools/open')) { posts.push(['open', JSON.parse(init.body)]); return new Response(JSON.stringify({ title: '网易云', tools: [{ type: 'function', function: { name: 'play_song', description: '', parameters: { type: 'object', properties: {} } } }] })) }
+      if (u.endsWith('/tools/call')) { posts.push(['call', JSON.parse(init.body)]); return new Response(JSON.stringify({ text: '在放了', isError: false })) }
+      bodies.push(JSON.parse(init.body))
+      round++
+      if (round === 1) return sse([delta({ tool_calls: [{ index: 0, id: 'c1', function: { name: 'open_music', arguments: '{}' } }] }), delta({}, 'tool_calls')])
+      if (round === 2) return sse([delta({ tool_calls: [{ index: 0, id: 'c2', function: { name: 'play_song', arguments: '{"id":7}' } }] }), delta({}, 'tool_calls')])
+      return sse([delta({ content: '放好了' }), delta({}, 'stop')])
+    }))
+    const v: MessageVersion = { content: '', createdAt: 0 }
+    await generate(getSettings(), [user('放首歌')], [], new AbortController().signal, v, { onUpdate: () => {} })
+    const names = (b: any) => (b.tools || []).map((t: any) => t.function.name)
+    expect(names(bodies[0])).toContain('open_music')
+    expect(names(bodies[0])).not.toContain('play_song')
+    expect(names(bodies[1])).toContain('play_song')
+    expect(posts).toEqual([['open', { entry: 'open_music' }], ['call', { entry: 'open_music', name: 'play_song', args: { id: 7 } }]])
+    expect(v.content).toBe('放好了')
+    expect(v.tools!.map(t => [t.name, t.status])).toEqual([['open_music', 'done'], ['play_song', 'done']])
+    vi.unstubAllGlobals()
   })
 })

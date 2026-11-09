@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import ToolboxPanel from '../components/ToolboxPanel.vue'
 import { getSettings, saveSettings, apiUrl, apiHeaders } from '../settings'
 import { loadMcpServers, saveMcpServers, discoverTools, type McpServer } from '../mcp'
 import { compressImage } from '../image'
@@ -91,6 +92,11 @@ const bookFont = ref<string>(loadBookFont().id)
 function pickBookFont(id: string) { bookFont.value = id; saveBookFont(id) }
 
 // ===== MCP Servers =====
+// 搬进工具箱以后，这边那条关掉（不删，万一要退回来）
+function onMovedToToolbox(id: string) {
+  const s = mcpList.value.find(x => x.id === id)
+  if (s) { s.enabled = false; saveMcpServers(mcpList.value) }
+}
 const mcpList = ref<McpServer[]>(loadMcpServers())
 const mcpDiscovering = ref<string | null>(null)
 
@@ -295,8 +301,11 @@ async function refreshTools(index: number) {
         </div>
 
         <!-- MCP Servers -->
-        <div class="section-title">MCP 工具服务器</div>
-        <p class="worldbook-hint">连接 MCP 服务器后，聊天时可以调用外部工具（OB记忆、心潮、网易云等）。</p>
+        <div class="section-title">他的工具箱</div>
+        <ToolboxPanel :legacy="mcpList" @moved="onMovedToToolbox" />
+
+        <div class="section-title">（旧）直接连的 MCP</div>
+        <p class="worldbook-hint">只在这台手机的 Eclipsis 聊天里能用，他醒来时用不了。新的工具建议加到上面的工具箱。</p>
 
         <div class="mcp-list">
           <div v-for="(srv, i) in mcpList" :key="srv.id" class="mcp-item">
