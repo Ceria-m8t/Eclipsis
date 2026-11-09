@@ -109,3 +109,74 @@ export function stripOldImages(messages: any[]): { messages: any[]; stripped: nu
   })
   return { messages: out, stripped, savedChars }
 }
+
+// ── 按时间排好再发给他 ──
+// xiaoke 只"补缺"：Kelivo 自己带着几百条窗口历史，xiaoke 把这个窗口没有的（比如她在 Eclipsis 里说的）
+// 插在 Kelivo 那段历史前面，不按时间。两边来回聊时，他看到的顺序就乱了（11-10 她问"能看到 Eclipsis 那条吗"，
+// 那条被放在第 108 条，他以为是很早以前说的）。以后还会有别的副前端，所以这里统一按真实时间排一遍。
+//   时间从哪来：经历表里同一条（角色 + 正文）记下的时间；她的消息找不到时用正文里的时间标记；
+//   都没有的（比如他的回复没记上）跟在前一条后面。
+//   不动的：开头的 system；结尾这一轮（她最后连着说的几句 + 后面的工具轮）。按一来一回整组挪，组里不拆。
+export type TimeLookup = (role: 'user' | 'assistant', text: string) => number[]
+
+const normText = (s: string) => s.replace(/\s+/g, ' ').trim()
+
+/** 她消息里的时间标记（中国时间）：Kelivo 的 <current_time>…，Eclipsis 的开头（YYYY-MM-DD HH:mm） */
+export function timeTagOf(text: string): number | null {
+  const k = /<current_time>\s*(?:\w{3}\s+)?(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}(?::\d{2})?)/.exec(text)
+  const e = k ? null : /^\s*[（(](\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})[）)]/.exec(text)
+  const m = k || e
+  if (!m) return null
+  const t = Date.parse(`${m[1]}T${m[2]!.length === 5 ? m[2] + ':00' : m[2]}+08:00`)
+  return Number.isFinite(t) ? t : null
+}
+
+export function reorderByTime(messages: any[], lookup: TimeLookup): { messages: any[]; moved: number } {
+  const n = messages.length
+  let head = 0
+  while (head < n && messages[head]?.role === 'system') head++
+  // 结尾这一轮：从后往前越过工具轮，再越过她连着说的几句
+  let tail = n
+  while (tail > head && (messages[tail - 1]?.role === 'tool' || (messages[tail - 1]?.role === 'assistant' && Array.isArray(messages[tail - 1].tool_calls) && messages[tail - 1].tool_calls.length))) tail--
+  while (tail > head && messages[tail - 1]?.role === 'user') tail--
+  if (tail - head < 2) return { messages, moved: 0 }
+
+  // 按"一来一回"分组：她连着说的几句 + 他的回复（含工具轮），整组一起挪，组里的先后不动。
+  // （xiaoke 导入的老记录里，她的话和他的回复是一起提交的，时间几乎一样，单条排会把回复排到她前面）
+  const units: { msgs: any[]; t: number; i: number }[] = []
+  for (let i = head; i < tail; i++) {
+    const m = messages[i]
+    const startsTurn = m?.role === 'user' && (i === head || messages[i - 1]?.role !== 'user')
+    if (!units.length || startsTurn) units.push({ msgs: [], t: NaN, i: units.length })
+    units[units.length - 1]!.msgs.push(m)
+  }
+  const used = new Map<string, number>()   // 同样的话出现几次：按出现顺序一次用一个时间
+  let prev = -Infinity
+  const timeOf = (m: any): number | null => {
+    const role = m?.role === 'user' || m?.role === 'assistant' ? m.role : null
+    const text = role ? textOf(m.content) : ''
+    if (!role || !text.trim()) return null
+    const key = role + '|' + normText(text)
+    const cands = lookup(role, text).slice().sort((a, b) => a - b)
+    if (cands.length) {
+      // 有好几个时间（同样的话说过好几次）：取不早于前一组的第一个，没有就按出现的次数取
+      const k = used.get(key) ?? 0
+      used.set(key, k + 1)
+      return cands.find(c => c >= prev) ?? cands[Math.min(k, cands.length - 1)]!
+    }
+    return role === 'user' ? timeTagOf(text) : null
+  }
+  for (const u of units) {
+    let t: number | null = null
+    // 组的时间：她这几句里能对上的最晚那句（Kelivo 夹带的记忆注入那条时间不准，最后那句才是她真说的）；都没有就用他的回复
+    for (const m of u.msgs) if (m?.role === 'user') { const x = timeOf(m); if (x !== null) t = t === null ? x : Math.max(t, x) }
+    if (t === null) for (const m of u.msgs) if (m?.role === 'assistant') { const x = timeOf(m); if (x !== null) { t = x; break } }
+    // 找不到时间的跟在前一组后面
+    u.t = t ?? prev
+    prev = u.t
+  }
+  const sorted = units.slice().sort((a, b) => (a.t - b.t) || (a.i - b.i))
+  const moved = sorted.reduce((k, u, j) => k + (u.i !== j ? 1 : 0), 0)
+  if (!moved) return { messages, moved: 0 }
+  return { messages: [...messages.slice(0, head), ...sorted.flatMap(u => u.msgs), ...messages.slice(tail)], moved }
+}

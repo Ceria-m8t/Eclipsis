@@ -11,7 +11,7 @@ import { openDb, type DB } from './db.ts'
 import { BlobStore } from './blobs.ts'
 import { Recorder } from './recorder.ts'
 import { createTap, forwardHeaders, type Prepared } from './proxy.ts'
-import { stripWakeHistory, stripThinkHistory, stripOldImages } from './transforms.ts'
+import { stripWakeHistory, stripThinkHistory, stripOldImages, reorderByTime, type TimeLookup } from './transforms.ts'
 import { handleApi } from './api.ts'
 import { handleChatApi, xiaokeApi } from './chat-history.ts'
 import { handleLlmRelay } from './llm-relay.ts'
@@ -44,6 +44,7 @@ export interface ServerOptions {
   stripWakeHistory?: boolean  // STRIP_WAKE_HISTORY=1
   stripThinkHistory?: boolean // STRIP_THINK_HISTORY=1
   stripOldImages?: boolean     // STRIP_OLD_IMAGES=1
+  reorderByTime?: boolean      // REORDER_BY_TIME（默认开，=0 关）
   assembler?: boolean          // ASSEMBLER_ENABLED=1
   /** 她每发一条新消息时调用（用来通知心潮"她来了"） */
   onEricaMessage?: (text: string) => void
@@ -103,6 +104,17 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
       let changed = 'eclipsis_rid' in json
       const transforms: Record<string, unknown> = {}
       if (changed) { const { eclipsis_rid: _drop, ...rest } = json; out = rest }
+      // 先按时间排（要用原文去经历表里对时间，所以在剪思考、剪图之前）
+      if (opts.reorderByTime && Array.isArray(out.messages)) {
+        try {
+          const r = reorderByTime(out.messages, episodeTimeLookup(db))
+          if (r.moved) {
+            out = { ...out, messages: r.messages }
+            transforms.reorder_by_time = { moved: r.moved }
+            changed = true
+          }
+        } catch { /* 排不了就原样发 */ }
+      }
       if (opts.stripWakeHistory && Array.isArray(out.messages)) {
         const r = stripWakeHistory(out.messages)
         if (r.stripped) {
@@ -157,6 +169,22 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
   return { front, tap }
 }
 
+/** 经历表里最近 30 天的日常聊天：同一句话（角色 + 正文）记下的时间。每次请求现查（几千条，毫秒级） */
+export function episodeTimeLookup(db: DB): TimeLookup {
+  const since = new Date(Date.now() - 30 * 86_400_000).toISOString()
+  const rows = db.prepare(`SELECT ts, actor, content FROM episodes WHERE channel = 'chat' AND scope = 'daily' AND kind = 'message'
+    AND actor IN ('erica', 'ai') AND ts >= ?`).all(since) as { ts: string; actor: string; content: string }[]
+  const map = new Map<string, number[]>()
+  const norm = (t: string) => t.replace(/\s+/g, ' ').trim()
+  for (const r of rows) {
+    const key = (r.actor === 'erica' ? 'user' : 'assistant') + '|' + norm(r.content)
+    const list = map.get(key) || []
+    list.push(Date.parse(r.ts))
+    map.set(key, list)
+  }
+  return (role, text) => map.get(role + '|' + norm(text)) || []
+}
+
 function main() {
   const cfg = loadConfig()
   // 换站：stations.json 里正在用的站优先，没有就用 backend.env；之后 cfg.upstreamUrl/Key 每次读都是现在的站
@@ -205,6 +233,7 @@ function main() {
     stripWakeHistory: process.env.STRIP_WAKE_HISTORY === '1',
     stripThinkHistory: process.env.STRIP_THINK_HISTORY === '1',
     stripOldImages: process.env.STRIP_OLD_IMAGES === '1',
+    reorderByTime: process.env.REORDER_BY_TIME !== '0',
     assembler: process.env.ASSEMBLER_ENABLED === '1',
     onTurnComplete: (() => {
       const url = (process.env.XINCHAO_URL || '').trim()
@@ -227,7 +256,8 @@ function main() {
   tap.listen(cfg.tapPort, '127.0.0.1', () => console.log(`[eclipsis] tap    127.0.0.1:${cfg.tapPort} → ${cfg.upstreamUrl || '(未配置)'}` +
     `  LINK_RID=${process.env.LINK_RID === '1' ? 1 : 0} STRIP_WAKE_HISTORY=${process.env.STRIP_WAKE_HISTORY === '1' ? 1 : 0}` +
     ` STRIP_THINK_HISTORY=${process.env.STRIP_THINK_HISTORY === '1' ? 1 : 0}` +
-    ` STRIP_OLD_IMAGES=${process.env.STRIP_OLD_IMAGES === '1' ? 1 : 0}`))
+    ` STRIP_OLD_IMAGES=${process.env.STRIP_OLD_IMAGES === '1' ? 1 : 0}` +
+    ` REORDER_BY_TIME=${process.env.REORDER_BY_TIME === '0' ? 0 : 1}`))
 
   // ── Pulse 模块（总是初始化，不需要开关） ──
   ensurePulseSchema(db)
