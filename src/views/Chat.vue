@@ -556,6 +556,10 @@ async function runGeneration(target?: ChatMessage) {
   const live = msg.versions[msg.activeVersion]   // 响应式版本
   // 这几句跟着这一轮发出去了：后端会记下，同步回来时换成后端那条
   for (const h of history) if (!h.srv) h.sent = true
+  // 上一轮停掉了、她补了几句再发：前面那几句是后端来的，图片要取回来一起发给他（不然他只看到「[图片]」两个字）
+  await Promise.all(history.filter(h => h.srv && h.images?.length && !h.imageData).map(async h => {
+    try { h.imageData = await Promise.all(h.images!.map(blobToDataUrl)) } catch { /* 取不回来就只发文字 */ }
+  }))
   persist()
   stickToBottom = true
   scrollToBottom()
@@ -588,6 +592,12 @@ async function runGeneration(target?: ChatMessage) {
     await syncNew(!msg.error && !msg.srv ? [msg] : [])
     scrollToBottom()
   }
+}
+
+async function blobToDataUrl(url: string): Promise<string> {
+  if (url.startsWith('data:')) return url
+  const b = await (await fetch(url)).blob()
+  return await new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(String(r.result)); r.onerror = () => reject(r.error); r.readAsDataURL(b) })
 }
 
 function stopGenerating() {

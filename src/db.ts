@@ -46,6 +46,8 @@ export interface ChatMessage {
   raw?: string
   /** 本地的这句已经跟着一轮发出去了（后端记下了，下次同步时换成后端那条） */
   sent?: boolean
+  /** 后端来的图片重新发给他时临时取回的 dataURL（不存） */
+  imageData?: string[]
   /** 她的心声：附在这条消息上、没说出口的心里话（发给他时拼在末尾，他隐约感知） */
   thought?: string
   /** 她按了「已读不回」：这一条不是她说的话，是给他的信号 */

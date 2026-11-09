@@ -171,6 +171,17 @@ test('分条发的几句（回车分条、最后点发送）：每句一条经�
   assert.equal(ep.filter(e => e.actor === 'ai').length, 2)
 })
 
+test('上一轮失败/停掉了、她补了一句再发（新的 turn）：前面那几句不再记一遍；她真的连说两遍同一句也不丢', async () => {
+  stationReply = (_r, res) => { res.writeHead(500, { 'content-type': 'application/json' }); res.end('{"error":{"message":"boom"}}') }
+  const first = { model: 'm', stream: true, messages: [{ role: 'user', content: '旧的' }, { role: 'assistant', content: '嗯' }, { role: 'user', content: '看图' }, { role: 'user', content: '[图片]\n（图片）' }] }
+  await (await chat(first, { 'x-eclipsis-turn': 't1', 'x-eclipsis-version': '0' })).text()
+  stationReply = streamReply([sseChunk({ content: '好' }), sseChunk({}, 'stop')])
+  const second = { ...first, messages: [...first.messages, { role: 'user', content: '补一句' }, { role: 'user', content: '补一句' }] }
+  await (await chat(second, { 'x-eclipsis-turn': 't2', 'x-eclipsis-version': '0' })).text()
+  await settle()
+  assert.deepEqual(episodes().filter(e => e.actor === 'erica').map(e => e.content), ['看图', '[图片]\n（图片）', '补一句', '补一句'])
+})
+
 test('工具调用：tool_call 和下一轮的 tool_result 都进经历', async () => {
   stationReply = streamReply([
     sseChunk({ content: '我放首歌' }),

@@ -82,4 +82,14 @@ describe('聊天记录在后端', () => {
     expect(list[0]!.wake).toMatchObject({ id: 'W', trace: '等她醒', silent: false })
     expect(list[0]!.content).toBe('花园浇了')
   })
+
+  it('后端来的图重新发时：用取回的 dataURL，原文里的「[图片]」占位去掉', () => {
+    const m = fromServer(u(9, '', { images: ['/api/eclipsis/blob/' + 'b'.repeat(64)], raw: '[图片]\n（2026-11-10 07:08）（图片）' }))
+    m.imageData = ['data:image/jpeg;base64,QQ==']
+    const ctx = buildContext([m], 100000)
+    expect(ctx.messages[1].content).toEqual([
+      { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,QQ==' } },
+      { type: 'text', text: '（2026-11-10 07:08）（图片）' },
+    ])
+  })
 })

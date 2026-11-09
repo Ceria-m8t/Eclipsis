@@ -50,9 +50,11 @@ export function buildSystemPrompt(): string {
 function userToApi(m: ChatMessage): any {
   // 心声拼在她这条的末尾（他隐约感知）；只有心声、嘴上什么都没说时正文是空的
   const heart = m.thought ? (m.content ? '\n\n' : '') + heartMarker(m.thought) : ''
-  const text = m.raw ?? timeLabel(m.createdAt) + (m.content || (m.thought ? '' : m.images?.length ? '（图片）' : '')) + heart
-  // 后端来的图片是 /api/eclipsis/blob/… 的地址，模型拿不到；只发这台手机上刚选的图（dataURL）
-  const imgs = (m.images || []).filter(u => u.startsWith('data:'))
+  // 后端来的图片是 /api/eclipsis/blob/… 的地址，模型拿不到：发之前取回成 dataURL（imageData）；手机上刚选的图本来就是 dataURL
+  const imgs = m.imageData?.length ? m.imageData : (m.images || []).filter(u => u.startsWith('data:'))
+  // 原文里有「[图片]」占位行（第一次发时记下的），真图跟着发的时候去掉
+  const raw = m.raw !== undefined && imgs.length ? m.raw.split('\n').filter(l => l.trim() !== '[图片]').join('\n') : m.raw
+  const text = raw ?? timeLabel(m.createdAt) + (m.content || (m.thought ? '' : m.images?.length ? '（图片）' : '')) + heart
   if (!imgs.length) return { role: 'user', content: text }
   return {
     role: 'user',

@@ -101,6 +101,11 @@ export function textOf(content: any): string {
   }).filter(Boolean).join('\n')
 }
 
+/** 判断「是不是同一句」：不看图片占位行和空白（同一句第二次发时，图可能换成了文字占位，或者反过来） */
+function sameText(t: string): string {
+  return t.split('\n').filter(l => !/^\s*(\[图片\]|（图片）)\s*$/.test(l)).join('\n').replace(/\s+/g, ' ').trim()
+}
+
 export class Recorder {
   db: DB
   blobs: BlobStore
@@ -176,10 +181,21 @@ export class Recorder {
       const base = ctx.turn
         ? `${ctx.tap}:turn:${ctx.conversation || '-'}:${ctx.turn}:user`
         : `${ctx.tap}:fp:${sha256((ctx.conversation || '-') + '|' + stored.map(s => s.hash).join(','))}:user`
+      // 上一轮停掉/失败了、她补了几句再发：前面那几句已经记过了（还没有他的回复），不再记一遍。
+      // 按「同样的话出现几次」算：这次请求里比库里多出来的才记（她真的连说两遍同一句也不会丢）
+      const lastAi = (this.db.prepare(`SELECT COALESCE(MAX(seq), 0) AS s FROM episodes WHERE channel = ? AND actor = 'ai' AND kind = 'message' AND retracted_at IS NULL`).get(channel) as { s: number }).s
+      const already = new Map<string, number>()
+      for (const r of this.db.prepare(`SELECT content FROM episodes WHERE channel = ? AND actor = 'erica' AND kind = 'message' AND retracted_at IS NULL AND seq > ? AND ts >= ?`)
+        .all(channel, lastAi, new Date(Date.now() - 12 * 3600_000).toISOString()) as { content: string }[]) {
+        const k = sameText(r.content); already.set(k, (already.get(k) || 0) + 1)
+      }
       for (let i = first; i < stored.length; i++) {
         const m = stored[i]
         const text = textOf(m.message.content).trim() || (m.images.length ? '[图片]' : '')
         if (!text) continue
+        const k = sameText(text)
+        const left = already.get(k) || 0
+        if (left > 0) { already.set(k, left - 1); continue }
         const back = stored.length - 1 - i
         const meta: Record<string, unknown> = {}
         if (m.images.length) meta.images = m.images

@@ -168,7 +168,8 @@ export function readCache(): ChatMessage[] | null {
 }
 
 export function writeCache(list: ChatMessage[]) {
-  const srv = list.filter(m => m.srv && !m.error).slice(-CACHE_MAX)
+  // 临时取回的图片 dataURL 不进缓存（太大）
+  const srv = list.filter(m => m.srv && !m.error).slice(-CACHE_MAX).map(m => (m.imageData ? { ...m, imageData: undefined } : m))
   memCache = srv
   try { localStorage.setItem(CACHE_KEY, JSON.stringify(srv)) } catch { /* 太大存不下：只留内存里那份 */ }
 }
