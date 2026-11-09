@@ -13,6 +13,7 @@ import { keyboardOpen } from '../viewport'
 import { pageBackdrop } from '../theme'
 import { aiStatus } from '../status'
 import { fontName, setFontFile, clearFont } from '../font'
+import { LiquidStage, type GlassParams } from '../liquid/stage'
 import {
   type ChatMessage, type MessageVersion,
   getAllMessages, putMessage, deleteMessage as dbDelete, clearMessages,
@@ -33,9 +34,24 @@ interface ChatStyle {
   footerOpacity: number   // 输入栏玻璃不透明度
   fontSize: number
   customCSS: string
+  // 液态玻璃（气泡）：要有背景图才画；设备画不了时退回磨砂
+  glass: boolean
+  glassTone: 'auto' | 'light' | 'dark'
+  glassRefract: number
+  glassBevel: number
+  glassWobble: number
+  glassTint: number
+  glassShine: number
+  glassDisp: number
+  glassShadow: number
 }
 
 const STYLE_KEY = 'eclipsis-chat-style-v2'
+// 两套起点：清透 = 参考图二（中间清楚、只有边上弯）；水波 = 参考图一（整块在扭）
+const GLASS_PRESETS = {
+  clear: { glassRefract: 0.9, glassBevel: 12, glassWobble: 0, glassTint: 0.06, glassShine: 1, glassDisp: 0.08 },
+  ripple: { glassRefract: 1.5, glassBevel: 22, glassWobble: 0.7, glassTint: 0.04, glassShine: 1.1, glassDisp: 0.14 },
+}
 const DEFAULT_STYLE: ChatStyle = {
   bgColor: '',
   bgImage: '',
@@ -43,10 +59,14 @@ const DEFAULT_STYLE: ChatStyle = {
   aiBubbleOpacity: 0.55,
   userBubbleBg: '#dfe7f5',
   userBubbleOpacity: 0.6,
-  headerOpacity: 0.42,
-  footerOpacity: 0.68,
+  headerOpacity: 0.24,
+  footerOpacity: 0.36,
   fontSize: 15,
-  customCSS: ''
+  customCSS: '',
+  ...GLASS_PRESETS.clear,
+  glass: true,
+  glassTone: 'auto',
+  glassShadow: 0.6,
 }
 
 function loadStyle(): ChatStyle {
@@ -56,6 +76,9 @@ function loadStyle(): ChatStyle {
       // 字体已经改成全局的（font.ts），这里不再带着
       const o = JSON.parse(v2)
       delete o.fontFamily; delete o.fontData
+      // 顶栏/输入栏旧默认（0.42/0.68）太雾：没改过的换成新的薄磨砂默认值
+      if (o.headerOpacity === 0.42) delete o.headerOpacity
+      if (o.footerOpacity === 0.68) delete o.footerOpacity
       return { ...DEFAULT_STYLE, ...o }
     }
     // 旧版：只沿用背景图、字体、自定义 CSS，气泡配色换成新的玻璃默认值
@@ -135,6 +158,56 @@ const bgStyle = computed<Record<string, string> | null>(() => {
   return s
 })
 watch(bgStyle, v => { pageBackdrop.value = v }, { immediate: true })
+
+// ================= 液态玻璃（气泡） =================
+let stage: LiquidStage | null = null
+const glassReady = ref(false)        // WebGL2 起来了，背景图也传上去了
+const glassUnsupported = ref(false)  // 这台设备画不了（没有 WebGL2 / 上下文一直被收走）
+const glassLum = ref(0.6)
+const glassActive = computed(() => glassReady.value && chatStyle.value.glass && !!chatStyle.value.bgImage)
+const glassTone = computed<'light' | 'dark'>(() => {
+  const t = chatStyle.value.glassTone
+  return t === 'auto' ? (glassLum.value < 0.45 ? 'dark' : 'light') : t
+})
+const glassParams = computed<GlassParams>(() => {
+  const s = chatStyle.value
+  return {
+    refract: s.glassRefract, bevel: s.glassBevel, wobble: s.glassWobble, tint: s.glassTint,
+    shine: s.glassShine, dispersion: s.glassDisp, shadow: s.glassShadow, tone: glassTone.value,
+  }
+})
+
+function stopGlass() {
+  stage?.destroy()
+  stage = null
+  glassReady.value = false
+}
+
+async function syncGlass() {
+  const s = chatStyle.value
+  if (!s.glass || !s.bgImage || glassUnsupported.value || !chatArea.value) { stopGlass(); return }
+  if (!stage) {
+    const st = new LiquidStage({
+      scroller: chatArea.value,
+      backdrop: () => document.querySelector('.page-backdrop'),
+      selector: '.bubble',
+      tintOf: el => el.classList.contains('user') ? chatStyle.value.userBubbleBg : chatStyle.value.aiBubbleBg,
+      onLost: () => { stage = null; glassReady.value = false; glassUnsupported.value = true },
+    })
+    if (!st.initGl()) { st.destroy(); glassUnsupported.value = true; return }
+    stage = st
+  }
+  const st = stage
+  const ok = await st.setWallpaper(s.bgImage)
+  if (st !== stage) return
+  glassLum.value = st.avgLum
+  st.setParams(glassParams.value)
+  glassReady.value = ok
+}
+watch(() => [chatStyle.value.glass, chatStyle.value.bgImage], () => { syncGlass() })
+watch(glassParams, p => stage?.setParams(p))
+watch(() => [chatStyle.value.aiBubbleBg, chatStyle.value.userBubbleBg, chatStyle.value.fontSize, chatStyle.value.customCSS], () => stage?.invalidate())
+function applyGlassPreset(k: keyof typeof GLASS_PRESETS) { Object.assign(chatStyle.value, GLASS_PRESETS[k]) }
 
 // ================= 消息 =================
 const messages = ref<ChatMessage[]>([])
@@ -695,9 +768,11 @@ onMounted(async () => {
     })
     ro.observe(footerEl.value)
   }
+  syncGlass()
 })
 
 onBeforeUnmount(() => {
+  stopGlass()
   document.documentElement.classList.remove('chat-open')
   cancelAnimationFrame(heartRaf)
   pageBackdrop.value = null
@@ -715,7 +790,7 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
 </script>
 
 <template>
-  <div class="chat-page shell-page" :style="pageStyle">
+  <div class="chat-page shell-page" :class="{ 'liquid-on': glassActive, 'liquid-dark': glassActive && glassTone === 'dark' }" :style="pageStyle">
     <!-- ===== 顶栏：通栏卡片，头像在两端，中间心电图爱心、名字、状态 ===== -->
     <header class="chat-header">
       <div class="header-card glass header-glass">
@@ -771,6 +846,42 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
               <label>我的气泡 <input type="color" v-model="chatStyle.userBubbleBg" /></label>
               <label>透明度 {{ Math.round(chatStyle.userBubbleOpacity * 100) }}%
                 <input type="range" min="0.1" max="1" step="0.05" v-model.number="chatStyle.userBubbleOpacity" /></label>
+              <div class="full glass-sec">
+                <div class="glass-head">
+                  <span>液态玻璃（气泡）</span>
+                  <input type="checkbox" class="switch" v-model="chatStyle.glass" aria-label="液态玻璃开关" />
+                </div>
+                <p class="glass-note" v-if="chatStyle.glass && !chatStyle.bgImage">先在上面设一张背景图，玻璃才看得出弯；没有背景图时用磨砂。</p>
+                <p class="glass-note" v-else-if="chatStyle.glass && glassUnsupported">这台设备画不了液态玻璃，先用磨砂（上面两个透明度管它）。</p>
+                <p class="glass-note" v-else-if="chatStyle.glass">打开时上面两个「透明度」不起作用，用下面的「底色浓度」。</p>
+                <template v-if="chatStyle.glass">
+                  <span class="row">
+                    <button class="mini" @click="applyGlassPreset('clear')">清透（图二）</button>
+                    <button class="mini" @click="applyGlassPreset('ripple')">水波（图一）</button>
+                  </span>
+                  <label>明暗
+                    <select v-model="chatStyle.glassTone">
+                      <option value="auto">跟背景图（{{ glassLum < 0.45 ? '现在是暗' : '现在是亮' }}）</option>
+                      <option value="light">白玻璃 · 深色字</option>
+                      <option value="dark">黑玻璃 · 白字</option>
+                    </select>
+                  </label>
+                  <label>边上弯 {{ chatStyle.glassRefract.toFixed(2) }}
+                    <input type="range" min="0" max="2.5" step="0.05" v-model.number="chatStyle.glassRefract" /></label>
+                  <label>边宽 {{ chatStyle.glassBevel }}px
+                    <input type="range" min="4" max="36" step="1" v-model.number="chatStyle.glassBevel" /></label>
+                  <label>整块波纹 {{ Math.round(chatStyle.glassWobble * 100) }}%
+                    <input type="range" min="0" max="1" step="0.05" v-model.number="chatStyle.glassWobble" /></label>
+                  <label>底色浓度 {{ Math.round(chatStyle.glassTint * 100) }}%
+                    <input type="range" min="0" max="0.6" step="0.02" v-model.number="chatStyle.glassTint" /></label>
+                  <label>高光 {{ Math.round(chatStyle.glassShine * 100) }}%
+                    <input type="range" min="0" max="1.5" step="0.05" v-model.number="chatStyle.glassShine" /></label>
+                  <label>分色 {{ Math.round(chatStyle.glassDisp * 100) }}%
+                    <input type="range" min="0" max="0.3" step="0.01" v-model.number="chatStyle.glassDisp" /></label>
+                  <label>影子 {{ Math.round(chatStyle.glassShadow * 100) }}%
+                    <input type="range" min="0" max="1.5" step="0.05" v-model.number="chatStyle.glassShadow" /></label>
+                </template>
+              </div>
               <label class="full">顶栏透明度 {{ Math.round((1 - chatStyle.headerOpacity) * 100) }}%
                 <input type="range" min="0.05" max="0.95" step="0.05" :value="1 - chatStyle.headerOpacity"
                   @input="chatStyle.headerOpacity = +(1 - +($event.target as HTMLInputElement).value).toFixed(2)" /></label>
@@ -1106,9 +1217,33 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
 
 
 
-/* 顶栏、输入栏用全局 .glass，只把底色换成可调透明度 */
+/* 顶栏、输入栏用全局 .glass，只把底色换成可调透明度；模糊比全局的薄一档（参考图那种透） */
 .glass.header-glass { background: var(--header-bg); }
 .glass.footer-glass { background: var(--footer-bg); }
+.glass.header-glass, .glass.footer-glass {
+  -webkit-backdrop-filter: blur(10px) saturate(165%);
+  backdrop-filter: blur(10px) saturate(165%);
+}
+
+/* 液态玻璃打开后，气泡的样子由画布画（src/liquid/stage.ts），DOM 气泡只剩字 */
+.chat-page.liquid-on .bubble.ai,
+.chat-page.liquid-on .bubble.user {
+  background: transparent;
+  border-color: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  box-shadow: none;
+}
+.chat-page.liquid-on .chat-area { isolation: isolate; }
+.chat-page.liquid-dark .bubble {
+  --text: rgba(255, 255, 255, 0.95);
+  --text-2: rgba(255, 255, 255, 0.72);
+  --text-3: rgba(255, 255, 255, 0.5);
+  color: var(--text);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.22);
+}
+.chat-page.liquid-dark .markdown-body :deep(em) { color: rgba(225, 230, 255, 0.92); }
+.chat-page.liquid-dark .markdown-body :deep(a) { color: #b9c8ff; }
 
 /* 通栏卡片（参考图三）：圆角大卡片，头像在两端，中间一列 */
 /* 按参考图二的比例：头像往里收，和中间一列靠拢；整组居中 */
@@ -1707,6 +1842,24 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
 .style-grid .row { display: flex; gap: 6px; align-items: center; }
 .style-grid input[type=color] { width: 44px; height: 30px; border: none; background: none; padding: 0; }
 .style-grid input[type=range] { width: 100%; accent-color: var(--accent); }
+.style-grid select {
+  border-radius: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  background: rgba(255, 255, 255, 0.75);
+  padding: 6px 8px;
+}
+.glass-sec {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 14px;
+  padding: 12px;
+  border-radius: 16px;
+  background: var(--glass-bg-soft);
+}
+.glass-sec > .glass-head, .glass-sec > .glass-note, .glass-sec > .row { grid-column: 1 / -1; }
+.glass-head { display: flex; align-items: center; justify-content: space-between; color: var(--text); font-weight: 600; }
+.glass-note { font-size: 12px; line-height: 1.5; color: var(--text-3); }
+.glass-sec .switch { width: 20px; height: 20px; accent-color: var(--accent); }
 .style-grid textarea {
   border-radius: 12px;
   border: 1px solid rgba(0, 0, 0, 0.06);
