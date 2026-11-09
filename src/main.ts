@@ -10,6 +10,8 @@ import { upgradeFeatures, syncPromptsFromServer } from './prompt-store'
 import { startGlobalGlass } from './liquid/global'
 
 installAuthGuard()
+// 以前直连的 MCP（记忆库，带令牌）存在手机里；工具都搬到后端的工具箱了，这份不再用，清掉
+try { localStorage.removeItem('eclipsis-mcp-servers') } catch {}
 startViewportTracking()
 startTheme()
 startFont()

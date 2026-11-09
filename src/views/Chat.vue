@@ -2,7 +2,6 @@
 import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import Icon from '../components/Icon.vue'
 import { getSettings } from '../settings'
-import { loadMcpServers } from '../mcp'
 import { renderMd, splitBubbles, splitThink } from '../markdown'
 import { generate, finalizeVersion, buildContext, type BuiltContext } from '../chat-engine'
 import { startKeepAlive, stopKeepAlive } from '../keepalive'
@@ -544,7 +543,7 @@ async function runGeneration(target?: ChatMessage) {
   scrollToBottom()
 
   try {
-    lastCtx.value = await generate(settings.value, history, loadMcpServers(), abortCtrl.signal, live, {
+    lastCtx.value = await generate(settings.value, history, [], abortCtrl.signal, live, {
       onUpdate: () => {
         msg.content = live.content
         persist(msg)

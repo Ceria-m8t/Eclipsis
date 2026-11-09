@@ -3,16 +3,12 @@
 // 内置的（记忆库、心潮、Leto、小镇、醒来设置）只能开关；她自己加的可以改、删。令牌只存在后端，这里只看到打码的。
 import { ref, onMounted } from 'vue'
 import { listToolbox, saveBox, setBoxFlags, deleteBox, testBox, type BoxInfo } from '../toolbox'
-import type { McpServer } from '../mcp'
-
-const props = defineProps<{ legacy: McpServer[] }>()
-const emit = defineEmits<{ (e: 'moved', id: string): void }>()
 
 const boxes = ref<BoxInfo[]>([])
 const err = ref('')
 const msg = ref<Record<string, string>>({})
 const busy = ref('')
-interface Draft { id?: string; title: string; entryName: string; description: string; url: string; token: string; chat: boolean; wake: boolean; fromLegacy?: string }
+interface Draft { id?: string; title: string; entryName: string; description: string; url: string; token: string; chat: boolean; wake: boolean }
 const draft = ref<Draft | null>(null)
 
 async function reload() {
@@ -37,14 +33,6 @@ function edit(b?: BoxInfo) {
     ? { id: b.id, title: b.title, entryName: b.entryName, description: b.description, url: '', token: '', chat: b.chat, wake: b.wake }
     : { title: '', entryName: 'open_', description: '', url: '', token: '', chat: true, wake: true }
 }
-function fromLegacy(s: McpServer) {
-  const slug = (s.name || 'tools').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'tools'
-  draft.value = {
-    title: s.name || '新箱子', entryName: 'open_' + (/^[a-z]/.test(slug) ? slug : 'box_' + slug).slice(0, 24),
-    description: s.tools.length ? `里面有：${s.tools.slice(0, 8).map(t => t.name).join('、')}${s.tools.length > 8 ? ' 等' : ''}` : '',
-    url: s.url, token: s.token, chat: true, wake: true, fromLegacy: s.id,
-  }
-}
 async function save() {
   const d = draft.value
   if (!d) return
@@ -52,7 +40,6 @@ async function save() {
   busy.value = 'save'
   try {
     await saveBox({ id: d.id, title: d.title, entryName: d.entryName, description: d.description, url: d.url, token: d.token, chat: d.chat, wake: d.wake })
-    if (d.fromLegacy) emit('moved', d.fromLegacy)
     draft.value = null
     msg.value.draft = ''
     await reload()
@@ -108,13 +95,6 @@ async function remove(b: BoxInfo) {
     </div>
     <button v-else class="wb-add" @click="edit()">+ 加一个箱子</button>
 
-    <template v-if="props.legacy.length">
-      <p class="tb-hint">下面这些是以前在这台手机上直接连的 MCP：只有 Eclipsis 聊天里能用，他醒来时用不了。点「搬进工具箱」就会变成上面的一个箱子，搬完这里那条会关掉。</p>
-      <div v-for="s in props.legacy" :key="s.id" class="tb-legacy">
-        <span>{{ s.name || s.url }}{{ s.enabled ? '' : '（关着）' }} · {{ s.tools.length }} 个工具</span>
-        <button class="tb-btn" @click="fromLegacy(s)">搬进工具箱</button>
-      </div>
-    </template>
   </div>
 </template>
 
@@ -144,6 +124,5 @@ async function remove(b: BoxInfo) {
 .tb-btn.danger { color: var(--danger); }
 .tb-btn:disabled { opacity: 0.5; }
 .tb-meta { font-size: 11.5px; color: var(--text-3); word-break: break-all; }
-.tb-legacy { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; color: var(--text-2); }
 textarea.wb-title-input { resize: vertical; font-family: inherit; }
 </style>

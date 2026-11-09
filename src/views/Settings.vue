@@ -2,7 +2,6 @@
 import { ref } from 'vue'
 import ToolboxPanel from '../components/ToolboxPanel.vue'
 import { getSettings, saveSettings, apiUrl, apiHeaders } from '../settings'
-import { loadMcpServers, saveMcpServers, discoverTools, type McpServer } from '../mcp'
 import { compressImage } from '../image'
 import { isViewportDebug, setViewportDebug } from '../viewport'
 import { theme, THEME_PRESETS, DEFAULT_THEME } from '../theme'
@@ -91,56 +90,6 @@ function showToast(text: string) {
 const bookFont = ref<string>(loadBookFont().id)
 function pickBookFont(id: string) { bookFont.value = id; saveBookFont(id) }
 
-// ===== MCP Servers =====
-// 搬进工具箱以后，这边那条关掉（不删，万一要退回来）
-function onMovedToToolbox(id: string) {
-  const s = mcpList.value.find(x => x.id === id)
-  if (s) { s.enabled = false; saveMcpServers(mcpList.value) }
-}
-const mcpList = ref<McpServer[]>(loadMcpServers())
-const mcpDiscovering = ref<string | null>(null)
-
-function addMcpServer() {
-  const id = 'mcp-' + Date.now()
-  mcpList.value.push({
-    id,
-    name: '新服务器',
-    url: '',
-    token: '',
-    enabled: true,
-    tools: []
-  })
-  saveMcpServers(mcpList.value)
-}
-
-function removeMcpServer(index: number) {
-  mcpList.value.splice(index, 1)
-  saveMcpServers(mcpList.value)
-}
-
-function toggleMcpServer(index: number) {
-  mcpList.value[index].enabled = !mcpList.value[index].enabled
-  saveMcpServers(mcpList.value)
-}
-
-function saveMcpList() {
-  saveMcpServers(mcpList.value)
-}
-
-async function refreshTools(index: number) {
-  const server = mcpList.value[index]
-  mcpDiscovering.value = server.id
-  try {
-    const tools = await discoverTools(server)
-    server.tools = tools
-    saveMcpServers(mcpList.value)
-    showToast(tools.length > 0 ? tools.length + ' 个工具已发现' : '未发现工具')
-  } catch (e: any) {
-    showToast('发现工具失败: ' + e.message)
-  } finally {
-    mcpDiscovering.value = null
-  }
-}
 
 </script>
 
@@ -302,53 +251,8 @@ async function refreshTools(index: number) {
 
         <!-- MCP Servers -->
         <div class="section-title">他的工具箱</div>
-        <ToolboxPanel :legacy="mcpList" @moved="onMovedToToolbox" />
+        <ToolboxPanel />
 
-        <div class="section-title">（旧）直接连的 MCP</div>
-        <p class="worldbook-hint">只在这台手机的 Eclipsis 聊天里能用，他醒来时用不了。新的工具建议加到上面的工具箱。</p>
-
-        <div class="mcp-list">
-          <div v-for="(srv, i) in mcpList" :key="srv.id" class="mcp-item">
-            <div class="mcp-header">
-              <button
-                class="wb-group-toggle"
-                :class="{ enabled: srv.enabled }"
-                @click="toggleMcpServer(i)"
-              >{{ srv.enabled ? '●' : '○' }}</button>
-              <input
-                v-model="srv.name"
-                class="mcp-name-input"
-                placeholder="服务器名称"
-                @input="saveMcpList"
-              />
-              <button class="mcp-refresh" @click="refreshTools(i)" :disabled="mcpDiscovering === srv.id">
-                {{ mcpDiscovering === srv.id ? '...' : '🔄' }}
-              </button>
-              <button class="wb-group-del" @click="removeMcpServer(i)">🗑</button>
-            </div>
-            <div class="mcp-body">
-              <input
-                v-model="srv.url"
-                class="wb-title-input"
-                placeholder="MCP 端点 URL"
-                @input="saveMcpList"
-              />
-              <input
-                v-model="srv.token"
-                type="password"
-                class="wb-title-input"
-                placeholder="Bearer Token（可选）"
-                @input="saveMcpList"
-              />
-              <div v-if="srv.tools.length > 0" class="mcp-tools">
-                <span class="mcp-tools-label">{{ srv.tools.length }} 个工具:</span>
-                <span class="mcp-tool-tag" v-for="t in srv.tools" :key="t.name" :title="t.description">{{ t.name }}</span>
-              </div>
-              <div v-else class="mcp-tools-empty">未发现工具 — 填好 URL 后点 🔄</div>
-            </div>
-          </div>
-        </div>
-        <button class="wb-add" @click="addMcpServer">+ 添加 MCP 服务器</button>
 
         <div class="section-title">账户</div>
         <a class="logout-link" href="/logout">退出登录</a>
@@ -636,47 +540,14 @@ label input:focus { border-color: rgba(0, 0, 0, 0.25); }
 }
 
 /* MCP */
-.mcp-list { display: flex; flex-direction: column; gap: 12px; margin-bottom: 12px; }
 
-.mcp-item {
-  border: 1px solid rgba(0, 0, 0, 0.08); border-radius: 10px;
-  overflow: hidden; background: rgba(255, 255, 255, 0.5);
-}
 
-.mcp-header {
-  display: flex; align-items: center; gap: 8px;
-  padding: 10px 12px; background: rgba(255, 255, 255, 0.6);
-  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
-}
 
-.mcp-name-input {
-  flex: 1; padding: 4px 8px; border: 1px solid rgba(0, 0, 0, 0.08);
-  border-radius: 4px; background: rgba(255, 255, 255, 0.7); color: rgba(0, 0, 0, 0.7);
-  font-size: 14px; font-weight: 500; outline: none;
-}
-.mcp-name-input:focus { border-color: rgba(0, 0, 0, 0.2); }
 
-.mcp-refresh {
-  background: none; border: 1px solid rgba(0, 0, 0, 0.1); border-radius: 4px;
-  color: rgba(0, 0, 0, 0.4); font-size: 14px; width: 28px; height: 28px;
-  cursor: pointer; display: flex; align-items: center; justify-content: center;
-}
-.mcp-refresh:hover { color: rgba(0, 0, 0, 0.6); border-color: rgba(0, 0, 0, 0.2); }
-.mcp-refresh:disabled { opacity: 0.4; cursor: wait; }
 
-.mcp-body { padding: 8px 12px 12px; display: flex; flex-direction: column; gap: 8px; }
 
-.mcp-tools { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
-.mcp-tools-label { font-size: 11px; color: rgba(0, 0, 0, 0.4); margin-right: 4px; }
 
-.mcp-tool-tag {
-  font-size: 10px; padding: 2px 6px; border-radius: 3px;
-  background: rgba(0, 0, 0, 0.04); color: rgba(0, 0, 0, 0.5);
-  border: 1px solid rgba(0, 0, 0, 0.06);
-  max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
 
-.mcp-tools-empty { font-size: 12px; color: rgba(0, 0, 0, 0.3); }
 
 /* Toast */
 .toast {
