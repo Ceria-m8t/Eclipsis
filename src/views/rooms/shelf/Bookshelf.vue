@@ -18,6 +18,7 @@ import {
   ASSET, SHELF_IMG, MAIN_LOOK, worldLook, loadWorldbook, saveWorldbook, spineTitle, coverTitle,
   loadBookFont, shelfOrder, applyShelfOrder, lastPriority, newBookId, type BookLook, type WorldbookEntry
 } from './books'
+import meta from './book-assets.json'
 import { loadPrompt, savePrompt } from '../../../prompt-store'
 
 const router = useRouter()
@@ -43,6 +44,15 @@ const ROWS = [
   { bottom: 0.497, x0: 0.28, x1: 0.965 },   // 上面那层：左边有烛台，从 28% 开始摆
   { bottom: 0.787, x0: 0.105, x1: 0.965 }
 ]
+// 书多了不缩小，书架往下长：原图第二、三块搁板之间那一格（books.py 切好、接缝淡入过）一格一格接在下面。
+// 下面所有纵向位置都按"原图高度 = 1"算，接了 n 格以后整张书架高 1 + n·CELL（E）
+const CELL_TOP = meta.shelfCell.top
+const CELL_BOT = meta.shelfCell.bottom
+const CELL = CELL_BOT - CELL_TOP
+const MAX_EXTRA = 30
+function rowAt(r: number) {
+  return r < ROWS.length ? ROWS[r]! : { bottom: ROWS[1]!.bottom + (r - 1) * CELL, x0: ROWS[1]!.x0, x1: ROWS[1]!.x1 }
+}
 const DECOR_ROWS = [
   { bottom: 0.196, x0: 0.105, x1: 1.0, seed: 3 },
   { bottom: 1.077, x0: 0.105, x1: 1.0, seed: 11 }
@@ -74,27 +84,30 @@ function size(look: BookLook, k: number) {
   return { h, w: h * H_OVER_W * (look.spine.w / look.spine.h) * WIDEN[look.kind] }
 }
 
-function place(list: Item[], k: number): { placed: Placed[]; overflow: boolean } {
+function place(list: Item[]): { placed: Placed[]; rows: number } {
   const placed: Placed[] = []
   let row = 0
-  let x = ROWS[0].x0
+  let x = rowAt(0).x0
   for (const it of list) {
-    const s = size(it.look, k)
-    while (row < ROWS.length && x + s.w > ROWS[row].x1) { row++; if (row < ROWS.length) x = ROWS[row].x0 }
-    if (row >= ROWS.length) return { placed, overflow: true }
-    placed.push({ ...it, x, bottom: ROWS[row].bottom, w: s.w, h: s.h })
+    const s = size(it.look, 1)
+    while (x + s.w > rowAt(row).x1 && row < ROWS.length + MAX_EXTRA - 1) { row++; x = rowAt(row).x0 }
+    placed.push({ ...it, x, bottom: rowAt(row).bottom, w: s.w, h: s.h })
     x += s.w + GAP
   }
-  return { placed, overflow: false }
+  return { placed, rows: row + 1 }
 }
 
-// 书多了就整体缩小一点，最多缩到 0.6
-const layout = computed<Placed[]>(() => {
-  let k = 1
-  let r = place(items.value, k)
-  while (r.overflow && k > 0.6) { k -= 0.05; r = place(items.value, k) }
-  return r.placed
-})
+const placement = computed(() => place(items.value))
+const layout = computed<Placed[]>(() => placement.value.placed)
+/** 往下接了几格 */
+const extraRows = computed(() => Math.max(0, placement.value.rows - ROWS.length))
+/** 整张书架有多高（原图高 = 1） */
+const E = computed(() => 1 + extraRows.value * CELL)
+// 纵向位置（原图高度为单位）→ 书架盒子里的百分比
+const pct = (y: number) => `${(y / E.value) * 100}%`
+const fromBottom = (y: number) => `${(1 - y / E.value) * 100}%`
+/** 原图在 CELL_BOT 以下那一截（最下面那块搁板和底座），接了格子以后往下挪 */
+const shiftLow = (y: number) => (y > CELL_BOT ? y + extraRows.value * CELL : y)
 
 // 装饰用的书：固定的伪随机顺序，每次打开都一样
 const decor = computed(() => {
@@ -106,7 +119,7 @@ const decor = computed(() => {
     while (x < row.x1) {
       const look = worldLook(Math.floor(rnd() * 8))
       const s = size(look, 1)
-      out.push({ key: `d${row.seed}-${out.length}`, look, x, bottom: row.bottom, w: s.w, h: s.h })
+      out.push({ key: `d${row.seed}-${out.length}`, look, x, bottom: shiftLow(row.bottom), w: s.w, h: s.h })
       x += s.w + GAP + (rnd() < 0.18 ? 0.02 + rnd() * 0.03 : 0)
     }
   }
@@ -244,9 +257,25 @@ interface Drag { key: string; index: number; look: BookLook; title: string; kind
 const drag = ref<Drag | null>(null)
 let dragStartOrder: number[] = []
 
-function stagePoint(e: PointerEvent) {
+function stagePoint(e: { clientX: number; clientY: number }) {
   const r = stage.value!.getBoundingClientRect()
-  return { px: (e.clientX - r.left) / r.width, py: (e.clientY - r.top) / r.height }
+  return { px: (e.clientX - r.left) / r.width, py: ((e.clientY - r.top) / r.height) * E.value }
+}
+// 拖到屏幕上下边缘：书架跟着滚（书多了往下长，要能拖到下面那几层）
+let lastPointer: { clientX: number; clientY: number } | null = null
+let edgeRaf = 0
+function edgeScroll() {
+  edgeRaf = 0
+  const sc = scroller.value
+  if (!drag.value || !sc || !lastPointer) return
+  const y = lastPointer.clientY, h = innerHeight
+  const v = y > h - 90 ? (y - (h - 90)) / 6 : y < 110 ? -(110 - y) / 6 : 0
+  if (v) {
+    const before = sc.scrollTop
+    sc.scrollTop += v
+    if (sc.scrollTop !== before) moveDrag(lastPointer)
+  }
+  edgeRaf = requestAnimationFrame(edgeScroll)
 }
 function startDrag(e: PointerEvent) {
   const it = pressItem
@@ -258,27 +287,33 @@ function startDrag(e: PointerEvent) {
   drag.value = { key: it.key, index: it.index, look: it.look, title: it.title, kind: it.kind, w: it.w, h: it.h,
     x: it.x, y: top, dx: px - it.x, dy: py - top }
   peek.value = null
+  stopPressListen()
   // 手指拖着会离开这本书（别的书在让位），松手也可能落在书架空处：整页听
   window.addEventListener('pointermove', moveDrag)
   window.addEventListener('pointerup', onDragUp)
   window.addEventListener('pointercancel', onDragCancel)
+  lastPointer = { clientX: e.clientX, clientY: e.clientY }
+  if (!edgeRaf) edgeRaf = requestAnimationFrame(edgeScroll)
   navigator.vibrate?.(10)
 }
 const onDragUp = () => endDrag(true)
 const onDragCancel = () => endDrag(false)
-function moveDrag(e: PointerEvent) {
+function moveDrag(e: { clientX: number; clientY: number }) {
   const d = drag.value
   if (!d || !dragOrder.value) return
+  lastPointer = { clientX: e.clientX, clientY: e.clientY }
   const { px, py } = stagePoint(e)
   d.x = px - d.dx
   d.y = py - d.dy
   // 落在哪一层：离手指最近的那层搁板
   const cy = d.y + d.h / 2
   let row = 0
-  ROWS.forEach((r, i) => { if (Math.abs(cy - (r.bottom - d.h / 2)) < Math.abs(cy - (ROWS[row]!.bottom - d.h / 2))) row = i })
+  for (let i = 1; i < placement.value.rows; i++) {
+    if (Math.abs(cy - (rowAt(i).bottom - d.h / 2)) < Math.abs(cy - (rowAt(row).bottom - d.h / 2))) row = i
+  }
   const rest = dragOrder.value.filter(i => i !== d.index)
   const keyOf = (i: number) => (i < 0 ? 'main' : entries.value[i]!.id || `w${i}`)
-  const inRow = layout.value.filter(p => p.bottom === ROWS[row]!.bottom && p.kind !== 'add' && p.key !== d.key)
+  const inRow = layout.value.filter(p => p.bottom === rowAt(row).bottom && p.kind !== 'add' && p.key !== d.key)
   const cx = d.x + d.w / 2
   const hit = inRow.find(p => cx < p.x + p.w / 2)
   let at: number
@@ -289,6 +324,7 @@ function moveDrag(e: PointerEvent) {
   if (next.join() !== dragOrder.value.join()) dragOrder.value = next
 }
 function endDrag(commit: boolean) {
+  cancelAnimationFrame(edgeRaf); edgeRaf = 0; lastPointer = null
   window.removeEventListener('pointermove', moveDrag)
   window.removeEventListener('pointerup', onDragUp)
   window.removeEventListener('pointercancel', onDragCancel)
@@ -318,6 +354,9 @@ function onPressStart(it: Placed, e: PointerEvent) {
     const title = it.kind === 'add' ? '添一本' : it.title || '无题'
     // 书名牌放在书的正上方；太靠边就往里挪，不出屏幕
     peek.value = { key: it.key, title, x: Math.min(0.82, Math.max(0.18, it.x + it.w / 2)), top: it.bottom - it.h }
+    // 书名出来以后手指一动可能就离开这本书了：整页听，接着拖
+    window.addEventListener('pointermove', onPressMove)
+    window.addEventListener('pointerup', onPressEnd)
     navigator.vibrate?.(8)
   }, 380)
 }
@@ -328,7 +367,12 @@ function onPressMove(e: PointerEvent) {
   if (peek.value && pressItem?.kind !== 'add') startDrag(e)
   else onPressEnd()
 }
+function stopPressListen() {
+  window.removeEventListener('pointermove', onPressMove)
+  window.removeEventListener('pointerup', onPressEnd)
+}
 function onPressEnd() {
+  stopPressListen()
   if (drag.value) return   // 拖的时候由整页的 pointerup 收尾
   if (pressTimer) { clearTimeout(pressTimer); pressTimer = null }
   pressStart = null
@@ -336,7 +380,8 @@ function onPressEnd() {
   peek.value = null
 }
 function onPressLeave() {
-  if (!drag.value) onPressEnd()
+  // 书名已经出来（按够了）时手指离开这本书 = 要拖，别结束
+  if (!drag.value && !peek.value) onPressEnd()
 }
 function onSpineClick(it: Placed) {
   if (suppressClick) { suppressClick = false; return }
@@ -520,11 +565,16 @@ const groups = computed(() => [...new Set(entries.value.map(e => e.group))])
 
 // ── 进出书架 ──
 const stage = ref<HTMLElement | null>(null)
+const scroller = ref<HTMLElement | null>(null)
+function onTouchMove(e: TouchEvent) {
+  if (peek.value || drag.value) e.preventDefault()
+}
 onMounted(() => {
+  scroller.value?.addEventListener('touchmove', onTouchMove, { passive: false })
   const sample = [MAIN_TITLE, NEW_TITLE, ...entries.value.map(e => e.title)].join('')
   document.fonts?.load(`${font.weight} 20px ${font.family}`, sample).then(() => fontsReady.value++).catch(() => {})
-  stage.value?.animate(
-    [{ transform: 'translate(-50%, -50%) scale(1.1)', opacity: 0 }, { transform: 'translate(-50%, -50%) scale(1)', opacity: 1 }],
+  scroller.value?.animate(
+    [{ transform: 'scale(1.1)', opacity: 0 }, { transform: 'scale(1)', opacity: 1 }],
     { duration: D(520), easing: 'cubic-bezier(.2,.7,.3,1)' })
 })
 function back() {
@@ -553,15 +603,28 @@ const animSpineLabel = computed(() => anim.value ? (void fontsReady.value, spine
   <!-- 放到 body 下：底栏在外层的层级里，不挪出去会盖在书架上 -->
   <Teleport to="body">
   <div class="shelf-page">
-    <div ref="stage" class="stage" :style="{ aspectRatio: `${SHELF_IMG.w} / ${SHELF_IMG.h}`, '--hw': H_OVER_W }">
-      <img class="shelf-img" data-glass-backdrop :src="ASSET + SHELF_IMG.file" alt="书架" draggable="false" />
+    <div ref="scroller" class="shelf-scroll" :class="{ tall: extraRows > 0 }">
+    <div ref="stage" class="stage" :style="{ aspectRatio: `${SHELF_IMG.w} / ${SHELF_IMG.h * E}`, '--hw': H_OVER_W, '--E': E }">
+      <img v-if="!extraRows" class="shelf-img" data-glass-backdrop :src="ASSET + SHELF_IMG.file" alt="书架" draggable="false" />
+      <template v-else>
+        <!-- 原图上半截（到第三块搁板）、往下接的格子、原图最下面那截 -->
+        <div class="shelf-bg" :style="{ top: '0%', height: pct(CELL_BOT) }">
+          <img class="shelf-img" data-glass-backdrop :src="ASSET + SHELF_IMG.file" alt="书架" draggable="false" :style="{ top: '0%', height: `${100 / CELL_BOT}%` }" />
+        </div>
+        <div v-for="j in extraRows" :key="j" class="shelf-bg" :style="{ top: pct(CELL_BOT + (j - 1) * CELL), height: pct(CELL) }">
+          <img class="shelf-img" data-glass-backdrop :src="ASSET + meta.shelfCell.file" alt="" draggable="false" :style="{ top: '0%', height: '100%' }" />
+        </div>
+        <div class="shelf-bg" :style="{ top: pct(CELL_BOT + extraRows * CELL), height: pct(1 - CELL_BOT) }">
+          <img class="shelf-img" data-glass-backdrop :src="ASSET + SHELF_IMG.file" alt="" draggable="false" :style="{ top: `${-CELL_BOT / (1 - CELL_BOT) * 100}%`, height: `${100 / (1 - CELL_BOT)}%` }" />
+        </div>
+      </template>
 
       <!-- 装饰用的书 -->
       <div
         v-for="d in decor"
         :key="d.key"
         class="spine decor"
-        :style="{ left: `${d.x * 100}%`, bottom: `${(1 - d.bottom) * 100}%`, width: `${d.w * 100}%`, height: `${d.h * 100}%`, '--mask': `url(${ASSET + d.look.spine.file}) center / 100% 100% no-repeat` }"
+        :style="{ left: `${d.x * 100}%`, bottom: fromBottom(d.bottom), width: `${d.w * 100}%`, height: pct(d.h), '--mask': `url(${ASSET + d.look.spine.file}) center / 100% 100% no-repeat` }"
       >
         <img :src="ASSET + d.look.spine.file" alt="" draggable="false" />
       </div>
@@ -573,7 +636,7 @@ const animSpineLabel = computed(() => anim.value ? (void fontsReady.value, spine
         :ref="el => setSpineEl(it.key, el)"
         class="spine"
         :class="[it.kind, { off: !it.enabled, hidden: hiddenKey === it.key, peeking: peek?.key === it.key, placeholder: drag?.key === it.key, reflow: !!drag }]"
-        :style="{ left: `${it.x * 100}%`, bottom: `${(1 - it.bottom) * 100}%`, width: `${it.w * 100}%`, height: `${it.h * 100}%`, '--mask': `url(${ASSET + it.look.spine.file}) center / 100% 100% no-repeat` }"
+        :style="{ left: `${it.x * 100}%`, bottom: fromBottom(it.bottom), width: `${it.w * 100}%`, height: pct(it.h), '--mask': `url(${ASSET + it.look.spine.file}) center / 100% 100% no-repeat` }"
         :aria-label="it.kind === 'add' ? '添一本世界书' : it.title"
         @click="onSpineClick(it)"
         @pointerdown="onPressStart(it, $event)"
@@ -599,7 +662,7 @@ const animSpineLabel = computed(() => anim.value ? (void fontsReady.value, spine
         class="spine dragging"
         :class="drag.kind"
         aria-hidden="true"
-        :style="{ left: `${drag.x * 100}%`, top: `${drag.y * 100}%`, width: `${drag.w * 100}%`, height: `${drag.h * 100}%` }"
+        :style="{ left: `${drag.x * 100}%`, top: pct(drag.y), width: `${drag.w * 100}%`, height: pct(drag.h) }"
       >
         <img :src="ASSET + drag.look.spine.file" alt="" draggable="false" />
         <span v-if="drag.kind !== 'main'" class="spine-title" :style="{ ...labelBox(drag.look), fontFamily: font.family, fontWeight: font.weight }">
@@ -611,9 +674,10 @@ const animSpineLabel = computed(() => anim.value ? (void fontsReady.value, spine
         <div
           v-if="peek"
           class="peek glass"
-          :style="{ left: `${peek.x * 100}%`, bottom: `calc(${(1 - peek.top) * 100}% + 10px)`, fontFamily: font.family, fontWeight: font.weight }"
+          :style="{ left: `${peek.x * 100}%`, bottom: `calc(${fromBottom(peek.top)} + 10px)`, fontFamily: font.family, fontWeight: font.weight }"
         >{{ peek.title }}</div>
       </Transition>
+    </div>
     </div>
 
     <!-- 拿出来的那本（3D） -->
@@ -730,12 +794,29 @@ const animSpineLabel = computed(() => anim.value ? (void fontsReady.value, spine
   background: #0e1526;
 }
 /* 书架图铺满屏幕（像 background-size: cover），书按图里的比例摆，所以都放在这个盒子里 */
+/* 书架能上下滑（书多了往下长的时候） */
+.shelf-scroll {
+  position: absolute; inset: 0;
+  overflow: hidden;
+}
+.shelf-scroll.tall {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
 .stage {
   position: absolute;
   left: 50%; top: 50%;
   width: max(100vw, calc(var(--app-h, 100dvh) / var(--hw)));
-  transform: translate(-50%, -50%);
+  /* 第一屏和没接格子时一模一样：按原图高度居中，接的格子往下长 */
+  transform: translate(-50%, calc(-50% / var(--E, 1)));
+  overflow: hidden;
 }
+.shelf-bg {
+  position: absolute; left: 0; right: 0;
+  overflow: hidden;
+}
+.shelf-bg .shelf-img { inset: auto; left: 0; width: 100%; }
 .shelf-img {
   position: absolute; inset: 0;
   width: 100%; height: 100%;
@@ -771,7 +852,8 @@ const animSpineLabel = computed(() => anim.value ? (void fontsReady.value, spine
 .spine:not(.decor):active { transform: translateY(-2%); }
 .spine.peeking { transform: translateY(-5%); }
 /* 能拿的书：手指在书上按住拖时，别让浏览器拿去滚动/缩放 */
-.spine:not(.decor) { touch-action: none; }
+/* 能上下滑书架；按住以后（书名浮出来）touchmove 被拦下，拖书时页面不动 */
+.spine:not(.decor) { touch-action: pan-y; }
 /* 拖的时候：别的书滑着让位，原来的位置留个淡影 */
 .spine.reflow { transition: transform 0.2s ease, left 0.22s ease, bottom 0.22s ease; }
 .spine.placeholder { opacity: 0.28; }
