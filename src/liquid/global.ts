@@ -461,7 +461,8 @@ function frame() {
     const c = st.canvas
     if (c.width !== pw || c.height !== ph) { c.width = pw; c.height = ph }
     // 绝对定位从边框里面算起：退回边框宽度，画布才和宿主外沿对齐
-    c.style.left = -el.clientLeft + 'px'
+    // 能滚动的宿主（弹出面板）：画布跟着滚动量走，看上去钉在面板上不动（横着被推开时也一样）
+    c.style.left = (scrolls ? el.scrollLeft : 0) - el.clientLeft + 'px'
     c.style.top = canvasTop - el.clientTop + 'px'
     c.style.width = lw + 'px'
     c.style.height = wh + 'px'

@@ -291,7 +291,7 @@ function toast(t: string) {
   border-radius: 28px;
   padding: 8px 12px 12px;
   max-height: 82%;
-  overflow-y: auto;
+  overflow-y: auto; overflow-x: hidden;
   display: flex; flex-direction: column; gap: 6px;
 }
 .sheet-grip { width: 36px; height: 5px; border-radius: 3px; background: rgba(0,0,0,.15); align-self: center; margin: 2px 0 6px; }
@@ -308,7 +308,7 @@ function toast(t: string) {
   font-family: var(--mono); font-size: 12px; line-height: 1.6;
   white-space: pre-wrap; word-break: break-word;
   background: rgba(255, 255, 255, 0.6); border-radius: 16px; padding: 12px;
-  max-height: 55vh; overflow-y: auto;
+  max-height: 55vh; overflow-y: auto; overflow-x: hidden; overflow-x: hidden;
 }
 .sheet-row { display: flex; gap: 10px; padding-top: 6px; }
 

@@ -800,7 +800,7 @@ const animSpineLabel = computed(() => anim.value ? (void fontsReady.value, spine
   overflow: hidden;
 }
 .shelf-scroll.tall {
-  overflow-y: auto;
+  overflow-y: auto; overflow-x: hidden;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
 }

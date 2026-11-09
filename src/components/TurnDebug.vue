@@ -149,7 +149,7 @@ function verdict(r: Round): string {
 .td-model { word-break: break-all; font-size: 12px; }
 .td-list { font-size: 12px; border-top: 1px solid rgba(0, 0, 0, 0.05); padding-top: 6px; }
 .td-list summary { color: var(--accent); padding: 4px 0; cursor: pointer; }
-.td-list ol { list-style: none; max-height: 40vh; overflow-y: auto; }
+.td-list ol { list-style: none; max-height: 40vh; overflow-y: auto; overflow-x: hidden; }
 .td-list li {
   display: grid; grid-template-columns: 3em 5.5em 1fr; gap: 6px;
   padding: 3px 0; border-bottom: 1px solid rgba(0, 0, 0, 0.03);

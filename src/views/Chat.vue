@@ -1519,7 +1519,7 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
 /* 聊天样式面板：浅遮罩、只占下半屏 */
 .scrim-light { background: rgba(30, 36, 56, 0.06); }
 .sheet.style-sheet { max-height: 58%; }
-.style-scroll { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; padding-top: 4px; }
+.style-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; padding-top: 4px; }
 .plus-foot { padding: 8px 16px 0; font-size: 11px; line-height: 1.5; color: var(--text-3); text-align: center; }
 
 /* ===== 消息区 ===== */
@@ -1527,7 +1527,7 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
   position: absolute;
   inset: 0;
   z-index: 1;
-  overflow-y: auto;
+  overflow-y: auto; overflow-x: hidden;
   /* 只许上下滚：iOS 上内容哪怕宽出一点点，手指斜着划就会左右晃 */
   overflow-x: hidden;
   touch-action: pan-y;
@@ -1804,7 +1804,7 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
   color: var(--text-2);
   white-space: pre-wrap;
   max-height: 40vh;
-  overflow-y: auto;
+  overflow-y: auto; overflow-x: hidden;
   user-select: text;
   -webkit-user-select: text;
 }
@@ -1821,7 +1821,7 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
   white-space: pre-wrap;
   word-break: break-all;
   max-height: 200px;
-  overflow-y: auto;
+  overflow-y: auto; overflow-x: hidden;
   color: var(--text-2);
   user-select: text;
   -webkit-user-select: text;
@@ -2049,7 +2049,7 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
   max-height: 80%;
   display: flex;
   flex-direction: column;
-  overflow-y: auto;
+  overflow-y: auto; overflow-x: hidden;
 }
 .sheet-grip {
   width: 36px; height: 5px;
@@ -2120,6 +2120,9 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
   color: var(--text-2);
 }
 .style-grid label { display: flex; flex-direction: column; gap: 6px; }
+/* 两列格子里的滑杆别把面板撑宽（撑宽了 iOS 上面板能左右推） */
+.style-grid > *, .glass-sec > * { min-width: 0; }
+.style-sheet, .style-scroll { touch-action: pan-y; }
 .style-grid .full { grid-column: 1 / -1; }
 .style-grid .row { display: flex; gap: 6px; align-items: center; }
 .style-grid input[type=color] { width: 44px; height: 30px; border: none; background: none; padding: 0; }

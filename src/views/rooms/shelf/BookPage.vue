@@ -153,7 +153,7 @@ function remove() {
 .scroll { position: relative; }
 .scroll {
   flex: 1;
-  overflow-y: auto;
+  overflow-y: auto; overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
 }

@@ -285,7 +285,7 @@ function pickBookFont(id: string) { bookFont.value = id; saveBookFont(id) }
   width: 100%;
   background: transparent;
   color: var(--text);
-  overflow-y: auto;
+  overflow-y: auto; overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
 }
 
