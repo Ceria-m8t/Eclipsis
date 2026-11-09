@@ -1415,9 +1415,9 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
 /* ===== 气泡 ===== */
 .bubble {
   max-width: 100%;
-  /* 内边距和圆角跟着字号走（15px 时约 6/11、圆角 17），气泡更贴字 */
-  padding: 0.4em 0.75em;
-  border-radius: 1.15em;
+  /* 形状参考 Erica 给的图三：圆角矩形（不是胶囊），左右留白多一点。跟着字号走（15px 时 7/13、圆角 12） */
+  padding: 0.45em 0.88em;
+  border-radius: 0.78em;
   font-size: var(--bubble-font-size, 15px);
   font-family: inherit;
   line-height: 1.5;
@@ -1681,13 +1681,14 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
   position: absolute;
   left: 0; right: 0; bottom: 0;
   z-index: 20;
-  padding: 0 12px 10px;
+  padding: 0 12px 8px;
 }
 /* 键盘弹起时底部横条区域被键盘盖住，不需要再留安全区 */
 
+/* 收矮（Erica 红线：上沿落到原来「+」那一行的位置） */
 .input-capsule {
-  border-radius: 28px;
-  padding: 14px 10px 10px 18px;
+  border-radius: 24px;
+  padding: 5px 6px 4px 16px;
   display: flex;
   flex-direction: column;
 }
@@ -1711,15 +1712,15 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
   resize: none;
   background: transparent;
   font-size: 16px;   /* 小于 16px 时 iOS 聚焦会自动放大页面 */
-  line-height: 1.5;
+  line-height: 1.4;
   max-height: 120px;
-  padding: 4px 0 8px;
+  padding: 2px 0 1px;
 }
 .input-text::placeholder { color: var(--text-3); }
 .input-tools { display: flex; align-items: center; gap: 6px; }
 .tool-btn {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 34px; height: 34px;
+  width: 26px; height: 26px;
   border-radius: 50%;
   color: var(--text-2);
   cursor: pointer;
@@ -1734,7 +1735,7 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
   text-overflow: ellipsis;
 }
 .send-btn {
-  width: 38px; height: 38px;
+  width: 28px; height: 28px;
   border-radius: 50%;
   border: 1px solid rgba(255, 255, 255, 0.8);
   background: rgba(255, 255, 255, 0.55);

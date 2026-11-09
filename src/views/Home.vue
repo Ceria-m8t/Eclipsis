@@ -95,8 +95,8 @@ function go(t: (typeof tabs)[number]) {
   display: flex;
   justify-content: space-around;
   align-items: stretch;
-  height: calc(var(--tabbar-h) + var(--safe-bottom));
-  padding: 4px 12px var(--safe-bottom);
+  height: calc(var(--tabbar-h) + var(--tabbar-safe));
+  padding: 0 12px var(--tabbar-safe);
   position: relative;
   z-index: 50;
   background: var(--tabbar-bg, rgba(255, 255, 255, 0.38));
@@ -117,8 +117,8 @@ function go(t: (typeof tabs)[number]) {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
-  margin: 2px 4px;
+  gap: 1px;
+  margin: 0 4px;
   border: none;
   border-radius: 16px;
   background: none;
@@ -132,8 +132,8 @@ function go(t: (typeof tabs)[number]) {
     inset 0 -1px 1px rgba(255, 255, 255, 0.3),
     0 2px 10px rgba(60, 72, 110, 0.08);
 }
-.tab-icon { font-size: 20px; line-height: 1.1; }
-.tab-label { font-size: 11px; }
+.tab-icon { font-size: 16px; line-height: 1; }
+.tab-label { font-size: 10px; line-height: 1.1; }
 .tab-btn.active .tab-label { font-weight: 600; }
 </style>
 
