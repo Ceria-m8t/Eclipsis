@@ -22,7 +22,9 @@ export function fromServer(it: SrvItem): ChatMessage {
   const createdAt = Date.parse(it.ts)
   const srv = { seqs: it.seqs, turn: it.turn, source: it.source }
   if (it.role === 'user') {
-    return { id: it.id, seq: it.seq, role: 'user', createdAt, content: it.content, raw: it.raw, images: it.images, srv }
+    // 早先从 xiaoke 导入的图片只剩「[图片]」两个字（xiaoke 不存图），照样显示出来，别成空的
+    const content = it.content || (it.images?.length ? '' : '[图片]')
+    return { id: it.id, seq: it.seq, role: 'user', createdAt, content, raw: it.raw, images: it.images, srv }
   }
   const versions: MessageVersion[] = (it.versions || []).map(v => {
     const out: MessageVersion = { content: v.content, createdAt: Date.parse(v.ts), srvSeqs: v.seqs }
