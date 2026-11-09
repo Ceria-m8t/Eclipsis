@@ -112,6 +112,26 @@ export function contextTail(before: ChatMessage[]): ChatMessage[] {
   return []
 }
 
+// ---- 上次看到的最新一段：进聊天页先画它，再在后台跟后端对一遍（不然每次进来都要等网络） ----
+const CACHE_KEY = 'eclipsis-chat-cache'
+const CACHE_MAX = 150
+let memCache: ChatMessage[] | null = null
+
+export function readCache(): ChatMessage[] | null {
+  if (memCache) return memCache
+  try {
+    const raw = localStorage.getItem(CACHE_KEY)
+    if (raw) memCache = JSON.parse(raw)
+  } catch {}
+  return memCache
+}
+
+export function writeCache(list: ChatMessage[]) {
+  const srv = list.filter(m => m.srv && !m.error).slice(-CACHE_MAX)
+  memCache = srv
+  try { localStorage.setItem(CACHE_KEY, JSON.stringify(srv)) } catch { /* 太大存不下：只留内存里那份 */ }
+}
+
 // ---- 还没发出去的几句：存在本机，刷新/切走不会丢 ----
 const PENDING_KEY = 'eclipsis-chat-pending'
 

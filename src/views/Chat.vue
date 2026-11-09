@@ -18,7 +18,7 @@ import { liquidActive } from '../liquid/global'
 import { type ChatMessage, type MessageVersion, newId } from '../db'
 import {
   loadLatest, loadBefore, loadAfter, deleteOnServer, mergeServer, contextTail,
-  lastServerSeq, firstServerSeq, savePending, loadPending
+  lastServerSeq, firstServerSeq, savePending, loadPending, readCache, writeCache
 } from '../chat-store'
 
 const settings = ref(getSettings())
@@ -235,6 +235,12 @@ function textOf(m: ChatMessage): string {
 function persist(_m?: ChatMessage, _immediate = false) {
   savePending(messages.value)
 }
+// 最新一段存一份在本机，下次进来先画它
+let cacheTimer = 0
+watch(messages, () => {
+  clearTimeout(cacheTimer)
+  cacheTimer = window.setTimeout(() => writeCache(messages.value), 800)
+})
 
 // ---- 和后端同步 ----
 const hasMore = ref(false)
@@ -800,16 +806,26 @@ onMounted(async () => {
   applyCustomCSS()
   // 以前存在这台手机里的旧聊天（测试消息）不再读，Erica 说不要了
   const pending = loadPending()
+  // 先画上次看到的（瞬间出来），再在后台拿后端最新的换上（别处删的、Kelivo 新聊的都会对上）
+  const cached = readCache()
+  if (cached?.length) {
+    messages.value = mergeServer(pending, cached)
+    hasMore.value = true
+    loaded.value = true
+    scrollToBottom(true)
+  }
   try {
     const r = await loadLatest()
-    messages.value = mergeServer(pending, r.messages)
+    const atBottom = stickToBottom
+    const locals = messages.value.filter(m => !m.srv)
+    messages.value = mergeServer(cached?.length ? locals : pending, r.messages)
     hasMore.value = r.hasMore
+    if (atBottom) scrollToBottom(true)
   } catch (err: any) {
-    messages.value = pending
+    if (!cached?.length) messages.value = pending
     toast(err.message)
   }
-  loaded.value = true
-  scrollToBottom(true)
+  if (!loaded.value) { loaded.value = true; scrollToBottom(true) }
   pollTimer = window.setInterval(onVisible, 20_000)
   document.addEventListener('visibilitychange', onVisible)
 
