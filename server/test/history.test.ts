@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { todayStart, selectHistory, toMessages, requestHistory, TARGET, type HistRow } from '../src/assembler/history.ts'
+import { openDb, addEpisode } from '../src/db.ts'
+import { todayStart, selectHistory, toMessages, requestHistory, TARGET, type HistRow, replaceHistory, renderTodayLine } from '../src/assembler/history.ts'
 
 const H = 3600_000
 const base = Date.parse('2026-11-09T10:00:00Z')   // 中国时间 11-09 18:00
@@ -54,4 +55,96 @@ test('requestHistory：去掉 system 和这一轮，工具轮不算', () => {
     { role: 'user', content: '查天气' }, { role: 'assistant', content: '', tool_calls: [{ id: 'x' }] }, { role: 'tool', content: '晴' },
   ]
   assert.deepEqual(requestHistory(msgs), [{ role: 'user', text: '早' }, { role: 'assistant', text: '早呀' }])
+})
+
+test('换掉请求里的历史：system 和这一轮留着，中间换成我们拼的；起标题这类请求不换', () => {
+  const db = openDb(':memory:')
+  const now = Date.parse('2026-11-11T06:00:00Z')
+  const put = (actor: 'erica' | 'ai', min: number, text: string) =>
+    addEpisode(db, { ts: new Date(now - min * 60_000).toISOString(), channel: 'chat', scope: 'daily', actor, kind: 'message', content: text, sourceRef: `${actor}${min}` })
+  put('erica', 50, '早上好')
+  put('ai', 49, '早。')
+  put('erica', 20, '在干嘛')
+  put('ai', 19, '想你。')
+
+  const req = [
+    { role: 'system', content: 'Kelivo 的大段 system' },
+    { role: 'user', content: 'xiaoke 补进来的旧话' },
+    { role: 'assistant', content: 'xiaoke 补进来的旧回复' },
+    { role: 'user', content: '现在这句' },
+  ]
+  const r = replaceHistory(req, db, now)!
+  assert.equal(r.messages[0]!.content, 'Kelivo 的大段 system')
+  assert.equal(r.messages.at(-1)!.content, '现在这句')
+  assert.deepEqual(r.messages.slice(1, -1).map((m: any) => m.content.replace(/^——.*——\n/, '')), ['早上好', '早。', '在干嘛', '想你。'])
+  assert.deepEqual(r.info, { before: 2, after: 4, today: 4, days: 1 })
+
+  // 起标题、记忆注入、唤醒提示：原样不动
+  const title = [...req.slice(0, 3), { role: 'user', content: '给这段对话起一个简短的标题' }]
+  assert.equal(replaceHistory(title, db, now), null)
+  assert.equal(replaceHistory([...req.slice(0, 3), { role: 'user', content: '[记忆注入] 她说过……' }], db, now), null)
+  // 结尾是他的回复（不是正常一轮）
+  assert.equal(replaceHistory([...req, { role: 'assistant', content: '已经回了' }], db, now), null)
+  // 工具轮：工具那几条也算这一轮，留在后面
+  const tool = [...req, { role: 'assistant', tool_calls: [{ id: '1', type: 'function', function: { name: 'f', arguments: '{}' } }], content: '' }, { role: 'tool', tool_call_id: '1', content: '结果' }]
+  const rt = replaceHistory(tool, db, now)!
+  assert.deepEqual(rt.messages.slice(-3).map((m: any) => m.role), ['user', 'assistant', 'tool'])
+})
+
+test('今日概况那一行：她几点醒的、今天聊了多少、上一句多久以前', () => {
+  const db = openDb(':memory:')
+  const now = Date.parse('2026-11-11T06:00:00Z')      // 北京时间 14:00
+  const put = (actor: 'erica' | 'ai', min: number, text: string) =>
+    addEpisode(db, { ts: new Date(now - min * 60_000).toISOString(), channel: 'chat', scope: 'daily', actor, kind: 'message', content: text, sourceRef: `${actor}${min}` })
+  assert.equal(renderTodayLine(db, now), '')
+  put('erica', 60 * 9, '昨天的话')      // 9 小时前（超过 5 小时 = 睡了一觉）
+  put('ai', 60 * 9 - 1, '昨天的回复')
+  put('erica', 100, '醒了')             // 北京时间 12:20
+  put('ai', 99, '早。')
+  put('erica', 8, '在吗')
+  assert.equal(renderTodayLine(db, now), '今天她 12:20 起（睡醒后第一句），到现在她说了 2 句、你回了 1 条，上一句 8 分钟前')
+})
+
+test('这一轮她的话已经记过了（重新生成、停掉再发）：历史尾巴上不再重复一遍', () => {
+  const db = openDb(':memory:')
+  const now = Date.parse('2026-11-11T06:00:00Z')
+  const put = (actor: 'erica' | 'ai', min: number, text: string, meta?: any) =>
+    addEpisode(db, { ts: new Date(now - min * 60_000).toISOString(), channel: 'chat', scope: 'daily', actor, kind: 'message', content: text, meta, sourceRef: `${actor}${min}` })
+  put('erica', 30, '（2026-11-11 13:30）早上好')
+  put('ai', 29, '早。')
+  put('erica', 3, '（2026-11-11 13:57）在干嘛')      // 这一轮她的话，已经记过
+  put('erica', 2, '（2026-11-11 13:58）说话呀')
+  put('ai', 1, '我在', { partial: true })            // 停掉的那半条
+
+  const req = [
+    { role: 'system', content: 'sys' },
+    { role: 'user', content: '很久以前' },
+    { role: 'assistant', content: '嗯' },
+    { role: 'user', content: '（2026-11-11 13:57）在干嘛' },
+    { role: 'user', content: '（2026-11-11 13:58）说话呀' },
+  ]
+  const r = replaceHistory(req, db, now)!
+  assert.equal(r.info.trimmed, 3, '她那两句 + 没写完的半条')
+  const texts = r.messages.map((m: any) => String(m.content).replace(/^——.*——\n/, ''))
+  assert.deepEqual(texts, ['sys', '（2026-11-11 13:30）早上好', '早。', '（2026-11-11 13:57）在干嘛', '（2026-11-11 13:58）说话呀'])
+})
+
+test('Kelivo 那边她的话后面跟着 <current_time>，也认得出是同一句', () => {
+  const db = openDb(':memory:')
+  const now = Date.parse('2026-11-11T06:00:00Z')
+  const put = (actor: 'erica' | 'ai', min: number, text: string) =>
+    addEpisode(db, { ts: new Date(now - min * 60_000).toISOString(), channel: 'chat', scope: 'daily', actor, kind: 'message', content: text, sourceRef: `${actor}${min}` })
+  put('erica', 30, '早上好')
+  put('ai', 29, '早。')
+  put('erica', 2, '在干嘛')          // 她这一轮的话，已经记过了
+  const req = [
+    { role: 'system', content: 'sys' },
+    { role: 'user', content: '很久以前' },
+    { role: 'assistant', content: '嗯' },
+    { role: 'user', content: '在干嘛\n<current_time>Wed 2026-11-11 13:57</current_time>' },
+  ]
+  const r = replaceHistory(req, db, now)!
+  assert.equal(r.info.trimmed, 1)
+  assert.deepEqual(r.messages.map((m: any) => String(m.content).replace(/^——.*——\n/, '')),
+    ['sys', '早上好', '早。', '在干嘛\n<current_time>Wed 2026-11-11 13:57</current_time>'])
 })

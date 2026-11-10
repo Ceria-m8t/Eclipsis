@@ -11,6 +11,11 @@ import { stripMomentText } from '../moment.ts'
 export interface WakeBlockOptions {
   /** 往回看多少小时，默认 24 */
   hours?: number
+  /**
+   * 历史由我们自己拼的时候（OUR_HISTORY=1）：醒来发给她的消息已经按时间排在上面的聊天记录里了，
+   * 这块只留念头（念头在 channel=wake，不进聊天历史），不然同一条他看两遍。
+   */
+  skipSentMessages?: boolean
   /** 最多几条，默认 20 */
   limit?: number
   now?: Date
@@ -28,16 +33,19 @@ export function renderRecentWakeBlock(db: DB, opts: WakeBlockOptions = {}): stri
   `).all(since, opts.limit ?? 20) as unknown as WakeRow[]).reverse()
   if (!rows.length) return ''
 
+  const skipSent = !!opts.skipSentMessages
   const lines: string[] = []
   lines.push(`# 你醒来时（最近 ${hours} 小时，她不在聊天里的时候）`)
-  lines.push('下面是你自己醒来时发给她的消息和留下的念头，不在上面的聊天记录里。她提到你醒来发的那条、或者为这些回应你、骂你时，说的就是这些。')
+  lines.push(skipSent
+    ? '下面是你自己醒来时留下的念头（没发给她的那些），不在上面的聊天记录里。你醒来发给她的消息按时间排在上面的记录里，标着是你醒来时发的。'
+    : '下面是你自己醒来时发给她的消息和留下的念头，不在上面的聊天记录里。她提到你醒来发的那条、或者为这些回应你、骂你时，说的就是这些。')
   for (const r of rows) {
     lines.push('')
     const at = shortBeijing(r.created_at)
     const sent = parseList(r.sent_messages)
     // 带工具以前的记录只有 content：message 就是发出去的那条，trace 就是念头
     // 「这一刻」不回灌（锁着的也一样）
-    const messages = (r.outcome === 'message' ? (sent.length ? sent : [r.content.trim()]) : []).map(stripMomentText).filter(Boolean)
+    const messages = skipSent ? [] : (r.outcome === 'message' ? (sent.length ? sent : [r.content.trim()]) : []).map(stripMomentText).filter(Boolean)
     const trace = stripMomentText(r.trace?.trim() || (r.outcome === 'trace' ? r.content.trim() : ''))
     if (messages.length) {
       lines.push(`· ${at} 发给了她${messages.length > 1 ? ` ${messages.length} 条` : ''}（推送到她手机，通知里能看到前 200 字）：`)
@@ -47,6 +55,8 @@ export function renderRecentWakeBlock(db: DB, opts: WakeBlockOptions = {}): stri
       lines.push(messages.length ? '  同一次醒来，没发给她、留在心里的（她在 Eclipsis 聊天里点开能翻到）：' : `· ${at} 没发，留在心里（她在 Eclipsis 聊天里点开能翻到）：`)
       lines.push(trace)
     }
+    // 这次醒来只发了消息、没留念头：历史里已经有那条消息了，这一段就不用写
+    if (skipSent && !trace) { lines.pop(); continue }
     const used = usedTools(parseList(r.tools_used))
     if (used) lines.push(`  这次醒来还用了：${used}`)
   }

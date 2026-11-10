@@ -9,6 +9,7 @@ import { resolve, dirname } from 'node:path'
 import { loadAgentFile } from './agent.ts'
 import { probeStation } from './station-check.ts'
 import { listStations, saveStation, deleteStation, switchStation, findStation, currentStation } from '../station.ts'
+import { forgetModels } from '../models.ts'
 import type { DB } from '../db.ts'
 import { loadChatContinuation } from '../wake/continuation.ts'
 import { FirstTokenWatch } from '../proxy.ts'
@@ -189,6 +190,7 @@ export async function handleLetoAdmin(req: IncomingMessage, res: ServerResponse,
     if (route === 'stations/switch' && req.method === 'POST') {
       const b = JSON.parse(await readBody(req))
       const c = switchStation(String(b.id || ''))
+      forgetModels()     // 换站了：模型列表重新问新站
       json(res, 200, { ok: true, current: { name: c.name, url: c.url, defaultModel: c.defaultModel } })
       return true
     }

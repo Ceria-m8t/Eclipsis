@@ -8,14 +8,14 @@
 //   4. 从经历表按时间取，顺序永远对；撤回的（她删的）、被盖掉的旧版本（重新生成前那条）不进来。
 // 影子阶段：只算出来，和 xiaoke 实际拼的那份比一比，记在 exchanges.transforms.shadow_context，不改发出去的请求。
 import type { DB } from '../db.ts'
-import { textOf } from '../recorder.ts'
+import { textOf, cleanHerText, WAKE_MARKER } from '../recorder.ts'
 import { supersededSeqs } from '../versions.ts'
 
 export const TARGET = 220            // 大约两百多条
 export const MAX_TODAY = 600         // 今天聊得特别多时也有个上限（再多就从今天的开头截）
 export const SLEEP_GAP_MS = 5 * 3600_000   // 她连续这么久没说话 = 睡了一觉，之后算新的一天
 
-export interface HistRow { seq: number; ts: string; actor: 'erica' | 'ai'; content: string }
+export interface HistRow { seq: number; ts: string; actor: 'erica' | 'ai'; content: string; partial?: number | null }
 
 const WEEK = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
 /** 中国时间的日期标签：11月9日 周一 */
@@ -43,7 +43,7 @@ function nextHer(rows: HistRow[], from: number): number {
 }
 
 export function loadRecent(db: DB, limit = MAX_TODAY + TARGET, beforeSeq?: number): HistRow[] {
-  const rows = db.prepare(`SELECT seq, ts, actor, content FROM episodes
+  const rows = db.prepare(`SELECT seq, ts, actor, content, json_extract(meta, '$.partial') AS partial FROM episodes
     WHERE channel = 'chat' AND scope = 'daily' AND kind = 'message' AND actor IN ('erica', 'ai') AND retracted_at IS NULL
       AND (? IS NULL OR seq < ?)
     ORDER BY seq DESC LIMIT ?`).all(beforeSeq ?? null, beforeSeq ?? null, limit) as unknown as HistRow[]
@@ -150,4 +150,118 @@ export function shadowCompare(db: DB, messages: any[], now = Date.now()): Shadow
     xiaokeOutOfOrder: ooo, missingToday,
     sampleOnlyXiaoke: onlyX.slice(-3).map(k => k.slice(0, 60)),
   }
+}
+
+// ---------------- 换掉请求里的历史（替换 xiaoke 的那一步） ----------------
+
+// 这一轮不要换历史的几种请求：Kelivo 起标题、Kelivo 夹带的记忆注入、唤醒提示。
+// 它们不是正常的一轮聊天，塞 220 条进去只会浪费钱、还可能让他照着答。
+const TITLE_REQUEST = /(为(这段|以上)?(对话|聊天)|给(这段|以上)?(对话|聊天))?(起|生成|取|拟)一?个?(简短|简洁|合适)?的?(标题|题目)/
+const INJECTED_MEMORY = /^\s*(\[记忆[^\]]*\]|<memory|【记忆)/i
+
+/** 比对她的话时不看时间前缀和 Kelivo 加的 <current_time> */
+export const sameLine = (s: string) => cleanHerText(s).replace(/\s+/g, ' ').trim()
+
+/**
+ * 砍掉历史尾巴上属于「这一轮」的几条：她这次发的话（已经记过的）和没写完的那条回复。
+ * 她分条发时每句一条经历，所以要一条条往回看。
+ */
+export function trimThisRound(all: HistRow[], tailTexts: Set<string>): { rows: HistRow[]; trimmed: number } {
+  let end = all.length
+  while (end > 0) {
+    const r = all[end - 1]!
+    if (r.actor === 'erica' && tailTexts.has(sameLine(r.content))) { end--; continue }
+    if (r.actor === 'ai' && r.partial) { end--; continue }
+    break
+  }
+  const trimmed = all.length - end
+  return { rows: trimmed ? all.slice(0, end) : all, trimmed }
+}
+
+/** 请求里属于「这一轮」的那一段：结尾连着的 user，以及没结束的工具轮 */
+export function tailStart(messages: any[], head: number): number {
+  let tail = messages.length
+  while (tail > head && (messages[tail - 1]?.role === 'tool' || (messages[tail - 1]?.role === 'assistant' && messages[tail - 1]?.tool_calls?.length))) tail--
+  while (tail > head && messages[tail - 1]?.role === 'user') tail--
+  return tail
+}
+
+export interface ReplaceInfo { before: number; after: number; today: number; days: number; trimmed?: number }
+
+/**
+ * 把请求里 system 之后、这一轮之前的那一大段历史，换成我们自己从经历表拼的那份。
+ * xiaoke 补的（顺序乱、少今天的）和 Kelivo 自己带的（它本机那份）都换掉；system 和这一轮原样留着。
+ * 不该换的请求返回 null。
+ */
+export function replaceHistory(messages: any[], db: DB, now = Date.now()): { messages: any[]; info: ReplaceInfo } | null {
+  if (!Array.isArray(messages) || messages.length < 4) return null
+  let head = 0
+  while (head < messages.length && messages[head]?.role === 'system') head++
+  const tail = tailStart(messages, head)
+  if (tail >= messages.length) return null          // 结尾不是她的话（也不是工具轮）：不是正常一轮
+  if (tail - head < 2) return null                  // 本来就没什么历史可换
+  const lastUser = textOf(messages[messages.length - 1]?.content)
+  if (TITLE_REQUEST.test(lastUser) || INJECTED_MEMORY.test(lastUser) || lastUser.includes(WAKE_MARKER)) return null
+
+  // 她这一轮的话可能已经记进经历表了（重新生成、上一轮停掉后她补几句再发），
+  // 还可能跟着一条没写完的回复。历史尾巴上这几条要去掉，不然和下面这一轮重复一遍。
+  const tailTexts = new Set(
+    messages.slice(tail).filter(m => m?.role === 'user').map(m => sameLine(textOf(m.content))).filter(Boolean)
+  )
+  const trim = trimThisRound(loadRecent(db), tailTexts)
+  const a = selectHistory(trim.rows, now)
+  if (!a.rows.length) return null
+  const ours = toMessages(a, now)
+  return {
+    messages: [...messages.slice(0, head), ...ours, ...messages.slice(tail)],
+    info: { before: tail - head, after: ours.length, today: ours.length - a.todayFrom, days: a.days.length, ...(trim.trimmed ? { trimmed: trim.trimmed } : {}) },
+  }
+}
+
+// ---------------- 今日概况（此刻块里那一行） ----------------
+
+export interface TodaySummary {
+  herWakeAt: string | null     // 她今天第一句的时间（= 睡醒之后）
+  herLines: number             // 她今天说了几句
+  hisLines: number             // 他今天回了几条
+  lastAtMs: number | null      // 最后一句（谁说的都算）距现在多少毫秒
+}
+
+export function todaySummary(db: DB, now = Date.now()): TodaySummary | null {
+  const all = loadRecent(db)
+  if (!all.length) return null
+  const start = todayStart(all, now)
+  const today = all.slice(start)
+  if (!today.length) return { herWakeAt: null, herLines: 0, hisLines: 0, lastAtMs: now - Date.parse(all[all.length - 1]!.ts) }
+  return {
+    herWakeAt: today[0]!.ts,
+    herLines: today.filter(r => r.actor === 'erica').length,
+    hisLines: today.filter(r => r.actor === 'ai').length,
+    lastAtMs: now - Date.parse(today[today.length - 1]!.ts),
+  }
+}
+
+const hhmm = (iso: string) => {
+  const d = new Date(Date.parse(iso) + 8 * 3600_000)
+  return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`
+}
+const ago = (ms: number) => {
+  const m = Math.round(ms / 60_000)
+  if (m < 1) return '刚刚'
+  if (m < 60) return `${m} 分钟前`
+  const h = Math.floor(m / 60)
+  return h < 24 ? `${h} 小时${m % 60 ? ' ' + (m % 60) + ' 分钟' : ''}前` : `${Math.floor(h / 24)} 天前`
+}
+
+/** 「此刻」块里的今日概况：她几点醒的、今天聊了多少、上一句多久以前 */
+export function renderTodayLine(db: DB, now = Date.now()): string {
+  const s = todaySummary(db, now)
+  if (!s) return ''
+  if (!s.herWakeAt) {
+    return s.lastAtMs == null ? '' : `今天她还没说话（上一句是 ${ago(s.lastAtMs)}）`
+  }
+  const parts = [`今天她 ${hhmm(s.herWakeAt)} 起（睡醒后第一句）`]
+  parts.push(`到现在她说了 ${s.herLines} 句、你回了 ${s.hisLines} 条`)
+  if (s.lastAtMs != null) parts.push(`上一句 ${ago(s.lastAtMs)}`)
+  return parts.join('，')
 }

@@ -15,8 +15,9 @@ import { stripWakeHistory, stripThinkHistory, stripOldImages, reorderByTime, mar
 import { handleApi } from './api.ts'
 import { handleChatApi, xiaokeApi } from './chat-history.ts'
 import { handleToolboxApi, setToolboxFile } from './toolbox.ts'
-import { shadowCompare } from './assembler/history.ts'
+import { shadowCompare, replaceHistory } from './assembler/history.ts'
 import { stripMomentHistory } from './moment.ts'
+import { handleModelsApi } from './models.ts'
 import { dropSupersededVersions } from './versions.ts'
 import { handleLlmRelay } from './llm-relay.ts'
 import { initStations, bindStationToConfig } from './station.ts'
@@ -73,6 +74,8 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
       if (await handlePulseApi(db, req, res)) return true
       if (await handlePromptApi(db, req, res)) return true
       if (await handleToolboxApi(db, req, res)) return true
+      // 模型列表：后端问当前这个站（以前透传给 xiaoke，它没有这个接口，Kelivo 只能拿到 404）
+      if (await handleModelsApi(req, res, { url: cfg.upstreamUrl, key: cfg.upstreamKey })) return true
       if (await handleChatApi(db, { blobDir: cfg.blobDir, xiaoke: xiaokeApi(cfg.xiaokeUrl, cfg.xiaokeKey) }, req, res)) return true
       if (await handleLetoApi(opts.letoApi ?? null, db, req, res)) return true
       if (process.env.LETO_ADMIN_ENABLED === '1' && await handleLetoAdmin(req, res, db)) return true
@@ -113,8 +116,22 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
       if (process.env.SHADOW_CONTEXT !== '0' && Array.isArray(out.messages) && out.messages.length > 2) {
         try { transforms.shadow_context = shadowCompare(db, out.messages); changed = true } catch { /* 影子出错不影响请求 */ }
       }
+      // 替换 xiaoke：历史改成我们自己从经历表拼的那份（OUR_HISTORY=1 打开）。
+      // 换完顺序本来就是对的，下面的「按时间排」没得排；system 和这一轮还是请求里原来那份。
+      let ourHistory = false
+      if (process.env.OUR_HISTORY === '1' && Array.isArray(out.messages)) {
+        try {
+          const r = replaceHistory(out.messages, db)
+          if (r) {
+            out = { ...out, messages: r.messages }
+            transforms.our_history = r.info
+            changed = true
+            ourHistory = true
+          }
+        } catch (e) { opts.log?.(`[tap] 换历史失败，按原样发：${String(e)}`) }
+      }
       // 先按时间排（要用原文去经历表里对时间，所以在剪思考、剪图之前）
-      if (opts.reorderByTime && Array.isArray(out.messages)) {
+      if (opts.reorderByTime && !ourHistory && Array.isArray(out.messages)) {
         try {
           const r = reorderByTime(out.messages, episodeTimeLookup(db))
           if (r.moved) {
@@ -173,7 +190,7 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
           // 他醒来时发的消息和念头（默认开，CHAT_WAKE_BLOCK=0 关）
           let wakeBlock = ''
           if (process.env.CHAT_WAKE_BLOCK !== '0') {
-            try { wakeBlock = renderRecentWakeBlock(db, { hours: Number(process.env.CHAT_WAKE_BLOCK_HOURS) || 24 }) } catch { /* 不影响请求 */ }
+            try { wakeBlock = renderRecentWakeBlock(db, { hours: Number(process.env.CHAT_WAKE_BLOCK_HOURS) || 24, skipSentMessages: ourHistory }) } catch { /* 不影响请求 */ }
           }
           const injected = injectSceneBlock(out.messages, scene.sceneBlock + (groupBlock ? '\n' + groupBlock : '') + (wakeBlock ? '\n\n' + wakeBlock : ''))
           if (groupBlock) transforms.group_block = { chars: groupBlock.length }

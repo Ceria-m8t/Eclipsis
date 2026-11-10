@@ -30,7 +30,11 @@ function streamReply(chunks: string[]) {
 
 before(async () => {
   tmp = tempDir()
-  station = fakeUpstream((req, res) => stationReply(req, res))
+  station = fakeUpstream((req, res) => {
+    // 模型列表：站自己的接口（后端的 /v1/models 会来问它）
+    if (req.url.startsWith('/v1/models')) { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"data":[{"id":"station-m"}]}'); return }
+    stationReply(req, res)
+  })
   const stationPort = await listen(station.server)
 
   // 假 Dylan：把请求体原样转发给上游入口（真 Dylan/xiaoke 也会保留 eclipsis_rid 这类多余字段）
@@ -357,11 +361,18 @@ test('上游入口剪掉历史里他的思考；前端出口记的是原样', as
   assert.ok(frontMsg.content.includes('She misses me'), '前端出口那份是原样')
 })
 
-test('/v1/models 纯透传，不记录', async () => {
+test('/v1/models：后端自己问当前这个站（不记录，答案记 5 分钟）', async () => {
   const res = await fetch(`http://127.0.0.1:${frontPort}/v1/models`)
-  assert.deepEqual(await res.json(), { data: [{ id: 'm1' }] })
+  assert.deepEqual(await res.json(), { data: [{ id: 'station-m' }] })
   await settle()
   assert.equal(exchanges().length, 0)
+  // 第二次走缓存：站那边不会再被问一遍
+  const before = station.seen.filter(s => s.url === '/v1/models').length
+  await fetch(`http://127.0.0.1:${frontPort}/v1/models`)
+  assert.equal(station.seen.filter(s => s.url === '/v1/models').length, before)
+  // fresh=1 重新问
+  await fetch(`http://127.0.0.1:${frontPort}/v1/models?fresh=1`)
+  assert.equal(station.seen.filter(s => s.url === '/v1/models').length, before + 1)
 })
 
 test('Dylan 不在：返回 502，记为 network_error', async () => {

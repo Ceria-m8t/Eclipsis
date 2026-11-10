@@ -9,6 +9,7 @@
 import type { DB } from '../db.ts'
 import { loadPulseState, renderVitalsLine } from '../pulse/index.ts'
 import { getXinchaoBridgeCache } from '../pulse/xinchao-bridge.ts'
+import { renderTodayLine } from './history.ts'
 
 export interface AssembleResult {
   sceneBlock: string
@@ -18,6 +19,7 @@ export interface AssembleResult {
     weather: string | null
     xinchaoEmotion: string | null
     xinchaoLines: number
+    todayLine: string | null
   }
 }
 
@@ -77,6 +79,10 @@ export function assembleSceneBlock(db: DB, now: Date = new Date()): AssembleResu
   parts.push('---')
   parts.push('# 此刻')
   parts.push(`现在是 ${timeStr}`)
+  // 今日概况（她几点醒的、今天聊了多少、上一句多久以前）：他每轮都知道，不用自己数
+  let todayLine = ''
+  try { todayLine = renderTodayLine(db, now.getTime()) } catch { /* 读不到就不写这一行 */ }
+  if (todayLine) parts.push(todayLine)
   if (vitalsLine) parts.push(`身体：${vitalsLine}`)
   if (weatherDesc) parts.push(`上海天气：${weatherDesc}`)
   if (xinchaoLines.length) {
@@ -86,7 +92,7 @@ export function assembleSceneBlock(db: DB, now: Date = new Date()): AssembleResu
 
   return {
     sceneBlock: parts.join('\n'),
-    meta: { vitalsLine, timeBeijing: timeStr, weather: weatherDesc, xinchaoEmotion, xinchaoLines: xinchaoLines.length }
+    meta: { vitalsLine, timeBeijing: timeStr, weather: weatherDesc, xinchaoEmotion, xinchaoLines: xinchaoLines.length, todayLine: todayLine || null }
   }
 }
 

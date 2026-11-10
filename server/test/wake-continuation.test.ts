@@ -176,3 +176,25 @@ describe('聊天里的「你醒来时」块', () => {
     assert.equal(renderRecentWakeBlock(freshDb()), '')
   })
 })
+
+describe('历史由我们自己拼时的「你醒来时」块', () => {
+  it('发出去的消息不重复写（已经在历史里），只留念头；只发了消息的那次整段不写', () => {
+    const db = freshDb()
+    const add = (id: string, min: number, outcome: string, content: string, sent: string[] | null, trace: string | null) =>
+      db.prepare(`INSERT INTO wake_opportunities(id, origin, sources, reason, created_at, outcome, content, sent_messages, trace, finished_at)
+        VALUES (?, 'spontaneous', '[]', '', ?, ?, ?, ?, ?, ?)`)
+        .run(id, new Date(Date.now() - min * 60_000).toISOString(), outcome, content, sent ? JSON.stringify(sent) : null, trace, new Date().toISOString())
+    add('w1', 120, 'message', '想你了', ['想你了'], null)
+    add('w2', 60, 'message', '顺手说一句', ['顺手说一句'], '她还在睡，没敢多说')
+    add('w3', 30, 'trace', '自己待着', null, null)
+
+    const full = renderRecentWakeBlock(db)
+    assert.match(full, /想你了/)
+    const lean = renderRecentWakeBlock(db, { skipSentMessages: true })
+    assert.doesNotMatch(lean, /想你了/, '发出去的那条在历史里，不再写一遍')
+    assert.doesNotMatch(lean, /顺手说一句/)
+    assert.match(lean, /她还在睡，没敢多说/, '同一次醒来留的念头还要给')
+    assert.match(lean, /自己待着/)
+    assert.match(lean, /按时间排在上面的记录里/)
+  })
+})
