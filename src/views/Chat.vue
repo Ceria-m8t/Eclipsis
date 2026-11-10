@@ -22,7 +22,7 @@ import {
   looksNoReply, splitHeart, READ_SIGNAL, setActiveVersion
 } from '../chat-store'
 import { splitMoment, parseMoment, type MomentView } from '../moment'
-import { uploadFile, FILE_ACCEPT, humanSize, fileUrl, fileBadge, type UploadedFile } from '../files'
+import { uploadFile, splitFiles, FILE_ACCEPT, humanSize, fileUrl, fileBadge, type UploadedFile } from '../files'
 
 const settings = ref(getSettings())
 
@@ -334,7 +334,8 @@ const rows = computed<Row[]>(() => {
     const next = list[i + 1]
     const gapBefore = !prev || m.createdAt - prev.createdAt > GAP_MS
     const gapAfter = !next || next.createdAt - m.createdAt > GAP_MS
-    let text = textOf(m)
+    // 文件标记只是发给后端用的，气泡里不显示（后端来的那份已经拆过，本地刚发的这份要自己拆）
+    let text = splitFiles(textOf(m)).text
     let parts: string[]
     let thinking = ''
     let noReply = false
