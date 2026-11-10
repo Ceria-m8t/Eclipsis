@@ -193,13 +193,18 @@ export interface ReplaceInfo { before: number; after: number; today: number; day
  * xiaoke 补的（顺序乱、少今天的）和 Kelivo 自己带的（它本机那份）都换掉；system 和这一轮原样留着。
  * 不该换的请求返回 null。
  */
-export function replaceHistory(messages: any[], db: DB, now = Date.now()): { messages: any[]; info: ReplaceInfo } | null {
-  if (!Array.isArray(messages) || messages.length < 4) return null
+export function replaceHistory(
+  messages: any[], db: DB, now = Date.now(), opts: { insertWhenEmpty?: boolean } = {}
+): { messages: any[]; info: ReplaceInfo } | null {
+  // 直连中转站以后，前端只发这一轮，请求里根本没有历史：那就是「插进去」而不是「换掉」。
+  // 经过 xiaoke 时请求里带着一大段，没有历史的请求多半不是正常聊天（起标题之类），照旧不动。
+  const insert = !!opts.insertWhenEmpty
+  if (!Array.isArray(messages) || messages.length < (insert ? 2 : 4)) return null
   let head = 0
   while (head < messages.length && messages[head]?.role === 'system') head++
   const tail = tailStart(messages, head)
   if (tail >= messages.length) return null          // 结尾不是她的话（也不是工具轮）：不是正常一轮
-  if (tail - head < 2) return null                  // 本来就没什么历史可换
+  if (tail - head < 2 && !insert) return null       // 本来就没什么历史可换
   const lastUser = textOf(messages[messages.length - 1]?.content)
   if (TITLE_REQUEST.test(lastUser) || INJECTED_MEMORY.test(lastUser) || lastUser.includes(WAKE_MARKER)) return null
 

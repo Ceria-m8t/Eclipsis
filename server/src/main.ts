@@ -18,6 +18,7 @@ import { handleToolboxApi, setToolboxFile } from './toolbox.ts'
 import { shadowCompare, replaceHistory } from './assembler/history.ts'
 import { stripMomentHistory } from './moment.ts'
 import { handleModelsApi } from './models.ts'
+import { attachFiles, handleFileApi, ensureFileSchema } from './files.ts'
 import { dropSupersededVersions } from './versions.ts'
 import { handleLlmRelay } from './llm-relay.ts'
 import { initStations, bindStationToConfig } from './station.ts'
@@ -63,6 +64,7 @@ export interface ServerOptions {
 export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { front: Server; tap: Server } {
   ensurePromptSchema(db)
   const blobs = new BlobStore(db, cfg.blobDir)
+  ensureFileSchema(db)
   const recorder = new Recorder(db, blobs, { onEricaMessage: opts.onEricaMessage, onTurnComplete: opts.onTurnComplete })
 
   // 发给中转站时的请求头（换掉调用方的 key，用站的 key）
@@ -87,6 +89,8 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
       if (await handleToolboxApi(db, req, res)) return true
       // 模型列表：后端问当前这个站（以前透传给 xiaoke，它没有这个接口，Kelivo 只能拿到 404）
       if (await handleModelsApi(req, res, { url: cfg.upstreamUrl, key: cfg.upstreamKey })) return true
+      // 她发文件：上传、下载
+      if (await handleFileApi(db, blobs, req, res)) return true
       if (await handleChatApi(db, {
         blobDir: cfg.blobDir, xiaoke: xiaokeApi(cfg.xiaokeUrl, cfg.xiaokeKey), xiaokeHasNewMessages: !cfg.bypassXiaoke
       }, req, res)) return true
@@ -136,7 +140,7 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
       let ourHistory = false
       if (process.env.OUR_HISTORY === '1' && Array.isArray(out.messages)) {
         try {
-          const r = replaceHistory(out.messages, db)
+          const r = replaceHistory(out.messages, db, Date.now(), { insertWhenEmpty: cfg.bypassXiaoke })
           if (r) {
             out = { ...out, messages: r.messages }
             transforms.our_history = r.info
@@ -191,6 +195,17 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
           transforms.strip_old_images = { stripped: r.stripped, saved_chars: r.savedChars }
           changed = true
         }
+      }
+      // 她发的文件：最近两条带文件的消息给正文，更早的只留文件名（和图片一样，不然每轮重发整份文档）
+      if (Array.isArray(out.messages)) {
+        try {
+          const r = attachFiles(out.messages, db)
+          if (r.attached || r.trimmed) {
+            out = { ...out, messages: r.messages }
+            transforms.files = { attached: r.attached, trimmed: r.trimmed }
+            changed = true
+          }
+        } catch { /* 读不出就按原样发（标记会原样过去，他看得懂是个文件） */ }
       }
       // 看不到的图写清楚是看不到（MARK_MISSING_IMAGES=0 关）
       if (process.env.MARK_MISSING_IMAGES !== '0' && Array.isArray(out.messages)) {
@@ -310,7 +325,8 @@ function main() {
       } : undefined
     })()
   })
-  front.listen(cfg.frontPort, '127.0.0.1', () => console.log(`[eclipsis] front  127.0.0.1:${cfg.frontPort} → ${cfg.dylanUrl}`))
+  front.listen(cfg.frontPort, '127.0.0.1', () => console.log(
+    `[eclipsis] front  127.0.0.1:${cfg.frontPort} → ${cfg.bypassXiaoke ? `${cfg.upstreamUrl}（直连中转站，不过 xiaoke）` : cfg.dylanUrl}`))
   tap.listen(cfg.tapPort, '127.0.0.1', () => console.log(`[eclipsis] tap    127.0.0.1:${cfg.tapPort} → ${cfg.upstreamUrl || '(未配置)'}` +
     `  LINK_RID=${process.env.LINK_RID === '1' ? 1 : 0} STRIP_WAKE_HISTORY=${process.env.STRIP_WAKE_HISTORY === '1' ? 1 : 0}` +
     ` STRIP_THINK_HISTORY=${process.env.STRIP_THINK_HISTORY === '1' ? 1 : 0}` +

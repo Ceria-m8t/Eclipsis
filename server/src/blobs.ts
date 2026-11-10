@@ -1,7 +1,7 @@
 // 去重存储。图片从消息里拆出来存成文件，消息里换成 {blob: 哈希}；
 // 每轮请求都带着完整历史，按消息去重后，同一条只占一份空间。
 import { createHash } from 'node:crypto'
-import { mkdirSync, existsSync, writeFileSync } from 'node:fs'
+import { mkdirSync, existsSync, writeFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { DB } from './db.ts'
 
@@ -71,6 +71,13 @@ export class BlobStore {
   }
 
   // 存一条消息（图片已拆出），返回哈希、替换后的消息、图片哈希
+  /** 读回原件（她点文件下载时用） */
+  readFile(hash: string): Buffer | null {
+    const file = join(this.dir, hash.slice(0, 2), hash)
+    if (!existsSync(file)) return null
+    try { return readFileSync(file) } catch { return null }
+  }
+
   putMessage(message: any): { hash: string; message: any; images: string[] } {
     const ex = this.extractImages(message)
     return { hash: this.putText('message', JSON.stringify(ex.message)), message: ex.message, images: ex.images }

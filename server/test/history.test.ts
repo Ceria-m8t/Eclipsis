@@ -167,3 +167,24 @@ test('请求里的历史和我们这份几乎不重合（别人的上下文走�
   mine.push({ role: 'user', content: '现在这句' })
   assert.ok(replaceHistory(mine, db, now))
 })
+
+test('直连中转站后前端只发这一轮：历史是插进去的，不是换掉的', () => {
+  const db = openDb(':memory:')
+  const now = Date.parse('2026-11-11T06:00:00Z')
+  for (let i = 0; i < 6; i++) {
+    addEpisode(db, { ts: new Date(now - (60 - i) * 60_000).toISOString(), channel: 'chat', scope: 'daily',
+      actor: i % 2 ? 'ai' : 'erica', kind: 'message', content: `第 ${i} 句`, sourceRef: 'h' + i })
+  }
+  const req = [{ role: 'system', content: 'sys' }, { role: 'user', content: '现在这句' }]
+  // 经过 xiaoke 时（请求里本来该有历史）：没有历史的请求不动
+  assert.equal(replaceHistory(req, db, now), null)
+  // 直连时：把历史插进来
+  const r = replaceHistory(req, db, now, { insertWhenEmpty: true })!
+  assert.equal(r.info.before, 0)
+  assert.equal(r.info.after, 6)
+  assert.equal(r.messages[0]!.content, 'sys')
+  assert.equal(r.messages.at(-1)!.content, '现在这句')
+  assert.equal(r.messages.length, 8)
+  // 起标题这类还是不碰
+  assert.equal(replaceHistory([{ role: 'system', content: 'sys' }, { role: 'user', content: '给这段对话起一个简短的标题' }], db, now, { insertWhenEmpty: true }), null)
+})
