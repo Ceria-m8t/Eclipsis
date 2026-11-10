@@ -161,7 +161,7 @@ test('请求里的历史和我们这份几乎不重合（别人的上下文走�
   other.push({ role: 'user', content: '别人现在这句' })
   assert.equal(replaceHistory(other, db, now), null)
 
-  // 大部分对得上（她在别的前端聊过几句我们没记到）：照常换
+  // 他们的历史比我们这次选的窗口长（Kelivo 自己带一大段）：按整个库算，照常换
   const mine: any[] = [{ role: 'system', content: 'sys' }]
   for (let i = 0; i < 30; i++) mine.push({ role: i % 2 ? 'assistant' : 'user', content: `我们的第 ${i} 句` })
   mine.push({ role: 'user', content: '现在这句' })

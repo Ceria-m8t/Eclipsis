@@ -212,13 +212,15 @@ export function replaceHistory(messages: any[], db: DB, now = Date.now()): { mes
   const a = selectHistory(trim.rows, now)
   if (!a.rows.length) return null
 
-  // 保险：请求里那段历史和我们这份几乎不重合，说明这根本不是她和他的那条线
-  // （以后别的前端、别的 AI 走到这个入口来，不能把人家的上下文换成我们的）
+  // 保险：请求里那段历史和我们库里的记录几乎不重合，说明这根本不是她和他的那条线
+  // （以后别的前端、别的 AI 走到这个入口来，不能把人家的上下文换成我们的）。
+  // 比的是「整个库」而不是这次选的两百多条：Kelivo 自己带的历史比我们这个窗口长得多，
+  // 拿窗口比的话真实轮次只有 24% 对得上，会被误伤（11-11 第一次就是这么被挡住的）。
   const theirs = requestHistory(messages)
   if (theirs.length >= 20) {
-    const ourKeys = new Set(a.rows.map(r => norm(r.content)))
-    const hit = theirs.filter(m => ourKeys.has(m.text)).length
-    if (hit / theirs.length < 0.3) return null
+    const known = new Set(loadRecent(db, MAX_TODAY + TARGET * 3).map(r => norm(r.content)))
+    const hit = theirs.filter(m => known.has(m.text)).length
+    if (hit / theirs.length < 0.5) return null       // 真实轮次实测 83–89%
   }
 
   const ours = toMessages(a, now)
