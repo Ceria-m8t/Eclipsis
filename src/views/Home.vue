@@ -34,7 +34,12 @@ function go(t: (typeof tabs)[number]) {
     <div v-if="pageBackdrop" class="shell-bg page-backdrop" data-glass-backdrop :style="pageBackdrop" aria-hidden="true"></div>
 
     <div class="shell-main">
-      <RouterView />
+      <!-- 聊天页切走时不销毁：他正在回的那一轮接着收，切回来还在（以前一切走就把这一轮停掉了） -->
+      <RouterView v-slot="{ Component }">
+        <KeepAlive include="Chat">
+          <component :is="Component" />
+        </KeepAlive>
+      </RouterView>
     </div>
 
     <!-- 键盘弹起时收起底栏，把空间留给输入框 -->

@@ -6,6 +6,7 @@
 // 11-10 起 Eclipsis 聊天里能显示醒来的消息和念头（A3），所以写成「她翻得到」。
 import type { DB } from '../db.ts'
 import { shortBeijing } from './dispatch.ts'
+import { stripMomentText } from '../moment.ts'
 
 export interface WakeBlockOptions {
   /** 往回看多少小时，默认 24 */
@@ -35,8 +36,9 @@ export function renderRecentWakeBlock(db: DB, opts: WakeBlockOptions = {}): stri
     const at = shortBeijing(r.created_at)
     const sent = parseList(r.sent_messages)
     // 带工具以前的记录只有 content：message 就是发出去的那条，trace 就是念头
-    const messages = r.outcome === 'message' ? (sent.length ? sent : [r.content.trim()]) : []
-    const trace = r.trace?.trim() || (r.outcome === 'trace' ? r.content.trim() : '')
+    // 「这一刻」不回灌（锁着的也一样）
+    const messages = (r.outcome === 'message' ? (sent.length ? sent : [r.content.trim()]) : []).map(stripMomentText).filter(Boolean)
+    const trace = stripMomentText(r.trace?.trim() || (r.outcome === 'trace' ? r.content.trim() : ''))
     if (messages.length) {
       lines.push(`· ${at} 发给了她${messages.length > 1 ? ` ${messages.length} 条` : ''}（推送到她手机，通知里能看到前 200 字）：`)
       lines.push(messages.join('\n\n'))

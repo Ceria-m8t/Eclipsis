@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, onActivated, onDeactivated, nextTick, watch } from 'vue'
 import Icon from '../components/Icon.vue'
 import PhotoStack from '../components/PhotoStack.vue'
 import { getSettings } from '../settings'
@@ -929,6 +929,30 @@ onMounted(async () => {
     ro.observe(footerEl.value)
   }
   syncGlass()
+})
+
+// 切到别的页面：页面留着（KeepAlive），只把「在聊天页」才要的东西收起来；他正在回的那一轮不停
+let firstActivate = true
+onDeactivated(() => {
+  clearInterval(pollTimer)
+  document.removeEventListener('visibilitychange', onVisible)
+  document.documentElement.classList.remove('chat-open')
+  cancelAnimationFrame(heartRaf)
+  pageBackdrop.value = null
+  showPlus.value = false; sheet.value = null; showStylePanel.value = false; previewImg.value = ''
+  persist()
+})
+onActivated(() => {
+  if (firstActivate) { firstActivate = false; return }   // 第一次由 onMounted 处理
+  document.documentElement.classList.add('chat-open')
+  heartRaf = requestAnimationFrame(heartTick)
+  pageBackdrop.value = bgStyle.value
+  settings.value = getSettings()
+  pollTimer = window.setInterval(onVisible, 20_000)
+  document.addEventListener('visibilitychange', onVisible)
+  stage?.invalidate()
+  if (!generating.value) syncNew()
+  scrollToBottom()
 })
 
 onBeforeUnmount(() => {

@@ -34,3 +34,15 @@ test('聊天记录接口：这一刻单独给，锁着的不给原文', () => {
   assert.deepEqual(items[3]!.versions![0]!.moment, { locked: true, text: '' })
   assert.ok(!JSON.stringify(items).includes('别走'), '锁着的原文不出接口')
 })
+
+test('醒来时把这一刻写在念头里：念头里不露标签，挂在醒来那一项上；锁着的不给原文', () => {
+  const db = openDb(':memory:')
+  let t = Date.now()
+  const ep = (o: any) => addEpisode(db, { ts: new Date(t += 1000).toISOString(), scope: 'daily', ...o })
+  ep({ channel: 'chat', actor: 'ai', kind: 'message', content: '花园浇了。', meta: { wake_id: 'W' }, sourceRef: 'wake:msg:W' })
+  ep({ channel: 'wake', actor: 'ai', kind: 'note', content: '去看看花园。\n<moment lock>\n她的枕头旁边的手机屏幕\n想她 ↑\n</moment>', meta: { wake_id: 'W' }, sourceRef: 'wake:trace:W' })
+  const it = chatHistory(db, {}).items[0]!
+  assert.equal(it.wake!.trace, '去看看花园。')
+  assert.deepEqual(it.versions![0]!.moment, { locked: true, text: '' })
+  assert.ok(!JSON.stringify(it).includes('枕头'))
+})

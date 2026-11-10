@@ -17,6 +17,7 @@ import { loadChatContinuation } from './continuation.ts'
 import { chooseModel } from '../station.ts'
 import { runWakeAgent } from './agent.ts'
 import { boxesFor } from '../toolbox.ts'
+import { stripMomentText } from '../moment.ts'
 import { inspectWakeControl } from './tools.ts'
 import { parseModelResponse } from '../leto/model-call.ts'
 import type { ChatMessage, ModelResponse } from '../leto/responder.ts'
@@ -559,7 +560,8 @@ async function runWithTools(
     const text = (stripThink(raw) ?? raw).trim()
     if (!text) return { ok: false, reason: '是空的' }
     if (isNearDuplicate(db, text) || sent.some(s => similar(s, text))) return { ok: false, reason: '和你最近发过的太像了，换个说法，或者不发' }
-    if (!(await pushBark(cfg, text, sleeping))) return { ok: false, reason: '推送失败，她没收到' }
+    // 推送通知里不带「这一刻」（锁着的更不能出现在通知里）；聊天页那份记原文，界面自己拆
+    if (!(await pushBark(cfg, stripMomentText(text) || text, sleeping))) return { ok: false, reason: '推送失败，她没收到' }
     addEpisode(db, {
       ts: new Date().toISOString(), channel: 'chat', scope: 'daily', actor: 'ai', kind: 'message', content: text,
       meta: { wake_id: opp.id, origin: opp.origin, outcome: 'message', index: sent.length },

@@ -89,8 +89,8 @@ export function buildItems(db: DB, rows: Row[]): ChatItem[] {
   const wakeIds = [...new Set(rows.map(r => parseMeta(r.meta).wake_id).filter((x): x is string => typeof x === 'string'))]
   const toolsOf = new Map<string, string[]>()
   if (wakeIds.length) {
-    const q = db.prepare(`SELECT id, tools_used FROM wake_opportunities WHERE id IN (${wakeIds.map(() => '?').join(',')})`)
     try {
+      const q = db.prepare(`SELECT id, tools_used FROM wake_opportunities WHERE id IN (${wakeIds.map(() => '?').join(',')})`)
       for (const w of q.all(...wakeIds) as { id: string; tools_used: string | null }[]) {
         try { const t = JSON.parse(w.tools_used || '[]'); if (Array.isArray(t) && t.length) toolsOf.set(w.id, t.map(String)) } catch {}
       }
@@ -114,8 +114,11 @@ export function buildItems(db: DB, rows: Row[]): ChatItem[] {
     const meta = parseMeta(r.meta)
     if (typeof meta.wake_id === 'string' && (r.kind === 'note' || (r.actor === 'ai' && r.kind === 'message'))) {
       const it = wakeItem(r, meta.wake_id)
-      if (r.kind === 'note') { it.wake!.trace = (it.wake!.trace ? it.wake!.trace + '\n\n' : '') + r.content.trim(); continue }
-      const body = splitMoment(r.content.replace(HEART_RE, '').trim()).text
+      // 醒来时他把「这一刻」写在了念头里或消息里：拆出来挂在这一项上（锁着的不给原文），念头里不再露出标签
+      const mo = splitMoment(r.content.replace(HEART_RE, '').trim())
+      if (mo.moment) it.versions![0]!.moment = mo.moment.locked ? { locked: true, text: '' } : mo.moment
+      if (r.kind === 'note') { if (mo.text) it.wake!.trace = (it.wake!.trace ? it.wake!.trace + '\n\n' : '') + mo.text; continue }
+      const body = mo.text
       it.content = it.content ? it.content + '\n\n' + body : body
       it.versions![0]!.content = it.content
       it.wake!.silent = false
