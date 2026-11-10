@@ -148,3 +148,22 @@ test('Kelivo 那边她的话后面跟着 <current_time>，也认得出是同一�
   assert.deepEqual(r.messages.map((m: any) => String(m.content).replace(/^——.*——\n/, '')),
     ['sys', '早上好', '早。', '在干嘛\n<current_time>Wed 2026-11-11 13:57</current_time>'])
 })
+
+test('请求里的历史和我们这份几乎不重合（别人的上下文走到这个入口）：不换', () => {
+  const db = openDb(':memory:')
+  const now = Date.parse('2026-11-11T06:00:00Z')
+  for (let i = 0; i < 40; i++) {
+    addEpisode(db, { ts: new Date(now - (100 - i) * 60_000).toISOString(), channel: 'chat', scope: 'daily',
+      actor: i % 2 ? 'ai' : 'erica', kind: 'message', content: `我们的第 ${i} 句`, sourceRef: 'o' + i })
+  }
+  const other: any[] = [{ role: 'system', content: '别人的 system' }]
+  for (let i = 0; i < 30; i++) other.push({ role: i % 2 ? 'assistant' : 'user', content: `别人的第 ${i} 句` })
+  other.push({ role: 'user', content: '别人现在这句' })
+  assert.equal(replaceHistory(other, db, now), null)
+
+  // 大部分对得上（她在别的前端聊过几句我们没记到）：照常换
+  const mine: any[] = [{ role: 'system', content: 'sys' }]
+  for (let i = 0; i < 30; i++) mine.push({ role: i % 2 ? 'assistant' : 'user', content: `我们的第 ${i} 句` })
+  mine.push({ role: 'user', content: '现在这句' })
+  assert.ok(replaceHistory(mine, db, now))
+})

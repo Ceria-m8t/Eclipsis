@@ -211,6 +211,16 @@ export function replaceHistory(messages: any[], db: DB, now = Date.now()): { mes
   const trim = trimThisRound(loadRecent(db), tailTexts)
   const a = selectHistory(trim.rows, now)
   if (!a.rows.length) return null
+
+  // 保险：请求里那段历史和我们这份几乎不重合，说明这根本不是她和他的那条线
+  // （以后别的前端、别的 AI 走到这个入口来，不能把人家的上下文换成我们的）
+  const theirs = requestHistory(messages)
+  if (theirs.length >= 20) {
+    const ourKeys = new Set(a.rows.map(r => norm(r.content)))
+    const hit = theirs.filter(m => ourKeys.has(m.text)).length
+    if (hit / theirs.length < 0.3) return null
+  }
+
   const ours = toMessages(a, now)
   return {
     messages: [...messages.slice(0, head), ...ours, ...messages.slice(tail)],
