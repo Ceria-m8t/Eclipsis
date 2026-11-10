@@ -123,8 +123,8 @@ describe('dispatchWake 接着聊天醒来', () => {
     assert.match(msgs.at(-1).content, /^\[这条不是她发的。上面的聊天停在 .+（1\.0 小时前），现在你自己醒了/)
     assert.match(msgs.at(-1).content, /醒了就去找她/)
     assert.doesNotMatch(msgs.at(-1).content, /最近的聊天记录：/)
-    // 醒来带工具：手边只有发消息和箱子入口（测试环境没配记忆库/心潮/Leto，只有醒来设置）
-    assert.deepEqual(sent.tools.map((t: any) => t.function.name), ['send_to_erica', 'open_wake_settings'])
+    // 醒来带工具：手边只有发消息和箱子入口（测试环境没配记忆库/心潮/Leto，只有本地的醒来设置和这一刻）
+    assert.deepEqual(sent.tools.map((t: any) => t.function.name), ['send_to_erica', 'open_wake_settings', 'open_moments'])
     assert.match(msgs.at(-1).content, /用 send_to_erica/)
   })
 

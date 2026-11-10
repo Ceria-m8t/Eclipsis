@@ -43,7 +43,7 @@ export async function callBoxTool(entry: string, name: string, args: Record<stri
 // ---- 设置页 ----
 export interface BoxInfo {
   id: string; title: string; entryName: string; description: string
-  builtin: boolean; chat: boolean; wake: boolean; url: string; token: string; tools: number | null
+  builtin: boolean; chat: boolean; wake: boolean; wakeOnly?: boolean; url: string; token: string; tools: number | null
 }
 export async function listToolbox(): Promise<BoxInfo[]> {
   const r = await fetch(BASE + '/toolbox', { cache: 'no-store' })

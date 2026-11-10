@@ -4,7 +4,8 @@
 // 一次塞 112 个光说明就上万 token）。醒来那边 11-06 起就是这样（wake/boxes.ts），这里把它也给聊天用。
 //
 // 两种箱子：
-//   内置的：wake/boxes.ts 按 backend.env 装（记忆库、心潮、Leto、迎风小镇、醒来设置），只能开关「聊天/醒来」
+//   内置的：wake/boxes.ts 按 backend.env 装（记忆库、心潮、Leto、迎风小镇、醒来设置、这一刻），只能开关「聊天/醒来」
+//   （「这一刻」是 wakeOnly：聊天那个开关打不开，见 wake/moments-box.ts）
 //   她加的：在设置页「他的工具箱」里填 MCP 地址和令牌，存在 /etc/eclipsis/toolbox/boxes.json（600），令牌不回给前端
 // 以后加新工具 = 加一个箱子，聊天和醒来各一个开关，默认都开。不同箱子里不许有同名的工具（后加的那个同名的不给）。
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -52,7 +53,7 @@ function writeFile(f: BoxFile) {
   cache.clear()
 }
 
-const BUILTIN_TITLES: Record<string, string> = { memory: '记忆库', xinchao: '心潮', leto: 'Leto', town: '迎风小镇', settings: '醒来设置' }
+const BUILTIN_TITLES: Record<string, string> = { memory: '记忆库', xinchao: '心潮', leto: 'Leto', town: '迎风小镇', settings: '醒来设置', moments: '这一刻' }
 
 interface Entry { box: WakeBox; title: string; builtin: boolean; chat: boolean; wake: boolean; custom?: CustomBox }
 
@@ -60,7 +61,7 @@ function entries(db: DB, env: NodeJS.ProcessEnv): Entry[] {
   const f = readFile()
   const out: Entry[] = buildWakeBoxes(db, env).map(box => ({
     box, title: BUILTIN_TITLES[box.id] || box.id, builtin: true,
-    chat: f.builtin[box.id]?.chat !== false, wake: f.builtin[box.id]?.wake !== false,
+    chat: !box.wakeOnly && f.builtin[box.id]?.chat !== false, wake: f.builtin[box.id]?.wake !== false,
   }))
   const taken = new Set(out.map(e => e.box.entryName))
   for (const c of f.custom) {
@@ -170,7 +171,7 @@ export async function handleToolboxApi(db: DB, req: IncomingMessage, res: Server
     if (p === '/v1/eclipsis/toolbox' && req.method === 'GET') {
       json(res, 200, { boxes: entries(db, env).map(e => ({
         id: e.box.id, title: e.title, entryName: e.box.entryName, description: e.box.entryDescription,
-        builtin: e.builtin, chat: e.chat, wake: e.wake,
+        builtin: e.builtin, chat: e.chat, wake: e.wake, wakeOnly: e.box.wakeOnly || undefined,
         url: e.custom ? maskUrl(e.custom.url) : '（backend.env）', token: e.custom ? mask(e.custom.token) : '',
         tools: cache.get(e.box.entryName)?.tools.length ?? null,
       })) })
@@ -203,6 +204,9 @@ export async function handleToolboxApi(db: DB, req: IncomingMessage, res: Server
       const c = f.custom.find(x => x.id === id)
       if (c) { if (typeof b.chat === 'boolean') c.chat = b.chat; if (typeof b.wake === 'boolean') c.wake = b.wake }
       else if (buildWakeBoxes(db, env).some(x => x.id === id)) {
+        if (b.chat === true && buildWakeBoxes(db, env).find(x => x.id === id)?.wakeOnly) {
+          json(res, 400, { error: '这个箱子只在醒来时有：聊天里调用，结果会经过她的手机、显示在聊天里' }); return true
+        }
         f.builtin[id] = { ...f.builtin[id], ...(typeof b.chat === 'boolean' ? { chat: b.chat } : {}), ...(typeof b.wake === 'boolean' ? { wake: b.wake } : {}) }
       } else { json(res, 404, { error: '没有这个箱子' }); return true }
       writeFile(f)

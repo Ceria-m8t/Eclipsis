@@ -65,7 +65,7 @@ async function remove(b: BoxInfo) {
       </div>
       <p class="tb-desc">{{ b.description }}</p>
       <div class="tb-row">
-        <label class="tb-flag"><input type="checkbox" :checked="b.chat" :disabled="!!busy" @change="flip(b, 'chat')" />聊天</label>
+        <label class="tb-flag"><input type="checkbox" :checked="b.chat" :disabled="!!busy || b.wakeOnly" @change="flip(b, 'chat')" />聊天</label>
         <label class="tb-flag"><input type="checkbox" :checked="b.wake" :disabled="!!busy" @change="flip(b, 'wake')" />醒来</label>
         <span class="tb-spacer"></span>
         <button class="tb-btn" :disabled="!!busy" @click="test(b)">测试</button>
@@ -74,6 +74,7 @@ async function remove(b: BoxInfo) {
           <button class="tb-btn danger" @click="remove(b)">删</button>
         </template>
       </div>
+      <p v-if="b.wakeOnly" class="tb-meta">只在他自己醒来时有。放进聊天的话，翻到的内容会显示在聊天里，锁着的就不算锁着了。</p>
       <p v-if="!b.builtin" class="tb-meta">{{ b.url }}{{ b.token ? ' · 令牌 ' + b.token : '' }}</p>
       <p v-if="msg[b.id]" class="tb-meta">{{ msg[b.id] }}</p>
     </div>

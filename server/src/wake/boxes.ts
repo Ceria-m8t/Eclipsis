@@ -15,6 +15,7 @@ import type { DB } from '../db.ts'
 import { listTools, callTool, type LetoMcpConfig, type McpTool } from '../leto/mcp-client.ts'
 import { loadAgents } from '../leto/agent.ts'
 import * as T from './tools.ts'
+import { momentsBox } from './moments-box.ts'
 import type { FrequencyMode, SourceId } from './types.ts'
 
 export interface ToolResult { text: string; isError: boolean }
@@ -25,6 +26,8 @@ export interface WakeBox {
   entryName: string
   /** 入口说明：箱子里大概有什么 */
   entryDescription: string
+  /** 只在醒来时有，聊天里打不开（结果会经过她的手机、显示在聊天里），设置页的「聊天」开关也打不开 */
+  wakeOnly?: boolean
   listTools(): Promise<McpTool[]>
   call(name: string, args: Record<string, unknown>): Promise<ToolResult>
 }
@@ -202,5 +205,6 @@ export function buildWakeBoxes(db: DB, env: NodeJS.ProcessEnv = process.env): Wa
     }))
   }
   boxes.push(settingsBox(db))
+  boxes.push(momentsBox(db))
   return boxes
 }
