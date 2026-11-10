@@ -93,3 +93,51 @@ test('两个箱子有同名工具：后打开的那个不给同名的', async ()
     assert.deepEqual(o.tools.map((x: any) => x.function.name), ['xinchao_context'])
   } finally { await close(a.server); await close(b.server); t.cleanup(); setToolboxFile('/etc/eclipsis/toolbox/boxes.json') }
 })
+
+test('箱子能排顺序：入口按顺序给，同名工具排前面的算数；没列进去的排后面', async () => {
+  const t = tempDir()
+  setToolboxFile(join(t.dir, 'toolbox', 'boxes.json'))
+  const db = openDb(':memory:')
+  const a = fakeMcp(['play', 'a_only']), b = fakeMcp(['play', 'b_only'])
+  const pa = await listen(a.server), pb = await listen(b.server)
+  try {
+    const ida = (await api(db, 'POST', '/v1/eclipsis/toolbox', { title: 'A', entryName: 'open_aaa', description: '箱子 A 的说明', url: `http://127.0.0.1:${pa}/mcp` })).body.id
+    const idb = (await api(db, 'POST', '/v1/eclipsis/toolbox', { title: 'B', entryName: 'open_bbb', description: '箱子 B 的说明', url: `http://127.0.0.1:${pb}/mcp` })).body.id
+    const names = async () => (await api(db, 'GET', '/v1/eclipsis/tools')).body.boxes.map((x: any) => x.entryName)
+    assert.deepEqual(await names(), ['open_wake_settings', 'open_aaa', 'open_bbb'])
+    const r = await api(db, 'POST', '/v1/eclipsis/toolbox/order', { ids: [idb, 'settings', 'nope', ida] })
+    assert.deepEqual(r.body.order, [idb, 'settings', ida], '不认识的 id 丢掉')
+    assert.deepEqual(await names(), ['open_bbb', 'open_wake_settings', 'open_aaa'])
+    assert.deepEqual(boxesFor(db, 'wake', {}).map(x => x.entryName), ['open_bbb', 'open_wake_settings', 'open_aaa', 'open_moments'], '醒来也按这个顺序，没排的在后面')
+    // B 排前面：先开 B，再开 A，A 里同名的 play 不给
+    await openBox(db, 'open_bbb', {})
+    assert.deepEqual((await openBox(db, 'open_aaa', {})).tools.map((x: any) => x.function.name), ['a_only'])
+    // 改别的设置不会把顺序弄丢
+    await api(db, 'POST', '/v1/eclipsis/toolbox/flags', { id: ida, wake: false })
+    assert.deepEqual(await names(), ['open_bbb', 'open_wake_settings', 'open_aaa'])
+    assert.equal((await api(db, 'POST', '/v1/eclipsis/toolbox/order', { ids: 'x' })).status, 400)
+  } finally { await close(a.server); await close(b.server); t.cleanup(); setToolboxFile('/etc/eclipsis/toolbox/boxes.json') }
+})
+
+test('她加的箱子能设「不让他用的」：工具名直接不给；命令写在参数里的照样拦，不分大小写', async () => {
+  const t = tempDir()
+  setToolboxFile(join(t.dir, 'toolbox', 'boxes.json'))
+  const db = openDb(':memory:')
+  const m = fakeMcp(['cli', 'wipe'])
+  const port = await listen(m.server)
+  try {
+    const add = await api(db, 'POST', '/v1/eclipsis/toolbox', { title: 'AIsay', entryName: 'open_aisay', description: 'AI 小镇', url: `http://127.0.0.1:${port}/mcp`, blocked: [' account.rotate_token ', 'wipe', ''] })
+    const info = (await api(db, 'GET', '/v1/eclipsis/toolbox')).body.boxes.find((x: any) => x.id === add.body.id)
+    assert.deepEqual(info.blocked, ['account.rotate_token', 'wipe'])
+    assert.deepEqual((await openBox(db, 'open_aisay', {})).tools.map((x: any) => x.function.name), ['cli'])
+    const n = m.calls.length
+    const no = await callBoxTool(db, 'open_aisay', 'cli', { command: 'Account.Rotate_Token', args: {} }, {})
+    assert.equal(no.isError, true); assert.match(no.text, /不让用/)
+    assert.equal((await callBoxTool(db, 'open_aisay', 'wipe', {}, {})).isError, true)
+    assert.equal(m.calls.length, n, '拦下的没发出去')
+    assert.equal((await callBoxTool(db, 'open_aisay', 'cli', { command: 'chat.read', args: { note: '别 account.rotate_token' } }, {})).isError, false, '整个词相同才拦')
+    // 改的时候不带 blocked：保留原来的
+    await api(db, 'POST', '/v1/eclipsis/toolbox', { id: add.body.id, title: 'AIsay', entryName: 'open_aisay', description: 'AI 小镇', url: `http://127.0.0.1:${port}/mcp` })
+    assert.deepEqual((await api(db, 'GET', '/v1/eclipsis/toolbox')).body.boxes.find((x: any) => x.id === add.body.id).blocked, ['account.rotate_token', 'wipe'])
+  } finally { await close(m.server); t.cleanup(); setToolboxFile('/etc/eclipsis/toolbox/boxes.json') }
+})

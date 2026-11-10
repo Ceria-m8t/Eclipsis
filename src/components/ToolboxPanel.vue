@@ -1,14 +1,15 @@
 <script setup lang="ts">
 // 设置页「他的工具箱」：聊天和醒来共用的箱子（后端 server/src/toolbox.ts）。
-// 内置的（记忆库、心潮、Leto、小镇、醒来设置）只能开关；她自己加的可以改、删。令牌只存在后端，这里只看到打码的。
+// 内置的（记忆库、心潮、Leto、小镇、醒来设置、这一刻）只能开关；她自己加的可以改、删。令牌只存在后端，这里只看到打码的。
+// ↑↓ 排顺序：他手边的入口按这个排，两个箱子有同名工具时排前面的算数。
 import { ref, onMounted } from 'vue'
-import { listToolbox, saveBox, setBoxFlags, deleteBox, testBox, type BoxInfo } from '../toolbox'
+import { listToolbox, saveBox, setBoxFlags, setBoxOrder, deleteBox, testBox, type BoxInfo } from '../toolbox'
 
 const boxes = ref<BoxInfo[]>([])
 const err = ref('')
 const msg = ref<Record<string, string>>({})
 const busy = ref('')
-interface Draft { id?: string; title: string; entryName: string; description: string; url: string; token: string; chat: boolean; wake: boolean }
+interface Draft { id?: string; title: string; entryName: string; description: string; url: string; token: string; chat: boolean; wake: boolean; blocked: string }
 const draft = ref<Draft | null>(null)
 
 async function reload() {
@@ -21,6 +22,17 @@ async function flip(b: BoxInfo, key: 'chat' | 'wake') {
   try { await setBoxFlags(b.id, { [key]: !b[key] }); b[key] = !b[key] } catch (e: any) { msg.value[b.id] = e.message }
   busy.value = ''
 }
+async function move(i: number, d: -1 | 1) {
+  const j = i + d
+  if (j < 0 || j >= boxes.value.length || busy.value) return
+  const list = [...boxes.value]
+  ;[list[i], list[j]] = [list[j]!, list[i]!]
+  const before = boxes.value
+  boxes.value = list
+  busy.value = 'order'
+  try { await setBoxOrder(list.map(b => b.id)) } catch (e: any) { boxes.value = before; err.value = '顺序没存上：' + e.message }
+  busy.value = ''
+}
 async function test(b: BoxInfo) {
   busy.value = b.id + 'test'
   msg.value[b.id] = '正在问…'
@@ -30,8 +42,8 @@ async function test(b: BoxInfo) {
 }
 function edit(b?: BoxInfo) {
   draft.value = b
-    ? { id: b.id, title: b.title, entryName: b.entryName, description: b.description, url: '', token: '', chat: b.chat, wake: b.wake }
-    : { title: '', entryName: 'open_', description: '', url: '', token: '', chat: true, wake: true }
+    ? { id: b.id, title: b.title, entryName: b.entryName, description: b.description, url: '', token: '', chat: b.chat, wake: b.wake, blocked: (b.blocked || []).join('\n') }
+    : { title: '', entryName: 'open_', description: '', url: '', token: '', chat: true, wake: true, blocked: '' }
 }
 async function save() {
   const d = draft.value
@@ -39,7 +51,8 @@ async function save() {
   if (d.id && !d.url) { msg.value.draft = '改的时候要重新填一下地址（地址里可能带着令牌，所以这里不显示原来的）'; return }
   busy.value = 'save'
   try {
-    await saveBox({ id: d.id, title: d.title, entryName: d.entryName, description: d.description, url: d.url, token: d.token, chat: d.chat, wake: d.wake })
+    const blocked = d.blocked.split('\n').map(x => x.trim()).filter(Boolean)
+    await saveBox({ id: d.id, title: d.title, entryName: d.entryName, description: d.description, url: d.url, token: d.token, chat: d.chat, wake: d.wake, blocked })
     draft.value = null
     msg.value.draft = ''
     await reload()
@@ -54,14 +67,17 @@ async function remove(b: BoxInfo) {
 
 <template>
   <div class="toolbox">
-    <p class="tb-hint">他聊天时和自己醒来时用的是同一套箱子：手边先只有每个箱子的入口，打开了才拿到里面的工具（省 token）。以后加新工具就在这里加一个箱子，「聊天」「醒来」各一个开关。</p>
+    <p class="tb-hint">他聊天时和自己醒来时用的是同一套箱子：手边先只有每个箱子的入口，打开了才拿到里面的工具（省 token）。以后加新工具就在这里加一个箱子，「聊天」「醒来」各一个开关。↑↓ 排顺序：他手边的入口按这个顺序排。</p>
     <p v-if="err" class="tb-err">{{ err }}</p>
 
-    <div v-for="b in boxes" :key="b.id" class="tb-item">
+    <div v-for="(b, i) in boxes" :key="b.id" class="tb-item">
       <div class="tb-head">
         <span class="tb-title">{{ b.title }}</span>
         <code class="tb-entry">{{ b.entryName }}</code>
         <span v-if="b.builtin" class="tb-badge">内置</span>
+        <span class="tb-spacer"></span>
+        <button class="tb-move" :disabled="i === 0 || !!busy" aria-label="往前挪" @click="move(i, -1)">↑</button>
+        <button class="tb-move" :disabled="i === boxes.length - 1 || !!busy" aria-label="往后挪" @click="move(i, 1)">↓</button>
       </div>
       <p class="tb-desc">{{ b.description }}</p>
       <div class="tb-row">
@@ -75,6 +91,7 @@ async function remove(b: BoxInfo) {
         </template>
       </div>
       <p v-if="b.wakeOnly" class="tb-meta">只在他自己醒来时有。放进聊天的话，翻到的内容会显示在聊天里，锁着的就不算锁着了。</p>
+      <p v-if="b.blocked?.length" class="tb-meta">不让他用：{{ b.blocked.join('、') }}</p>
       <p v-if="!b.builtin" class="tb-meta">{{ b.url }}{{ b.token ? ' · 令牌 ' + b.token : '' }}</p>
       <p v-if="msg[b.id]" class="tb-meta">{{ msg[b.id] }}</p>
     </div>
@@ -85,6 +102,7 @@ async function remove(b: BoxInfo) {
       <textarea v-model="draft.description" class="wb-title-input" rows="2" placeholder="一句话说明：箱子里有什么、什么时候用（他看这句决定要不要打开）"></textarea>
       <input v-model="draft.url" class="wb-title-input" :placeholder="draft.id ? 'MCP 地址（改的时候要重新填）' : 'MCP 地址（http:// 或 https://）'" autocapitalize="off" />
       <input v-model="draft.token" type="password" class="wb-title-input" :placeholder="draft.id ? 'Bearer 令牌（留空 = 不改）' : 'Bearer 令牌（没有就空着）'" />
+      <textarea v-model="draft.blocked" class="wb-title-input" rows="2" autocapitalize="off" placeholder="不让他用的（可不填）：一行一个工具名或命令名，比如 account.rotate_token"></textarea>
       <div class="tb-row">
         <label class="tb-flag"><input v-model="draft.chat" type="checkbox" />聊天</label>
         <label class="tb-flag"><input v-model="draft.wake" type="checkbox" />醒来</label>
@@ -115,6 +133,11 @@ async function remove(b: BoxInfo) {
 .tb-desc { font-size: 12.5px; line-height: 1.55; color: var(--text-2); }
 .tb-row { display: flex; align-items: center; gap: 10px; }
 .tb-spacer { flex: 1; }
+.tb-move {
+  border: none; background: none; padding: 0 4px; font-size: 15px; line-height: 1;
+  color: var(--text-2);
+}
+.tb-move:disabled { opacity: 0.25; }
 .tb-flag { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: var(--text-2); }
 .tb-flag input { accent-color: var(--accent); }
 .tb-btn {

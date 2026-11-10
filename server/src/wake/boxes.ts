@@ -58,7 +58,7 @@ export function mcpBox(o: {
 const TOWN_DELETION = /\b(request|confirm)_deletion\b/i
 const TOWN_DELETION_ZH = /^(申请|确认)?注销(身份|账号|居民)?$/
 
-function strings(v: unknown, out: string[] = []): string[] {
+export function strings(v: unknown, out: string[] = []): string[] {
   if (typeof v === 'string') out.push(v)
   else if (Array.isArray(v)) v.forEach(x => strings(x, out))
   else if (v && typeof v === 'object') Object.values(v).forEach(x => strings(x, out))

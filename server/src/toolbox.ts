@@ -12,7 +12,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { DB } from './db.ts'
-import { buildWakeBoxes, mcpBox, type WakeBox } from './wake/boxes.ts'
+import { buildWakeBoxes, mcpBox, strings, type WakeBox } from './wake/boxes.ts'
 import { toOpenAITools, type McpTool } from './leto/mcp-client.ts'
 
 export type Scene = 'chat' | 'wake'
@@ -26,11 +26,15 @@ export interface CustomBox {
   token: string          // 没有就空（令牌在 URL 里的那种）
   chat: boolean
   wake: boolean
+  /** 不让他用的：工具名，或参数里的命令名（像 AIsay 只有一个 cli 工具，命令写在 command 参数里）。不分大小写，整个词相同才算 */
+  blocked?: string[]
 }
 interface BoxFile {
   custom: CustomBox[]
   /** 内置箱子的开关：{ memory: { chat: true, wake: false } } */
   builtin: Record<string, { chat?: boolean; wake?: boolean }>
+  /** 箱子的顺序（箱子 id）。他手边的入口按这个排；两个箱子有同名工具时排前面的那个算数。没列进去的排在后面 */
+  order?: string[]
 }
 
 let filePath = '/etc/eclipsis/toolbox/boxes.json'
@@ -40,7 +44,8 @@ function readFile(): BoxFile {
   try {
     if (existsSync(filePath)) {
       const f = JSON.parse(readFileSync(filePath, 'utf8'))
-      return { custom: Array.isArray(f.custom) ? f.custom : [], builtin: f.builtin && typeof f.builtin === 'object' ? f.builtin : {} }
+      return { custom: Array.isArray(f.custom) ? f.custom : [], builtin: f.builtin && typeof f.builtin === 'object' ? f.builtin : {},
+        order: Array.isArray(f.order) ? f.order.filter((x: unknown) => typeof x === 'string') : undefined }
     }
   } catch { /* 坏了按空的来，不覆盖它：写的时候会先备份 */ }
   return { custom: [], builtin: {} }
@@ -67,11 +72,24 @@ function entries(db: DB, env: NodeJS.ProcessEnv): Entry[] {
   for (const c of f.custom) {
     if (taken.has(c.entryName)) continue
     taken.add(c.entryName)
+    const blocked = new Set((c.blocked || []).map(x => x.trim().toLowerCase()).filter(Boolean))
     out.push({
       box: mcpBox({ id: c.id, entryName: c.entryName, entryDescription: c.description,
-        mcp: { baseUrl: '', url: c.url, token: c.token, label: c.title, timeoutMs: 60_000 } }),
+        mcp: { baseUrl: '', url: c.url, token: c.token, label: c.title, timeoutMs: 60_000 },
+        ...(blocked.size ? {
+          allow: (name: string) => !blocked.has(name.toLowerCase()),
+          block: (_name: string, args: Record<string, unknown>) => {
+            const hit = strings(args).find(x => blocked.has(x.trim().toLowerCase()))
+            return hit ? `「${hit.trim()}」她设成了不让用。` : undefined
+          },
+        } : {}) }),
       title: c.title, builtin: false, chat: c.chat, wake: c.wake, custom: c,
     })
+  }
+  if (f.order?.length) {
+    const at = new Map(f.order.map((id, i) => [id, i]))
+    const rank = (e: Entry) => at.get(e.box.id) ?? Number.MAX_SAFE_INTEGER
+    out.sort((a, b) => rank(a) - rank(b))   // 稳定排序：没列进去的保持原来的先后
   }
   return out
 }
@@ -136,6 +154,7 @@ function validate(b: any): string | null {
   if (typeof b.entryName !== 'string' || !ENTRY_RE.test(b.entryName)) return '入口名要像 open_music 这样：open_ 开头，小写英文、数字、下划线'
   if (typeof b.description !== 'string' || b.description.trim().length < 4 || b.description.length > 600) return '要写一句说明：箱子里有什么、什么时候用（600 字以内）'
   if (typeof b.url !== 'string' || !/^https?:\/\//.test(b.url)) return 'MCP 地址要以 http:// 或 https:// 开头'
+  if (b.blocked !== undefined && (!Array.isArray(b.blocked) || b.blocked.length > 50 || b.blocked.some((x: unknown) => typeof x !== 'string' || x.length > 96))) return '不让用的要一行一个（最多 50 个）'
   return null
 }
 
@@ -146,6 +165,7 @@ function validate(b: any): string | null {
  *   GET  /v1/eclipsis/toolbox                    设置页：所有箱子（令牌、地址打码）
  *   POST /v1/eclipsis/toolbox                    加/改她的箱子（改的时候令牌留空 = 不改）
  *   POST /v1/eclipsis/toolbox/flags  { id, chat, wake }   开关（内置的也能关）
+ *   POST /v1/eclipsis/toolbox/order  { ids }     排顺序（他手边入口的顺序；同名工具排前面的算数）
  *   POST /v1/eclipsis/toolbox/delete { id }      删她的箱子
  *   POST /v1/eclipsis/toolbox/test   { id }      问一下箱子里有哪些工具
  */
@@ -173,6 +193,7 @@ export async function handleToolboxApi(db: DB, req: IncomingMessage, res: Server
         id: e.box.id, title: e.title, entryName: e.box.entryName, description: e.box.entryDescription,
         builtin: e.builtin, chat: e.chat, wake: e.wake, wakeOnly: e.box.wakeOnly || undefined,
         url: e.custom ? maskUrl(e.custom.url) : '（backend.env）', token: e.custom ? mask(e.custom.token) : '',
+        blocked: e.custom ? e.custom.blocked || [] : undefined,
         tools: cache.get(e.box.entryName)?.tools.length ?? null,
       })) })
       return true
@@ -191,6 +212,7 @@ export async function handleToolboxApi(db: DB, req: IncomingMessage, res: Server
         id: old?.id || 'c' + Date.now().toString(36), title: b.title.trim(), entryName: b.entryName, description: b.description.trim(),
         url: b.url.trim(), token: typeof b.token === 'string' && b.token.trim() ? b.token.trim() : old?.token || '',
         chat: b.chat !== false, wake: b.wake !== false,
+        blocked: Array.isArray(b.blocked) ? [...new Set<string>(b.blocked.map((x: string) => x.trim()).filter(Boolean))] : old?.blocked || [],
       }
       f.custom = old ? f.custom.map(c => (c.id === old.id ? box : c)) : [...f.custom, box]
       writeFile(f)
@@ -211,6 +233,16 @@ export async function handleToolboxApi(db: DB, req: IncomingMessage, res: Server
       } else { json(res, 404, { error: '没有这个箱子' }); return true }
       writeFile(f)
       json(res, 200, { ok: true })
+      return true
+    }
+    if (p === '/v1/eclipsis/toolbox/order' && req.method === 'POST') {
+      const b = await readJson(req)
+      const known = new Set(entries(db, env).map(e => e.box.id))
+      if (!Array.isArray(b?.ids) || b.ids.some((x: unknown) => typeof x !== 'string')) { json(res, 400, { error: 'ids 要是箱子 id 的列表' }); return true }
+      const f = readFile()
+      f.order = [...new Set<string>(b.ids)].filter(id => known.has(id))
+      writeFile(f)
+      json(res, 200, { ok: true, order: f.order })
       return true
     }
     if (p === '/v1/eclipsis/toolbox/delete' && req.method === 'POST') {

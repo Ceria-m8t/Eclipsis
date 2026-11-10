@@ -44,14 +44,16 @@ export async function callBoxTool(entry: string, name: string, args: Record<stri
 export interface BoxInfo {
   id: string; title: string; entryName: string; description: string
   builtin: boolean; chat: boolean; wake: boolean; wakeOnly?: boolean; url: string; token: string; tools: number | null
+  blocked?: string[]
 }
 export async function listToolbox(): Promise<BoxInfo[]> {
   const r = await fetch(BASE + '/toolbox', { cache: 'no-store' })
   if (!r.ok) throw new Error(`读取工具箱失败（HTTP ${r.status}）`)
   return (await r.json()).boxes
 }
-export const saveBox = (b: { id?: string; title: string; entryName: string; description: string; url: string; token?: string; chat: boolean; wake: boolean }) =>
+export const saveBox = (b: { id?: string; title: string; entryName: string; description: string; url: string; token?: string; chat: boolean; wake: boolean; blocked?: string[] }) =>
   post('/toolbox', b).then(r => { forgetBoxEntries(); return r })
 export const setBoxFlags = (id: string, flags: { chat?: boolean; wake?: boolean }) => post('/toolbox/flags', { id, ...flags }).then(r => { forgetBoxEntries(); return r })
+export const setBoxOrder = (ids: string[]) => post('/toolbox/order', { ids }).then(r => { forgetBoxEntries(); return r })
 export const deleteBox = (id: string) => post('/toolbox/delete', { id }).then(r => { forgetBoxEntries(); return r })
 export const testBox = (id: string): Promise<{ ok: boolean; tools?: string[]; error?: string }> => post('/toolbox/test', { id })

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // 书翻开以后停下的那一页：在纸上直接编辑。
 // 纸（书页图）固定铺满屏幕，只有字在滚；横线跟着行高画，跟着字一起滚。
+// 主 Prompt 有两页：「他是谁」和「家里能做什么」，点书名下面的两个字切换，也可以左右划。
 import { ref, computed, nextTick, onMounted, watch } from 'vue'
 
 const props = defineProps<{
@@ -37,6 +38,28 @@ const priority = ref(props.priority)
 const features = ref(props.features ?? '')
 const featuresOn = ref(props.featuresEnabled ?? true)
 const showMarks = ref(false)
+// 主 Prompt 翻到第几页：0 = 他是谁，1 = 家里能做什么
+const leaf = ref(0)
+const leafDir = ref<'next' | 'prev'>('next')
+const scrollEl = ref<HTMLElement | null>(null)
+function toLeaf(n: number) {
+  if (props.kind !== 'main' || n === leaf.value || n < 0 || n > 1) return
+  leafDir.value = n > leaf.value ? 'next' : 'prev'
+  leaf.value = n
+  ;(document.activeElement as HTMLElement | null)?.blur?.()
+  scrollEl.value?.scrollTo({ top: 0 })
+  nextTick(grow)
+}
+// 左右划翻页：横着走得比竖着多一倍、超过 60px 才算（竖着滚照常）
+let touch: { x: number; y: number } | null = null
+function onTouchStart(e: TouchEvent) { const t = e.touches[0]; touch = t && e.touches.length === 1 ? { x: t.clientX, y: t.clientY } : null }
+function onTouchEnd(e: TouchEvent) {
+  const t = e.changedTouches[0]
+  if (!touch || !t) return
+  const dx = t.clientX - touch.x, dy = t.clientY - touch.y
+  touch = null
+  if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 2) toLeaf(leaf.value + (dx < 0 ? 1 : -1))
+}
 const confirmRemove = ref(false)
 
 const dirty = computed(() =>
@@ -77,7 +100,7 @@ function remove() {
   <div class="book-page" :class="kind">
     <!-- 纸单独一层，高度定在打开时的整屏高：键盘弹出来时页面变矮，纸不跟着缩放上移 -->
     <div class="paper" data-glass-backdrop :style="{ backgroundImage: `url(${page})`, height: paperH }"></div>
-    <div class="scroll">
+    <div ref="scrollEl" class="scroll" @touchstart.passive="onTouchStart" @touchend.passive="onTouchEnd">
       <div class="sheet">
         <textarea
           v-if="kind === 'world'"
@@ -99,9 +122,9 @@ function remove() {
             <button class="link" @click="showMarks = !showMarks">{{ showMarks ? '收起书签' : '书签' }}</button>
           </template>
           <template v-else>
-            <span>他是谁</span>
+            <button class="leaf-tab" :class="{ on: leaf === 0 }" @click="toLeaf(0)">他是谁</button>
             <span class="dot">·</span>
-            <button class="link" @click="emit('history')">历史版本</button>
+            <button class="leaf-tab" :class="{ on: leaf === 1 }" @click="toLeaf(1)">家里能做什么</button>
           </template>
         </div>
 
@@ -121,32 +144,35 @@ function remove() {
           </label>
         </div>
 
-        <textarea
-          ref="area"
-          v-model="content"
-          class="body"
-          :placeholder="kind === 'main' ? '写下他是谁……' : '在这页写下这本书的内容……'"
-          spellcheck="false"
-        ></textarea>
-
-        <!-- 主 Prompt 的第二部分：家里能做什么。拼的时候紧跟在上面那段后面 -->
-        <template v-if="kind === 'main'">
-          <div class="part-title" :style="{ fontFamily: titleFont, fontWeight: titleWeight }">家里能做什么</div>
-          <div class="meta">
-            <label class="toggle"><input v-model="featuresOn" type="checkbox" /> {{ featuresOn ? '拼在上面那段后面' : '没拼进去' }}</label>
+        <Transition :name="'leaf-' + leafDir" mode="out-in">
+          <div v-if="kind !== 'main' || leaf === 0" key="p0" class="leaf">
+            <textarea
+              ref="area"
+              v-model="content"
+              class="body"
+              :placeholder="kind === 'main' ? '写下他是谁……' : '在这页写下这本书的内容……'"
+              spellcheck="false"
+            ></textarea>
           </div>
-          <p class="part-hint">告诉他 Eclipsis 里有哪些功能、哪些还没有。加功能、改功能时，开发这边会顺手更新这里。</p>
-          <textarea
-            ref="featArea"
-            v-model="features"
-            class="body features"
-            :class="{ off: !featuresOn }"
-            placeholder="家里有哪些能做的……"
-            spellcheck="false"
-            aria-label="家里能做什么"
-          ></textarea>
-        </template>
+          <!-- 主 Prompt 第二页：家里能做什么。拼的时候紧跟在第一页后面 -->
+          <div v-else key="p1" class="leaf">
+            <div class="meta">
+              <label class="toggle"><input v-model="featuresOn" type="checkbox" /> {{ featuresOn ? '拼在第一页后面' : '没拼进去' }}</label>
+            </div>
+            <p class="part-hint">告诉他 Eclipsis 里有哪些功能、哪些还没有。加功能、改功能时，开发这边会顺手更新这里。</p>
+            <textarea
+              ref="featArea"
+              v-model="features"
+              class="body features"
+              :class="{ off: !featuresOn }"
+              placeholder="家里有哪些能做的……"
+              spellcheck="false"
+              aria-label="家里能做什么"
+            ></textarea>
+          </div>
+        </Transition>
 
+        <button v-if="kind === 'main'" class="link history" @click="emit('history')">历史版本</button>
         <button v-if="kind === 'world' && !isNew" class="remove" @click="remove">{{ confirmRemove ? '再点一次，抽走这本' : '抽走这本' }}</button>
       </div>
     </div>
@@ -281,16 +307,20 @@ function remove() {
     rgba(50, 60, 110, 0.2) var(--lh)
   );
 }
-.body.features { min-height: 30vh; }
+
 .body.features.off { opacity: 0.45; }
-.part-title {
-  margin-top: 40px;
-  text-align: center;
-  font-size: 21px;
-  letter-spacing: 2px;
-  color: #1d2140;
-  text-shadow: 0 1px 0 rgba(255, 250, 235, 0.6);
+.leaf { display: flex; flex-direction: column; flex: 1; }
+.leaf .meta { margin-top: 14px; }
+.leaf-tab {
+  border: none; background: none; padding: 2px 2px;
+  font-size: 14px; color: inherit; opacity: 0.7;
+  border-bottom: 1.5px solid transparent;
 }
+.leaf-tab.on { opacity: 1; font-weight: 600; color: #1d2140; border-bottom-color: rgba(29, 33, 64, 0.55); }
+.history { align-self: center; margin-top: 24px; opacity: 0.75; }
+.leaf-next-enter-active, .leaf-next-leave-active, .leaf-prev-enter-active, .leaf-prev-leave-active { transition: opacity 0.18s ease, transform 0.18s ease; }
+.leaf-next-enter-from, .leaf-prev-leave-to { opacity: 0; transform: translateX(24px); }
+.leaf-next-leave-to, .leaf-prev-enter-from { opacity: 0; transform: translateX(-24px); }
 .part-hint {
   margin: 8px 0 0;
   text-align: center;
