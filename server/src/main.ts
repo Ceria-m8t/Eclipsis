@@ -65,6 +65,17 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
   const blobs = new BlobStore(db, cfg.blobDir)
   const recorder = new Recorder(db, blobs, { onEricaMessage: opts.onEricaMessage, onTurnComplete: opts.onTurnComplete })
 
+  // 发给中转站时的请求头（换掉调用方的 key，用站的 key）
+  const stationHeaders = (req: IncomingMessage): Record<string, string> => {
+    const h: Record<string, string> = {
+      'content-type': String(req.headers['content-type'] || 'application/json'),
+      accept: String(req.headers.accept || 'application/json')
+    }
+    if (cfg.upstreamKey) h.authorization = `Bearer ${cfg.upstreamKey}`
+    if (req.headers['user-agent']) h['user-agent'] = String(req.headers['user-agent'])
+    return h
+  }
+
   // 前端出口：鉴权交给 Dylan（nginx 注入的网关 key 原样带过去）；本端口只监听 127.0.0.1
   const front = createTap({
     tap: 'front', name: 'front', recorder, headerTimeoutMs: cfg.headerTimeoutMs, log: opts.log,
@@ -76,15 +87,22 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
       if (await handleToolboxApi(db, req, res)) return true
       // 模型列表：后端问当前这个站（以前透传给 xiaoke，它没有这个接口，Kelivo 只能拿到 404）
       if (await handleModelsApi(req, res, { url: cfg.upstreamUrl, key: cfg.upstreamKey })) return true
-      if (await handleChatApi(db, { blobDir: cfg.blobDir, xiaoke: xiaokeApi(cfg.xiaokeUrl, cfg.xiaokeKey) }, req, res)) return true
+      if (await handleChatApi(db, {
+        blobDir: cfg.blobDir, xiaoke: xiaokeApi(cfg.xiaokeUrl, cfg.xiaokeKey), xiaokeHasNewMessages: !cfg.bypassXiaoke
+      }, req, res)) return true
       if (await handleLetoApi(opts.letoApi ?? null, db, req, res)) return true
       if (process.env.LETO_ADMIN_ENABLED === '1' && await handleLetoAdmin(req, res, db)) return true
       return handleApi(db, req, res)
     },
     authorize: () => true,
-    target: path => joinV1(cfg.dylanUrl, path),
-    outgoingHeaders: forwardHeaders,
+    // BYPASS_XIAOKE=1：不再经过 xiaoke，直接发给中转站（队列、重复记录、它垫的那段历史都没了）
+    ...(cfg.bypassXiaoke ? { streamIdleMs: cfg.streamIdleMs, retry429DelaysMs: cfg.retry429DelaysMs } : {}),
+    target: path => (cfg.bypassXiaoke
+      ? (cfg.upstreamUrl ? joinV1(cfg.upstreamUrl, path) : null)
+      : joinV1(cfg.dylanUrl, path)),
+    outgoingHeaders: req => (cfg.bypassXiaoke ? stationHeaders(req) : forwardHeaders(req)),
     prepare: (json, raw): Prepared => {
+      if (cfg.bypassXiaoke) return stationPrepare(json, raw)
       const rid = crypto.randomUUID()
       if (!opts.linkRid) return { rid, linked: false, body: raw }
       return { rid, linked: false, body: Buffer.from(JSON.stringify({ ...json, eclipsis_rid: rid })) }
@@ -96,16 +114,13 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
     tap: 'upstream', name: 'tap', recorder, headerTimeoutMs: cfg.headerTimeoutMs, streamIdleMs: cfg.streamIdleMs, retry429DelaysMs: cfg.retry429DelaysMs, log: opts.log,
     authorize: req => !!cfg.tapKey && safeEqual(bearer(req), cfg.tapKey),
     target: path => (cfg.upstreamUrl ? joinV1(cfg.upstreamUrl, path) : null),
-    outgoingHeaders: req => {
-      const h: Record<string, string> = {
-        'content-type': String(req.headers['content-type'] || 'application/json'),
-        accept: String(req.headers.accept || 'application/json')
-      }
-      if (cfg.upstreamKey) h.authorization = `Bearer ${cfg.upstreamKey}`
-      if (req.headers['user-agent']) h['user-agent'] = String(req.headers['user-agent'])
-      return h
-    },
-    prepare: (json, raw): Prepared => {
+    outgoingHeaders: stationHeaders,
+    prepare: stationPrepare
+  })
+  return { front, tap }
+
+  // ── 发给中转站之前对请求做的全部加工（两个入口共用：经 xiaoke 时在上游入口跑，直连时在前端出口跑）──
+  function stationPrepare(json: any, raw: Buffer): Prepared {
       const linkedRid = typeof json?.eclipsis_rid === 'string' && /^[\w-]{8,64}$/.test(json.eclipsis_rid) ? json.eclipsis_rid : null
       const rid = linkedRid || crypto.randomUUID()
       let out = json
@@ -202,14 +217,13 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
           }
         } catch { /* assembler error should not block request */ }
       }
-      if (!changed) return { rid, linked: false, body: raw }
-      return {
-        rid, linked: !!linkedRid, body: Buffer.from(JSON.stringify(out)), json: out,
-        transforms: Object.keys(transforms).length ? transforms : null
-      }
+    // 这一份就是真正发给站的那份（他醒来时接聊天要找的是它）
+    transforms.to_station = true
+    if (!changed) return { rid, linked: false, body: raw, transforms }
+    return {
+      rid, linked: !!linkedRid, body: Buffer.from(JSON.stringify(out)), json: out, transforms
     }
-  })
-  return { front, tap }
+  }
 }
 
 /** 经历表里最近 30 天的日常聊天：同一句话（角色 + 正文）记下的时间。每次请求现查（几千条，毫秒级） */

@@ -257,15 +257,17 @@ const LINK_WINDOW_MS = 30 * 60_000
  * 还没对上号的（刚发、对账还没跑），按"角色 + 正文 + 时间 ±30 分钟"在 xiaoke 最近的记录里找。
  * xiaoke 删失败时经历表也不动，返回错误，免得这边看不到了他那边还记得。
  */
-export async function deleteChat(db: DB, xk: XiaokeApi | null, seqs: number[]): Promise<{ deleted: number; xiaoke: number }> {
+export async function deleteChat(db: DB, xk: XiaokeApi | null, seqs: number[], opts: { xiaokeHasNewMessages?: boolean } = {}): Promise<{ deleted: number; xiaoke: number }> {
+  // 直连中转站以后（BYPASS_XIAOKE=1），新消息根本没进过 xiaoke：只删我们自己的，老消息照旧也删它那边
+  const needXiaoke = opts.xiaokeHasNewMessages !== false
   const rows = db.prepare(`SELECT seq, ts, actor, kind, content, meta, xiaoke_id, source_ref FROM episodes WHERE seq IN (${seqs.map(() => '?').join(',')}) AND ${LIST}`)
     .all(...seqs) as { seq: number; ts: string; actor: string; kind: string; content: string; meta: string | null; xiaoke_id: string | null; source_ref: string | null }[]
   if (!rows.length) return { deleted: 0, xiaoke: 0 }
   const messages = rows.filter(r => r.kind === 'message' && (r.actor === 'erica' || r.actor === 'ai') && !String(r.source_ref || '').startsWith('wake:'))
   const ids: string[] = messages.map(r => r.xiaoke_id).filter((x): x is string => !!x)
   const unlinked = messages.filter(r => !r.xiaoke_id)
-  if (messages.length && !xk) throw new Error('没配置 xiaoke（XIAOKE_URL / XIAOKE_KEY），删不了他那边的记录')
-  if (unlinked.length && xk) {
+  if (messages.length && !xk && needXiaoke) throw new Error('没配置 xiaoke（XIAOKE_URL / XIAOKE_KEY），删不了他那边的记录')
+  if (unlinked.length && xk && needXiaoke) {
     const taken = new Set((db.prepare('SELECT xiaoke_id FROM episodes WHERE xiaoke_id IS NOT NULL').all() as { xiaoke_id: string }[]).map(r => r.xiaoke_id))
     const recent = await xk.recent(200)
     for (const e of unlinked) {
@@ -317,7 +319,7 @@ function readJson(req: IncomingMessage, max = 64 * 1024): Promise<any> {
 
 const intParam = (v: string | null) => (v !== null && /^\d{1,12}$/.test(v) ? Number(v) : undefined)
 
-export async function handleChatApi(db: DB, ctx: { blobDir: string; xiaoke: XiaokeApi | null }, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+export async function handleChatApi(db: DB, ctx: { blobDir: string; xiaoke: XiaokeApi | null; xiaokeHasNewMessages?: boolean }, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
   const url = new URL(req.url || '/', 'http://local')
   const p = url.pathname
   try {
@@ -343,7 +345,7 @@ export async function handleChatApi(db: DB, ctx: { blobDir: string; xiaoke: Xiao
       const body = await readJson(req)
       const seqs = Array.isArray(body?.seqs) ? body.seqs.filter((x: unknown) => Number.isInteger(x) && (x as number) > 0).slice(0, 200) : []
       if (!seqs.length) { json(res, 400, { error: 'seqs 不能为空' }); return true }
-      json(res, 200, await deleteChat(db, ctx.xiaoke, seqs))
+      json(res, 200, await deleteChat(db, ctx.xiaoke, seqs, { xiaokeHasNewMessages: ctx.xiaokeHasNewMessages }))
       return true
     }
     const b = /^\/v1\/eclipsis\/blob\/([0-9a-f]{64})$/.exec(p)

@@ -104,10 +104,12 @@ export function stripSceneBlock(system: string): string {
 export function loadChatContinuation(db: DB, opts: { maxAgeHours?: number; now?: Date } = {}): ChatContinuation | null {
   const now = opts.now ?? new Date()
   const since = new Date(now.getTime() - (opts.maxAgeHours ?? 72) * 3600_000).toISOString()
-  // 最近一次正常结束（不是中途调工具）的聊天请求。醒来自己不走上游入口，不会被选中
+  // 最近一次正常结束（不是中途调工具）的聊天请求。醒来自己不走这两个入口，不会被选中。
+  // to_station = 这一行记的就是真正发给中转站的那份：经过 xiaoke 时是上游入口那行，直连以后是前端出口那行。
   const ex = db.prepare(`
     SELECT id, started_at, model, message_hashes, reply_content FROM exchanges
-    WHERE tap = 'upstream' AND status = 'ok' AND finish_reason = 'stop'
+    WHERE status = 'ok' AND finish_reason = 'stop'
+      AND (json_extract(transforms, '$.to_station') = 1 OR tap = 'upstream')
       AND started_at > ? AND json_array_length(message_hashes) >= 2
     ORDER BY id DESC LIMIT 1
   `).get(since) as { id: number; started_at: string; model: string | null; message_hashes: string; reply_content: string | null } | undefined

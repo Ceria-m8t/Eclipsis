@@ -3,7 +3,7 @@ import { test, before, after, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
 import type { Server } from 'node:http'
 import { buildServers } from '../src/main.ts'
-import { openDb, type DB } from '../src/db.ts'
+import { openDb, addEpisode, type DB } from '../src/db.ts'
 import { loadConfig, type Config } from '../src/config.ts'
 import { WAKE_MARKER } from '../src/recorder.ts'
 import { listen, close, fakeUpstream, sseChunk, tempDir, type Seen } from './helpers.ts'
@@ -13,6 +13,7 @@ const STATION_KEY = 'station-key-for-test'
 
 let station: ReturnType<typeof fakeUpstream>
 let stationReply: (req: Seen, res: import('node:http').ServerResponse) => void
+let stationPortRef = 0
 let dylan: Server
 let front: Server, tap: Server
 let frontPort = 0, tapPort = 0
@@ -36,6 +37,7 @@ before(async () => {
     stationReply(req, res)
   })
   const stationPort = await listen(station.server)
+  stationPortRef = stationPort
 
   // 假 Dylan：把请求体原样转发给上游入口（真 Dylan/xiaoke 也会保留 eclipsis_rid 这类多余字段）
   const { server } = fakeUpstream(async (req, res) => {
@@ -462,4 +464,63 @@ test('一直 429 → 重试两次还不行，才把 429 交给客户端', async 
   })
   assert.equal(r.status, 429)
   assert.equal(n, 3)
+})
+
+test('BYPASS_XIAOKE=1：前端出口直接连中转站，一轮只记一行，加工照样做，经历表照样记', async () => {
+  const db2 = openDb(':memory:')
+  const cfg: Config = {
+    ...loadConfig({}),
+    dylanUrl: 'http://127.0.0.1:1/v1',            // 故意指向不存在的 xiaoke：真走它就会 502
+    upstreamUrl: `http://127.0.0.1:${stationPortRef}/v1`, upstreamKey: STATION_KEY,
+    bypassXiaoke: true, dbPath: ':memory:', blobDir: tmp.dir, headerTimeoutMs: 5000,
+  }
+  // 经历表里先有点历史，好让「换成我们拼的那份」有东西可换
+  for (let i = 0; i < 30; i++) {
+    addEpisode(db2, { ts: new Date(Date.now() - (60 - i) * 60_000).toISOString(), channel: 'chat', scope: 'daily',
+      actor: i % 2 ? 'ai' : 'erica', kind: 'message', content: `第 ${i} 句`, sourceRef: 'h' + i })
+  }
+  const s = buildServers(cfg, db2, { assembler: true, stripThinkHistory: true, log: () => {} })
+  const port = await listen(s.front)
+  const prevOur = process.env.OUR_HISTORY
+  process.env.OUR_HISTORY = '1'
+  try {
+    stationReply = streamReply([sseChunk({ content: '直连' }), sseChunk({ content: '成功' }), sseChunk({}, 'stop')])
+    const res = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-eclipsis-scene': 'chat', 'x-eclipsis-turn': 't-bypass' },
+      body: JSON.stringify({ model: 'm', stream: true, messages: [
+        { role: 'system', content: '她的 system' },
+        { role: 'user', content: '很久以前' }, { role: 'assistant', content: '嗯' },
+        { role: 'user', content: '直连测试' },
+      ] }),
+    })
+    assert.equal(res.status, 200)
+    await res.text()
+    await settle()
+
+    // 发到站的那份：key 换成了站的，历史换成我们的，此刻块注入了
+    const sent = JSON.parse(station.seen.at(-1)!.body)
+    assert.equal(station.seen.at(-1)!.headers.authorization, `Bearer ${STATION_KEY}`)
+    assert.equal(sent.messages.at(-1).content, '直连测试')
+    assert.match(sent.messages[0].content, /她的 system/)
+    assert.match(sent.messages[0].content, /# 此刻/)
+    assert.ok(sent.messages.length > 20, `历史换成了我们的（${sent.messages.length} 条）`)
+
+    // 一轮只记一行（不再是 front + upstream 两行），而且标了 to_station
+    const rows = db2.prepare('SELECT tap, status, transforms FROM exchanges').all() as any[]
+    assert.equal(rows.length, 1)
+    assert.equal(rows[0].tap, 'front')
+    assert.equal(rows[0].status, 'ok')
+    const tf = JSON.parse(rows[0].transforms)
+    assert.equal(tf.to_station, true)
+    assert.ok(tf.our_history, '历史是我们拼的')
+    assert.ok(tf.assembler_v1, '此刻块进去了')
+
+    // 她这句和他的回复都进了经历表
+    const eps = db2.prepare(`SELECT actor, content FROM episodes WHERE source_ref LIKE 'front:%' ORDER BY seq DESC LIMIT 2`).all() as any[]
+    assert.deepEqual(eps.map(e => `${e.actor}:${e.content}`), ['ai:直连成功', 'erica:直连测试'])
+  } finally {
+    if (prevOur === undefined) delete process.env.OUR_HISTORY; else process.env.OUR_HISTORY = prevOur
+    await close(s.front); await close(s.tap)
+  }
 })

@@ -76,6 +76,12 @@ export function reconcile(db: DB, rows: XiaokeRow[], now = Date.now(), opts: { d
     }
 
     // ---- 2. 撤回 ----
+    // 直连中转站以后 xiaoke 不再收新消息，这一步会把新消息全当成「它那边没有」撤掉。
+    // 切过去时 eclipsis-reconcile.timer 要停掉；这里再挡一道，免得谁手工跑一次就把今天的聊天删了。
+    if (process.env.BYPASS_XIAOKE === '1') {
+      result.waiting += candidates.length
+      return result
+    }
     const retract = db.prepare('UPDATE episodes SET retracted_at = ?, retract_reason = ? WHERE seq = ?')
     const retractedSeqs: number[] = []
     const linked = db.prepare('SELECT seq, xiaoke_id FROM episodes WHERE xiaoke_id IS NOT NULL AND retracted_at IS NULL').all() as { seq: number; xiaoke_id: string }[]
