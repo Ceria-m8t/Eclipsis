@@ -16,6 +16,8 @@ import { listTools, callTool, type LetoMcpConfig, type McpTool } from '../leto/m
 import { loadAgents } from '../leto/agent.ts'
 import * as T from './tools.ts'
 import { momentsBox } from './moments-box.ts'
+import { drawBox } from './draw-box.ts'
+import type { BlobStore } from '../blobs.ts'
 import type { FrequencyMode, SourceId } from './types.ts'
 
 export interface ToolResult { text: string; isError: boolean }
@@ -163,7 +165,7 @@ export function settingsBox(db: DB): WakeBox {
 }
 
 /** 按 backend.env 装好今天能用的箱子 */
-export function buildWakeBoxes(db: DB, env: NodeJS.ProcessEnv = process.env): WakeBox[] {
+export function buildWakeBoxes(db: DB, env: NodeJS.ProcessEnv = process.env, blobs?: BlobStore): WakeBox[] {
   const boxes: WakeBox[] = []
   const memUrl = (env.WAKE_MCP_MEMORY_URL || '').trim()
   if (memUrl) {
@@ -206,5 +208,7 @@ export function buildWakeBoxes(db: DB, env: NodeJS.ProcessEnv = process.env): Wa
   }
   boxes.push(settingsBox(db))
   boxes.push(momentsBox(db))
+  // 画笔：配了画图的站才有
+  if (blobs) { const d = drawBox(db, blobs); if (d) boxes.push(d) }
   return boxes
 }

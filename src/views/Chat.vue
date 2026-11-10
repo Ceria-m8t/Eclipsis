@@ -23,6 +23,7 @@ import {
 } from '../chat-store'
 import { splitMoment, parseMoment, type MomentView } from '../moment'
 import { uploadFile, splitFiles, loadFileText, FILE_ACCEPT, humanSize, fileUrl, fileBadge, type UploadedFile, type FileText } from '../files'
+import { drawImage } from '../stations'
 
 const settings = ref(getSettings())
 
@@ -401,6 +402,25 @@ async function showFile(f: { name: string; hash: string }) {
   catch (e: any) { openFile.value = { name: f.name, loading: false, data: null, error: e?.message || '打不开' } }
 }
 const uploading = ref(0)
+// 她自己生图（加号面板 → 生图）：画好了放进待发送的图片，她决定要不要发
+const drawing = ref(false)
+async function doDraw() {
+  showPlus.value = false
+  const prompt = window.prompt('画什么？（她自己出图，不经过他）')?.trim()
+  if (!prompt) return
+  drawing.value = true
+  toast('正在画，可能要等十几秒…')
+  try {
+    const r = await drawImage(prompt)
+    const data = await fetch(r.url).then(x => x.blob()).then(b => new Promise<string>((res, rej) => {
+      const fr = new FileReader(); fr.onload = () => res(String(fr.result)); fr.onerror = () => rej(new Error('读不出来')); fr.readAsDataURL(b)
+    }))
+    pendingImages.value.push(data)
+    toast(`画好了（${r.station}），在输入栏上面`)
+  } catch (e: any) {
+    toast(e?.message || '画不出来')
+  } finally { drawing.value = false }
+}
 const inputEl = ref<HTMLTextAreaElement | null>(null)
 const composing = ref(false)
 
@@ -663,6 +683,7 @@ const plusItems = computed<PlusItem[]>(() => [
   { key: 'heart', label: '心声', icon: 'heart', ready: true, run: toggleHeart },
   { key: 'sticker', label: '表情包', icon: 'smile', ready: false },
   { key: 'voice', label: '语音', icon: 'mic', ready: false },
+  { key: 'draw', label: '生图', icon: 'image', ready: !drawing.value, run: doDraw },
   { key: 'video', label: '视频', icon: 'video', ready: false },
   { key: 'file', label: '文件', icon: 'file', ready: true, run: () => fileInput.value?.click() },
   { key: 'call', label: '通话', icon: 'phone', ready: false },

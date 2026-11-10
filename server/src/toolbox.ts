@@ -13,6 +13,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync } from
 import { dirname } from 'node:path'
 import type { DB } from './db.ts'
 import { buildWakeBoxes, mcpBox, strings, type WakeBox } from './wake/boxes.ts'
+import type { BlobStore } from './blobs.ts'
 import { toOpenAITools, type McpTool } from './leto/mcp-client.ts'
 
 export type Scene = 'chat' | 'wake'
@@ -58,13 +59,17 @@ function writeFile(f: BoxFile) {
   cache.clear()
 }
 
-const BUILTIN_TITLES: Record<string, string> = { memory: '记忆库', xinchao: '心潮', leto: 'Leto', town: '迎风小镇', settings: '醒来设置', moments: '这一刻' }
+const BUILTIN_TITLES: Record<string, string> = { memory: '记忆库', xinchao: '心潮', leto: 'Leto', town: '迎风小镇', settings: '醒来设置', moments: '这一刻', draw: '画笔' }
+
+// 画笔要用 blobs 存图：main.ts 启动时塞进来
+let blobStore: BlobStore | undefined
+export function setToolboxBlobs(b: BlobStore) { blobStore = b }
 
 interface Entry { box: WakeBox; title: string; builtin: boolean; chat: boolean; wake: boolean; custom?: CustomBox }
 
 function entries(db: DB, env: NodeJS.ProcessEnv): Entry[] {
   const f = readFile()
-  const out: Entry[] = buildWakeBoxes(db, env).map(box => ({
+  const out: Entry[] = buildWakeBoxes(db, env, blobStore).map(box => ({
     box, title: BUILTIN_TITLES[box.id] || box.id, builtin: true,
     chat: !box.wakeOnly && f.builtin[box.id]?.chat !== false, wake: f.builtin[box.id]?.wake !== false,
   }))
@@ -203,7 +208,7 @@ export async function handleToolboxApi(db: DB, req: IncomingMessage, res: Server
       const err = validate(b)
       if (err) { json(res, 400, { error: err }); return true }
       const f = readFile()
-      const builtinNames = new Set(buildWakeBoxes(db, env).map(x => x.entryName))
+      const builtinNames = new Set(buildWakeBoxes(db, env, blobStore).map(x => x.entryName))
       const old = b.id ? f.custom.find(c => c.id === b.id) : undefined
       if (builtinNames.has(b.entryName) || f.custom.some(c => c.entryName === b.entryName && c.id !== old?.id)) {
         json(res, 400, { error: `入口名 ${b.entryName} 已经有箱子在用了` }); return true
@@ -225,8 +230,8 @@ export async function handleToolboxApi(db: DB, req: IncomingMessage, res: Server
       const id = String(b?.id || '')
       const c = f.custom.find(x => x.id === id)
       if (c) { if (typeof b.chat === 'boolean') c.chat = b.chat; if (typeof b.wake === 'boolean') c.wake = b.wake }
-      else if (buildWakeBoxes(db, env).some(x => x.id === id)) {
-        if (b.chat === true && buildWakeBoxes(db, env).find(x => x.id === id)?.wakeOnly) {
+      else if (buildWakeBoxes(db, env, blobStore).some(x => x.id === id)) {
+        if (b.chat === true && buildWakeBoxes(db, env, blobStore).find(x => x.id === id)?.wakeOnly) {
           json(res, 400, { error: '这个箱子只在醒来时有：聊天里调用，结果会经过她的手机、显示在聊天里' }); return true
         }
         f.builtin[id] = { ...f.builtin[id], ...(typeof b.chat === 'boolean' ? { chat: b.chat } : {}), ...(typeof b.wake === 'boolean' ? { wake: b.wake } : {}) }

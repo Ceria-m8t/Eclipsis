@@ -14,11 +14,13 @@ import { createTap, forwardHeaders, type Prepared } from './proxy.ts'
 import { stripWakeHistory, stripThinkHistory, stripOldImages, reorderByTime, markMissingImages, type TimeLookup } from './transforms.ts'
 import { handleApi } from './api.ts'
 import { handleChatApi, xiaokeApi } from './chat-history.ts'
-import { handleToolboxApi, setToolboxFile } from './toolbox.ts'
+import { handleToolboxApi, setToolboxFile, setToolboxBlobs } from './toolbox.ts'
 import { shadowCompare, replaceHistory } from './assembler/history.ts'
 import { stripMomentHistory } from './moment.ts'
 import { handleModelsApi } from './models.ts'
 import { attachFiles, handleFileApi, ensureFileSchema } from './files.ts'
+import { handleStationsApi } from './stations-api.ts'
+import { handleDrawApi } from './draw-api.ts'
 import { dropSupersededVersions } from './versions.ts'
 import { handleLlmRelay } from './llm-relay.ts'
 import { initStations, bindStationToConfig } from './station.ts'
@@ -65,6 +67,7 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
   ensurePromptSchema(db)
   const blobs = new BlobStore(db, cfg.blobDir)
   ensureFileSchema(db)
+  setToolboxBlobs(blobs)      // 他的画笔要用它存图
   const recorder = new Recorder(db, blobs, { onEricaMessage: opts.onEricaMessage, onTurnComplete: opts.onTurnComplete })
 
   // 发给中转站时的请求头（换掉调用方的 key，用站的 key）
@@ -91,6 +94,9 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
       if (await handleModelsApi(req, res, { url: cfg.upstreamUrl, key: cfg.upstreamKey })) return true
       // 她发文件：上传、下载
       if (await handleFileApi(db, blobs, req, res)) return true
+      // 中转站面板（聊天的站 + 画图的站）、她自己点生图
+      if (await handleStationsApi(db, req, res)) return true
+      if (await handleDrawApi(db, blobs, req, res)) return true
       if (await handleChatApi(db, {
         blobDir: cfg.blobDir, xiaoke: xiaokeApi(cfg.xiaokeUrl, cfg.xiaokeKey), xiaokeHasNewMessages: !cfg.bypassXiaoke
       }, req, res)) return true
