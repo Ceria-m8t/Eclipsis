@@ -37,6 +37,7 @@ export interface ChatMessage {
   createdAt: number
   content: string       // 当前版本的内容（user 消息直接用）
   images?: string[]     // dataURL（已压缩）
+  files?: { name: string; hash: string; size?: number; kind?: string; chars?: number; note?: string | null }[]
   versions?: MessageVersion[]  // assistant 的多个版本（重新生成）
   activeVersion?: number
   error?: string

@@ -27,6 +27,7 @@ interface SrvVersion { seq: number; seqs: number[]; ts: string; content: string;
 export interface SrvItem {
   id: string; seq: number; seqs: number[]; role: 'user' | 'assistant'; ts: string; turn: string
   content: string; raw?: string; images?: string[]; versions?: SrvVersion[]; source: string
+  files?: { name: string; hash: string; size: number; kind: string; chars: number; note: string | null }[]
   wake?: { id: string; trace?: string; tools?: string[]; silent?: boolean }
   noReply?: boolean
   /** 有好几版时算数的是第几版（她上次翻到的那版）：他只看得到这一版 */
@@ -51,7 +52,7 @@ export function fromServer(it: SrvItem): ChatMessage {
     const heart = splitHeart(text)
     if (heart.text.trim() === READ_SIGNAL) return { id: it.id, seq: it.seq, role: 'user', createdAt, content: '', raw: it.raw, signal: 'read', srv }
     const content = heart.text || (it.images?.length || heart.thought ? '' : '[图片]')
-    return { id: it.id, seq: it.seq, role: 'user', createdAt, content, raw: it.raw, images: it.images, thought: heart.thought || undefined, srv }
+    return { id: it.id, seq: it.seq, role: 'user', createdAt, content, raw: it.raw, images: it.images, files: it.files, thought: heart.thought || undefined, srv }
   }
   const versions: MessageVersion[] = (it.versions || []).map(v => {
     const out: MessageVersion = { content: v.content, createdAt: Date.parse(v.ts), srvSeqs: v.seqs }

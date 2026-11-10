@@ -12,6 +12,7 @@ import { type DB, tx } from './db.ts'
 import { cleanHerText } from './recorder.ts'
 import { splitMoment, type Moment } from './moment.ts'
 import { activeChoices, setActiveVersion } from './versions.ts'
+import { FILE_MARK, findFiles } from './files.ts'
 
 export interface ChatTool { id: string; name: string; args: string; result?: string }
 export interface ChatVersion { moment?: Moment; seq: number; seqs: number[]; ts: string; content: string; thinking: string; tools: ChatTool[]; partial?: boolean }
@@ -33,6 +34,8 @@ export interface ChatItem {
   noReply?: boolean
   /** 有好几版时，算数的是第几版（她翻到的那版，没翻过是最后一版）。他只看得到这一版 */
   active?: number
+  /** 她这条消息带的文件（正文里的标记已经拆掉） */
+  files?: { name: string; hash: string; size: number; kind: string; chars: number; note: string | null }[]
 }
 
 /** 他已读不回时整条回复就是这个（思考照常写） */
@@ -151,11 +154,27 @@ export function buildItems(db: DB, rows: Row[]): ChatItem[] {
       tools = []; toolSeqs = []
       lastHerSeq = r.seq
       const imgs: string[] = Array.isArray(meta.images) ? meta.images.filter((h: unknown) => typeof h === 'string' && /^[0-9a-f]{64}$/.test(h)) : []
-      const content = cleanHerText(r.content).replace(/^\[图片\]$/, '')
+      let content = cleanHerText(r.content).replace(/^\[图片\]$/, '')
+      // 她发的文件：标记拆成文件项，正文里不留
+      let files: ChatItem['files']
+      if (content.includes('[文件 ')) {
+        const marks = [...content.matchAll(FILE_MARK)].map(m => ({ name: m[1]!, prefix: m[2]! }))
+        if (marks.length) {
+          const found = findFiles(db, marks.map(m => m.prefix))
+          files = marks.map(m => {
+            const f = found.get(m.prefix)
+            return {
+              name: f?.name || m.name, hash: m.prefix, size: f?.size ?? 0,
+              kind: f?.kind || 'other', chars: f?.chars ?? 0, note: f?.note ?? null,
+            }
+          })
+          content = content.replace(FILE_MARK, '').replace(/\n{3,}/g, '\n\n').trim()
+        }
+      }
       items.push({
         id: 'e' + r.seq, seq: r.seq, seqs: [r.seq], role: 'user', ts: r.ts, turn: 'e' + r.seq,
         content, raw: r.content, images: imgs.length ? imgs.map(h => `/api/eclipsis/blob/${h}`) : undefined,
-        source: sourceOf(r.source_ref)
+        files, source: sourceOf(r.source_ref)
       })
       continue
     }

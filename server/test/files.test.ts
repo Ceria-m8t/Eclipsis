@@ -159,3 +159,19 @@ test('kindOf：按扩展名和 mime 认', () => {
   assert.equal(kindOf('data.csv', ''), 'text')
   assert.equal(kindOf('a.xlsx', ''), 'other')
 })
+
+test('聊天记录接口：她发的文件拆成文件项，正文里不留标记', async () => {
+  const { t, db, blobs } = setup()
+  try {
+    const f = await saveFile(db, blobs, Buffer.from('报告正文', 'utf8'), '周报.md', 'text/markdown')
+    const { addEpisode } = await import('../src/db.ts')
+    const { chatHistory } = await import('../src/chat-history.ts')
+    addEpisode(db, {
+      ts: '2026-11-11T07:00:00.000Z', channel: 'chat', scope: 'daily', actor: 'erica', kind: 'message',
+      content: `看看这个 [文件 周报.md #${f.hash.slice(0, 12)}]`, sourceRef: 'u1',
+    })
+    const it = chatHistory(db, {}).items[0]!
+    assert.equal(it.content, '看看这个')
+    assert.deepEqual(it.files, [{ name: '周报.md', hash: f.hash.slice(0, 12), size: 12, kind: 'text', chars: 4, note: null }])
+  } finally { t.cleanup() }
+})

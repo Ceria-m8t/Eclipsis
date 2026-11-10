@@ -22,6 +22,7 @@ import {
   looksNoReply, splitHeart, READ_SIGNAL, setActiveVersion
 } from '../chat-store'
 import { splitMoment, parseMoment, type MomentView } from '../moment'
+import { uploadFile, FILE_ACCEPT, humanSize, fileUrl, fileBadge, type UploadedFile } from '../files'
 
 const settings = ref(getSettings())
 
@@ -389,6 +390,9 @@ function bubbleClass(row: Row, j: number) {
 // ================= 输入 =================
 const inputText = ref('')
 const pendingImages = ref<string[]>([])
+// 她选好、已经传到后端、还没发出去的文件
+const pendingFiles = ref<UploadedFile[]>([])
+const uploading = ref(0)
 const inputEl = ref<HTMLTextAreaElement | null>(null)
 const composing = ref(false)
 
@@ -426,12 +430,16 @@ function toggleHeart() {
 async function pushUserMessage(): Promise<boolean> {
   const text = inputText.value.trim()
   const thought = heartText.value.trim()
-  if (!text && !pendingImages.value.length && !thought) return false
+  const files = [...pendingFiles.value]
+  if (!text && !pendingImages.value.length && !thought && !files.length) return false
   const now = Date.now()
+  // 文件在正文里是一个标记（他看到的是文件内容，她看到的是文件气泡）
+  const marks = files.map(f => f.mark).join('\n')
   const msg: ChatMessage = {
     id: newId(), seq: nextSeq(), role: 'user', createdAt: now,
-    content: text,
+    content: marks ? (text ? `${marks}\n${text}` : marks) : text,
     images: pendingImages.value.length ? [...pendingImages.value] : undefined,
+    files: files.length ? files.map(f => ({ name: f.name, hash: f.hash.slice(0, 12), size: f.size, kind: f.kind, chars: f.chars, note: f.note })) : undefined,
     thought: thought || undefined
   }
   messages.value.push(msg)
@@ -439,6 +447,7 @@ async function pushUserMessage(): Promise<boolean> {
   heartText.value = ''
   heartOpen.value = false
   pendingImages.value = []
+  pendingFiles.value = []
   nextTick(autoGrow)
   stickToBottom = true
   scrollToBottom()
@@ -461,7 +470,7 @@ const canLeaveOnRead = computed(() => {
   // 他醒来过但没找她（只留了念头）不算他说了话
   const last = [...messages.value].reverse().find(m => !m.wake?.silent)
   return !!last && last.role === 'assistant' && !generating.value && !last.error && !last.noReply
-    && !inputText.value.trim() && !heartText.value.trim() && !pendingImages.value.length
+    && !inputText.value.trim() && !heartText.value.trim() && !pendingImages.value.length && !pendingFiles.value.length
 })
 async function leaveOnRead() {
   if (!canLeaveOnRead.value) return
@@ -491,6 +500,27 @@ async function handleImageSelect(e: Event) {
     if (!f.type.startsWith('image/')) continue
     try { pendingImages.value.push(await compressImage(f)) }
     catch { toast('有一张图片读不出来') }
+  }
+}
+
+async function handleFileSelect(e: Event) {
+  showPlus.value = false
+  const input = e.target as HTMLInputElement
+  const list = Array.from(input.files || [])
+  input.value = ''
+  for (const f of list) {
+    if (pendingFiles.value.length >= 5) { toast('一次最多发 5 个文件'); break }
+    uploading.value++
+    try {
+      const up = await uploadFile(f)
+      pendingFiles.value.push(up)
+      if (up.note) toast(`${up.name}：${up.note}`)
+      else if (up.truncated) toast(`${up.name} 太长了，他只看前 3 万字`)
+    } catch (err: any) {
+      toast(err?.message || '文件没传上去')
+    } finally {
+      uploading.value--
+    }
   }
 }
 
@@ -617,6 +647,7 @@ const showPlus = ref(false)
 const plusPage = ref(0)
 const imageInput = ref<HTMLInputElement | null>(null)
 const cameraInput = ref<HTMLInputElement | null>(null)
+const fileInput = ref<HTMLInputElement | null>(null)
 const plusItems = computed<PlusItem[]>(() => [
   // 第一页：聊天里常用
   { key: 'image', label: '图片', icon: 'image', ready: true, run: () => imageInput.value?.click() },
@@ -625,7 +656,7 @@ const plusItems = computed<PlusItem[]>(() => [
   { key: 'sticker', label: '表情包', icon: 'smile', ready: false },
   { key: 'voice', label: '语音', icon: 'mic', ready: false },
   { key: 'video', label: '视频', icon: 'video', ready: false },
-  { key: 'file', label: '文件', icon: 'file', ready: false },
+  { key: 'file', label: '文件', icon: 'file', ready: true, run: () => fileInput.value?.click() },
   { key: 'call', label: '通话', icon: 'phone', ready: false },
   { key: 'regen', label: '重新生成', icon: 'refresh', ready: !generating.value && !!lastAssistant.value, run: regenerateLast },
   // 第二页：管理（原来侧栏里的）
@@ -1170,6 +1201,15 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
             <div v-if="row.msg.signal" class="read-signal">你看了，没回他</div>
             <div v-if="row.noReply && !row.thinking" class="read-signal his">他看了，没回你</div>
 
+            <div v-if="row.msg.files?.length" class="msg-files" :class="{ mine: row.msg.role === 'user' }">
+              <a v-for="f in row.msg.files" :key="f.hash" class="msg-file glass" :href="fileUrl(f.hash)" :download="f.name">
+                <span class="file-badge">{{ fileBadge(f.name) }}</span>
+                <span class="file-main">
+                  <span class="file-name">{{ f.name }}</span>
+                  <span class="file-size">{{ f.size ? humanSize(f.size) : '' }}{{ f.note ? ' · 他看不到内容' : f.chars ? ` · ${f.chars} 字` : '' }}</span>
+                </span>
+              </a>
+            </div>
             <div v-if="row.msg.images?.length" class="msg-images">
               <!-- 好几张：叠成一摞，左右划翻页；一张：照常 -->
               <PhotoStack v-if="row.msg.images.length > 1" :images="row.msg.images" :side="row.msg.role === 'user' ? 'right' : 'left'"
@@ -1266,6 +1306,15 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
     <!-- ===== 输入栏 ===== -->
     <footer ref="footerEl" class="input-footer">
       <div class="input-capsule glass footer-glass">
+        <div v-if="pendingFiles.length || uploading" class="pending-files">
+          <div v-for="(f, i) in pendingFiles" :key="f.hash" class="pending-file">
+            <span class="file-badge">{{ fileBadge(f.name) }}</span>
+            <span class="file-name">{{ f.name }}</span>
+            <span class="file-size">{{ humanSize(f.size) }}</span>
+            <button aria-label="移除这个文件" @click="pendingFiles.splice(i, 1)"><Icon name="close" :size="12" /></button>
+          </div>
+          <div v-if="uploading" class="pending-file loading">正在上传 {{ uploading }} 个文件…</div>
+        </div>
         <div v-if="pendingImages.length" class="pending-images">
           <div v-for="(img, i) in pendingImages" :key="i" class="pending-thumb">
             <img :src="img" alt="待发送的图片" />
@@ -1308,6 +1357,7 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
           </button>
           <input ref="imageInput" type="file" accept="image/*" multiple hidden @change="handleImageSelect" />
           <input ref="cameraInput" type="file" accept="image/*" capture="environment" hidden @change="handleImageSelect" />
+          <input ref="fileInput" type="file" :accept="FILE_ACCEPT" multiple hidden @change="handleFileSelect" />
           <span class="input-model">{{ settings.model }}</span>
           <button v-if="canLeaveOnRead" class="read-btn" aria-label="已读不回" @click="leaveOnRead">
             <svg class="read-ticks" viewBox="0 0 22 12" aria-hidden="true"><path d="M1.5 6.6 4.6 9.6 10.6 2.6" /><path d="M8.2 8.4 9.6 9.6 15.6 2.6" /></svg>
@@ -2032,6 +2082,41 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
   display: flex;
   flex-direction: column;
 }
+/* 待发送的文件 */
+.pending-files { display: flex; flex-direction: column; gap: 6px; padding: 2px 0 8px; }
+.pending-file {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px; border-radius: 10px;
+  background: rgba(127, 127, 127, 0.12);
+  font-size: 12.5px; color: var(--text-2);
+}
+.pending-file.loading { justify-content: center; }
+.pending-file .file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.pending-file button {
+  border: none; background: none; padding: 0 2px; color: var(--text-3);
+  display: flex; align-items: center;
+}
+.file-badge {
+  flex-shrink: 0;
+  min-width: 34px; padding: 2px 4px;
+  border-radius: 6px;
+  background: rgba(120, 130, 190, 0.22);
+  color: var(--text-2);
+  font-size: 10.5px; font-weight: 600; text-align: center; letter-spacing: 0.5px;
+}
+/* 气泡里的文件 */
+.msg-files { display: flex; flex-direction: column; gap: 6px; margin: 2px 0 4px; }
+.msg-files.mine { align-items: flex-end; }
+.msg-file {
+  display: flex; align-items: center; gap: 10px;
+  max-width: min(78%, 320px);
+  padding: 9px 12px; border-radius: 14px;
+  text-decoration: none; color: var(--text);
+}
+.msg-file .file-main { display: flex; flex-direction: column; min-width: 0; }
+.msg-file .file-name { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg-file .file-size { font-size: 11.5px; color: var(--text-3); }
+.msg-file:active { transform: scale(var(--press-scale)); }
 .pending-images { display: flex; gap: 8px; padding: 2px 0 8px; overflow-x: auto; }
 .pending-thumb { position: relative; flex-shrink: 0; }
 .pending-thumb img { width: 56px; height: 56px; object-fit: cover; border-radius: 12px; display: block; }
