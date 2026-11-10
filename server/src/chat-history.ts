@@ -88,6 +88,7 @@ export function buildItems(db: DB, rows: Row[]): ChatItem[] {
   }
 
   let skipReply = false
+  let lastHerSeq = 0            // 她最后一句的 seq：之后他的几条回复算同一轮的好几版
   const byWake = new Map<string, ChatItem>()
   const wakeIds = [...new Set(rows.map(r => parseMeta(r.meta).wake_id).filter((x): x is string => typeof x === 'string'))]
   const toolsOf = new Map<string, string[]>()
@@ -148,6 +149,7 @@ export function buildItems(db: DB, rows: Row[]): ChatItem[] {
     }
     if (r.actor === 'erica') {
       tools = []; toolSeqs = []
+      lastHerSeq = r.seq
       const imgs: string[] = Array.isArray(meta.images) ? meta.images.filter((h: unknown) => typeof h === 'string' && /^[0-9a-f]{64}$/.test(h)) : []
       const content = cleanHerText(r.content).replace(/^\[图片\]$/, '')
       items.push({
@@ -171,8 +173,9 @@ export function buildItems(db: DB, rows: Row[]): ChatItem[] {
     }
     tools = []; toolSeqs = []
     const turn = typeof meta.turn === 'string' && meta.turn ? meta.turn : 'e' + r.seq
+    // 同一轮的好几版：同一个 turn，而且中间没有她的话（重新生成、停掉重试都算；turn 偶尔会撞，见 versions.ts）
     const same = byTurn.get(turn)
-    if (same && (meta.version ?? 0) > 0) {
+    if (same && same.seq > lastHerSeq) {
       same.versions!.push(v)
       same.seqs.push(...seqs)
       same.seq = Math.max(same.seq, r.seq)

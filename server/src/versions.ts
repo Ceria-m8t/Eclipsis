@@ -1,6 +1,8 @@
 // 同一轮只给他一条回复（2026-11-11，Erica 报的 bug）。
 //
 // 重新生成（前端带 x-eclipsis-version）和「停掉/出错再重试」（版本号没变）都会在同一个 turn 下留好几条回复。
+// 算同一轮的好几版 = 同一个 turn + 中间没有她的话。turn 偶尔会撞（11-09 22:10 那一对就是同一个 turn 下
+// 她又说了话的两轮），所以不能只看 turn。chat-history.ts 的分组用同一条规则，她和他看到的才一致。
 // 她那边收在一起，聊天页只显示一条，右下角 1/2 能翻；他那边以前两条都看得到，等于她丢掉的那版还在他眼前。
 //
 // 哪条算数：**她翻到的那条**（Erica 2026-11-11 定）。前端翻版本时记进 turn_active；她没翻过就是最后一条。
@@ -25,25 +27,30 @@ const LOOKBACK_ROWS = 1500
 
 interface Row { seq: number; turn: string; content: string }
 
-function multiVersionTurns(db: DB, now = Date.now()): Map<string, Row[]> {
+/** 同一轮的好几版：同一个 turn、中间没有她的话。返回每一组（两条以上的才给） */
+function versionGroups(db: DB, now = Date.now()): { turn: string; rows: Row[] }[] {
   const since = new Date(now - LOOKBACK_DAYS * 86_400_000).toISOString()
   const rows = db.prepare(`
-    SELECT seq, json_extract(meta, '$.turn') AS turn, content FROM episodes
-    WHERE channel = 'chat' AND scope = 'daily' AND actor = 'ai' AND kind = 'message'
-      AND retracted_at IS NULL AND ts > ? AND json_extract(meta, '$.turn') IS NOT NULL
+    SELECT seq, actor, json_extract(meta, '$.turn') AS turn, content FROM episodes
+    WHERE channel = 'chat' AND scope = 'daily' AND kind = 'message' AND actor IN ('erica', 'ai')
+      AND retracted_at IS NULL AND ts > ?
     ORDER BY seq DESC LIMIT ?
-  `).all(since, LOOKBACK_ROWS) as unknown as Row[]
-  const byTurn = new Map<string, Row[]>()
+  `).all(since, LOOKBACK_ROWS) as unknown as (Row & { actor: string })[]
+  rows.reverse()
+  const groups: { turn: string; rows: Row[] }[] = []
+  const open = new Map<string, { turn: string; rows: Row[] }>()   // 还没被她的话打断的那几组
   for (const r of rows) {
-    const list = byTurn.get(r.turn)
-    if (list) list.push(r)
-    else byTurn.set(r.turn, [r])
+    if (r.actor === 'erica') { open.clear(); continue }
+    if (!r.turn) continue
+    const g = open.get(r.turn)
+    if (g) g.rows.push({ seq: r.seq, turn: r.turn, content: r.content })
+    else {
+      const next = { turn: r.turn, rows: [{ seq: r.seq, turn: r.turn, content: r.content }] }
+      open.set(r.turn, next)
+      groups.push(next)
+    }
   }
-  for (const [turn, list] of byTurn) {
-    if (list.length < 2) byTurn.delete(turn)
-    else list.sort((a, b) => a.seq - b.seq)
-  }
-  return byTurn
+  return groups.filter(g => g.rows.length > 1)
 }
 
 /** 她翻到的那条（turn → seq）；没记过的轮次不在里面 */
@@ -56,7 +63,7 @@ export function activeChoices(db: DB): Map<string, number> {
 export function supersededRows(db: DB, now = Date.now()): Row[] {
   const chosen = activeChoices(db)
   const out: Row[] = []
-  for (const [turn, list] of multiVersionTurns(db, now)) {
+  for (const { turn, rows: list } of versionGroups(db, now)) {
     const pick = chosen.get(turn)
     const active = pick !== undefined && list.some(r => r.seq === pick) ? pick : list[list.length - 1]!.seq
     for (const r of list) if (r.seq !== active) out.push(r)

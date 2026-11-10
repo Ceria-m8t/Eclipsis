@@ -61,10 +61,10 @@ test('她翻回第一版：他看到的就是第一版', () => {
 
 test('两版文字一样时也只留一条；她删掉算数那条就按剩下的最后一条算', () => {
   const db = openDb(':memory:')
-  const add = (seq: number, ts: string, text: string, ref: string) =>
+  const add = (ts: string, text: string, ref: string) =>
     addEpisode(db, { ts, channel: 'chat', scope: 'daily', actor: 'ai', kind: 'message', content: text, meta: { turn: 't1' }, sourceRef: ref })
-  add(1, '2026-11-11T01:00:00.000Z', '一样的话。', 'a')
-  add(2, '2026-11-11T01:01:00.000Z', '一样的话。', 'b')
+  add('2026-11-11T01:00:00.000Z', '一样的话。', 'a')
+  add('2026-11-11T01:01:00.000Z', '一样的话。', 'b')
   const r = dropSupersededVersions([{ role: 'user', content: '嗯' }, { role: 'assistant', content: '一样的话。' }, { role: 'assistant', content: '一样的话。' }], db)
   assert.equal(r.dropped, 1)
   assert.deepEqual(texts(r.messages), ['user:嗯', 'assistant:一样的话。'])
@@ -86,4 +86,25 @@ test('我们自己拼的历史里也只有算数那版；聊天记录接口标�
   const back = chatHistory(db, {}).items.find(i => i.turn === 't1')!
   assert.equal(back.active, 0)
   assert.equal(back.content, '第一版：在。')
+})
+
+test('turn 撞了（同一个 turn 下她又说了话）：那是两轮，谁也不删', () => {
+  const db = openDb(':memory:')
+  const put = (actor: 'erica' | 'ai', ts: string, text: string, ref: string) =>
+    addEpisode(db, { ts, channel: 'chat', scope: 'daily', actor, kind: 'message', content: text, meta: { turn: 'same-turn' }, sourceRef: ref })
+  put('erica', '2026-11-11T01:00:00.000Z', '第一句', 'u1')
+  put('ai', '2026-11-11T01:00:10.000Z', '第一轮的回复。', 'a1')
+  put('erica', '2026-11-11T01:01:00.000Z', '第二句', 'u2')
+  put('ai', '2026-11-11T01:01:10.000Z', '第二轮的回复。', 'a2')
+  assert.equal(supersededSeqs(db).size, 0)
+  const items = chatHistory(db, {}).items.filter(i => i.role === 'assistant')
+  assert.equal(items.length, 2, '她那边也是两条，不是一条的两个版本')
+  // 中间没有她的话 → 算同一轮的两版，她那边收成一条、他只看到后一条
+  put('ai', '2026-11-11T01:01:20.000Z', '重新生成的回复。', 'a3')
+  assert.deepEqual([...supersededSeqs(db)], [4])
+  const after = chatHistory(db, {}).items.filter(i => i.role === 'assistant')
+  assert.equal(after.length, 2)
+  assert.equal(after[1]!.versions!.length, 2)
+  assert.equal(after[1]!.active, 1)
+  assert.equal(after[1]!.content, '重新生成的回复。')
 })
