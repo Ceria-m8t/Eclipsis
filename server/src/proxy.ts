@@ -34,6 +34,8 @@ export interface TapOptions {
   prepare: (json: any | null, raw: Buffer) => Prepared
   recorder: Recorder | null
   headerTimeoutMs: number
+  /** 等不到响应头时再试几次（站卡住了，一个字节都没回，重发是安全的）。默认 1 */
+  headerTimeoutRetries?: number
   /** 开始输出后连续多久没有任何字节就断开；不给 = 不限 */
   streamIdleMs?: number
   /** 中转站回 429/502/503 时先不告诉客户端，隔这些毫秒各自动重试一次；不给 = 不重试（名字沿用最早只管 429 时的） */
@@ -148,7 +150,7 @@ export function createTap(opts: TapOptions): Server {
     }
 
     // 客户端断开 → 取消上游请求
-    const ac = new AbortController()
+    let ac = new AbortController()
     let clientGone = false
     const timing: Timing = { ttfbMs: null, firstTokenMs: null, clientClosedMs: null, bytesOut: 0 }
     res.on('close', () => { if (!res.writableFinished) { clientGone = true; timing.clientClosedMs = Date.now() - t0; ac.abort() } })
@@ -158,9 +160,15 @@ export function createTap(opts: TapOptions): Server {
     // 2026-11-08：502/503 也这样重试。晚晚舟号池用完时回 502「All available accounts exhausted」，
     // 他在 Leto 上连着调工具，18:22、18:25 两次被拒，Kelivo 那串就断了。
     // 重试只是让站再算一次这条回复（工具在客户端执行，不会多做一遍）。500/504 不重试：可能是站真算了一半或已经等太久。
+    // 2026-11-11：站有时一个字节都不回（织云卡过几次；她等满 120 秒拿到一个错误，他连工具都没来得及调）。
+    // 等不到响应头 = 站什么都没给，重发是安全的（和 429 一样），所以立刻再发一次，不用等。
     const retryDelays = opts.retry429DelaysMs ?? []
+    const headerRetries = opts.headerTimeoutRetries ?? 1
+    let headerTries = 0
     for (let attempt = 0; ; attempt++) {
-      const timer = setTimeout(() => ac.abort(new Error('上游响应头超时')), opts.headerTimeoutMs)
+      if (ac.signal.aborted && !clientGone) ac = new AbortController()   // 上一次超时后这个 signal 废了
+      let timedOut = false
+      const timer = setTimeout(() => { timedOut = true; ac.abort(new Error('上游响应头超时')) }, opts.headerTimeoutMs)
       try {
         upstream = await fetch(target, {
           method,
@@ -171,6 +179,12 @@ export function createTap(opts: TapOptions): Server {
         })
       } catch (e: any) {
         clearTimeout(timer)
+        if (timedOut && !clientGone && headerTries < headerRetries) {
+          headerTries++
+          log(`[${opts.name}] 等了 ${Math.round(opts.headerTimeoutMs / 1000)} 秒站还没回响应头，马上重发一次（第 ${headerTries} 次）`)
+          attempt--          // 这次不算 429 那套重试
+          continue
+        }
         const msg = clientGone ? 'client aborted' : `上游连接失败：${e?.cause?.message || e?.message || e}`
         finish({ httpStatus: null, contentType: '', body: '', aborted: clientGone, networkError: clientGone ? undefined : msg, timing })
         if (!clientGone) sendJson(res, 502, { error: { message: msg, type: 'upstream_error' } })

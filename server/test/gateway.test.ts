@@ -524,3 +524,55 @@ test('BYPASS_XIAOKE=1：前端出口直接连中转站，一轮只记一行，�
     await close(s.front); await close(s.tap)
   }
 })
+
+test('站不回响应头：立刻重发一次；第二次通了就当这一轮正常（11-11 她画图那轮就是这么丢的）', async () => {
+  let hit = 0
+  stationReply = (_r, res) => {
+    hit++
+    if (hit === 1) return                 // 第一次：装死，一个字节都不回
+    streamReply([sseChunk({ content: '画好了' }), sseChunk({}, 'stop')])(_r, res)
+  }
+  const cfg: Config = {
+    ...loadConfig({}),
+    upstreamUrl: `http://127.0.0.1:${stationPortRef}/v1`, upstreamKey: STATION_KEY, tapKey: TAP_KEY,
+    headerTimeoutMs: 600, headerTimeoutRetries: 1, dbPath: ':memory:', blobDir: tmp.dir,
+  }
+  const db2 = openDb(':memory:')
+  const s = buildServers(cfg, db2, { log: () => {} })
+  const port = await listen(s.tap)
+  try {
+    const r = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${TAP_KEY}` },
+      body: JSON.stringify({ model: 'm', stream: true, messages: [{ role: 'user', content: '画一张' }] }),
+    })
+    assert.equal(r.status, 200)
+    assert.match(await r.text(), /画好了/)
+    assert.equal(hit, 2, '发了两次')
+    await settle()
+    const rows = db2.prepare('SELECT status FROM exchanges').all() as any[]
+    assert.deepEqual(rows.map(x => x.status), ['ok'], '只记一行，而且是成功的')
+  } finally { await close(s.front); await close(s.tap) }
+})
+
+test('站一直不回：重试过了还是报错，记成网络错误', async () => {
+  stationReply = () => { /* 永远不回 */ }
+  const cfg: Config = {
+    ...loadConfig({}),
+    upstreamUrl: `http://127.0.0.1:${stationPortRef}/v1`, upstreamKey: STATION_KEY, tapKey: TAP_KEY,
+    headerTimeoutMs: 400, headerTimeoutRetries: 1, dbPath: ':memory:', blobDir: tmp.dir,
+  }
+  const db2 = openDb(':memory:')
+  const s = buildServers(cfg, db2, { log: () => {} })
+  const port = await listen(s.tap)
+  try {
+    const r = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${TAP_KEY}` },
+      body: JSON.stringify({ model: 'm', stream: true, messages: [{ role: 'user', content: 'x' }] }),
+    })
+    assert.equal(r.status, 502)
+    await settle()
+    const row = db2.prepare('SELECT status, error FROM exchanges').get() as any
+    assert.equal(row.status, 'network_error')
+    assert.match(row.error, /响应头超时/)
+  } finally { await close(s.front); await close(s.tap) }
+})

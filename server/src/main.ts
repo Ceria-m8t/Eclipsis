@@ -83,7 +83,7 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
 
   // 前端出口：鉴权交给 Dylan（nginx 注入的网关 key 原样带过去）；本端口只监听 127.0.0.1
   const front = createTap({
-    tap: 'front', name: 'front', recorder, headerTimeoutMs: cfg.headerTimeoutMs, log: opts.log,
+    tap: 'front', name: 'front', recorder, headerTimeoutMs: cfg.headerTimeoutMs, headerTimeoutRetries: cfg.headerTimeoutRetries, log: opts.log,
     api: async (req, res) => {
       if (await handleLlmRelay({ upstreamUrl: cfg.upstreamUrl, upstreamKey: cfg.upstreamKey, relayKey: (process.env.LLM_RELAY_KEY || '').trim() }, db, req, res, m => opts.log?.(m))) return true
       if (await handleWakeApi(db, req, res)) return true
@@ -121,7 +121,8 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
 
   // 上游入口：只认 TAP_KEY；发给中转站时换成 UPSTREAM_KEY
   const tap = createTap({
-    tap: 'upstream', name: 'tap', recorder, headerTimeoutMs: cfg.headerTimeoutMs, streamIdleMs: cfg.streamIdleMs, retry429DelaysMs: cfg.retry429DelaysMs, log: opts.log,
+    tap: 'upstream', name: 'tap', recorder, headerTimeoutMs: cfg.headerTimeoutMs, headerTimeoutRetries: cfg.headerTimeoutRetries,
+    streamIdleMs: cfg.streamIdleMs, retry429DelaysMs: cfg.retry429DelaysMs, log: opts.log,
     authorize: req => !!cfg.tapKey && safeEqual(bearer(req), cfg.tapKey),
     target: path => (cfg.upstreamUrl ? joinV1(cfg.upstreamUrl, path) : null),
     outgoingHeaders: stationHeaders,

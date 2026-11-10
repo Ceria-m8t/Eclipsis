@@ -7,6 +7,7 @@ export interface Config {
   upstreamKey: string     // 中转站密钥（换站改这个）
   tapKey: string          // xiaoke 调用上游入口时用的本地密钥（xiaoke 的 XIAOKE_UPSTREAM_KEY 填它）
   headerTimeoutMs: number // 等上游返回响应头的最长时间；开始流式输出后不再计时
+  headerTimeoutRetries: number // 等不到响应头时再试几次（站卡住时救一轮）
   streamIdleMs: number    // 开始输出以后，连续多久一个字节都没有就断开（中转站卡住时别一直占着 xiaoke）
   bypassXiaoke: boolean   // BYPASS_XIAOKE=1：前端出口直接连中转站，不再经过 xiaoke
   retry429DelaysMs: number[] // 中转站回 429/502/503 时隔多久自动重试（逗号分隔的毫秒数，空 = 不重试）
@@ -29,7 +30,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     upstreamUrl: (env.UPSTREAM_URL || '').trim(),
     upstreamKey: (env.UPSTREAM_KEY || '').trim(),
     tapKey: (env.TAP_KEY || '').trim(),
-    headerTimeoutMs: num(env, 'HEADER_TIMEOUT_MS', 120_000),
+    headerTimeoutMs: num(env, 'HEADER_TIMEOUT_MS', 60_000),
+    headerTimeoutRetries: num(env, 'HEADER_TIMEOUT_RETRIES', 1),
     streamIdleMs: num(env, 'STREAM_IDLE_TIMEOUT_MS', 90_000),
     bypassXiaoke: env.BYPASS_XIAOKE === '1',
     retry429DelaysMs: (env.RETRY_429_DELAYS_MS ?? '6000,12000').split(',').map(x => Number(x.trim())).filter(x => Number.isFinite(x) && x > 0),
