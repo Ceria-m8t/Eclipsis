@@ -5,10 +5,11 @@
 //   1. 今天（她这一天：从她上一次睡醒算起，不按半夜十二点）的聊天一条都不截；
 //   2. 剩下的名额往前补，补到 TARGET 条为止（今天本身超过了就只放今天）；
 //   3. 相邻两天之间插一行日期分隔（挂在那天她的第一句前面），他一眼看得出哪段是哪天；
-//   4. 从经历表按时间取，顺序永远对；撤回的（她删的）不进来。
+//   4. 从经历表按时间取，顺序永远对；撤回的（她删的）、被盖掉的旧版本（重新生成前那条）不进来。
 // 影子阶段：只算出来，和 xiaoke 实际拼的那份比一比，记在 exchanges.transforms.shadow_context，不改发出去的请求。
 import type { DB } from '../db.ts'
 import { textOf } from '../recorder.ts'
+import { supersededSeqs } from '../versions.ts'
 
 export const TARGET = 220            // 大约两百多条
 export const MAX_TODAY = 600         // 今天聊得特别多时也有个上限（再多就从今天的开头截）
@@ -46,7 +47,9 @@ export function loadRecent(db: DB, limit = MAX_TODAY + TARGET, beforeSeq?: numbe
     WHERE channel = 'chat' AND scope = 'daily' AND kind = 'message' AND actor IN ('erica', 'ai') AND retracted_at IS NULL
       AND (? IS NULL OR seq < ?)
     ORDER BY seq DESC LIMIT ?`).all(beforeSeq ?? null, beforeSeq ?? null, limit) as unknown as HistRow[]
-  return rows.reverse()
+  // 同一轮重新生成过的：只留算数那条（她翻到的，没翻过是最后一条）
+  const dead = supersededSeqs(db)
+  return rows.reverse().filter(r => !dead.has(r.seq))
 }
 
 export interface Assembled {

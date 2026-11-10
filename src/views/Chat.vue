@@ -19,7 +19,7 @@ import { type ChatMessage, type MessageVersion, newId } from '../db'
 import {
   loadLatest, loadBefore, loadAfter, deleteOnServer, mergeServer, contextTail,
   lastServerSeq, firstServerSeq, savePending, loadPending, readCache, writeCache,
-  looksNoReply, splitHeart, READ_SIGNAL
+  looksNoReply, splitHeart, READ_SIGNAL, setActiveVersion
 } from '../chat-store'
 import { splitMoment, parseMoment, type MomentView } from '../moment'
 
@@ -673,6 +673,9 @@ function switchVersion(m: ChatMessage, delta: number) {
   m.activeVersion = ((m.activeVersion ?? 0) + delta + n) % n
   m.content = curVersion(m)?.content ?? ''
   persist(m, true)
+  // 她翻到的那一版才是算数的：记到后端，他看到的也是这一版（Erica 2026-11-11 定）
+  const seqs = curVersion(m)?.srvSeqs
+  if (m.srv?.turn && seqs?.length) void setActiveVersion(m.srv.turn, Math.max(...seqs)).catch(() => {})
 }
 
 function retry(m: ChatMessage) {

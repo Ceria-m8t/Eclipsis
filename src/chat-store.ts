@@ -29,6 +29,8 @@ export interface SrvItem {
   content: string; raw?: string; images?: string[]; versions?: SrvVersion[]; source: string
   wake?: { id: string; trace?: string; tools?: string[]; silent?: boolean }
   noReply?: boolean
+  /** 有好几版时算数的是第几版（她上次翻到的那版）：他只看得到这一版 */
+  active?: number
 }
 
 const BASE = '/api/eclipsis/chat'
@@ -58,7 +60,9 @@ export function fromServer(it: SrvItem): ChatMessage {
     if (v.tools.length) out.tools = v.tools.map(t => ({ id: t.id, name: t.name, args: t.args, result: t.result, status: 'done' as const }))
     return out
   })
-  return { id: it.id, seq: it.seq, role: 'assistant', createdAt, content: it.content, versions, activeVersion: Math.max(0, versions.length - 1), srv,
+  // 她上次翻到哪一版就接着看哪一版（后端记着，他也只看得到这一版）
+  const active = it.active ?? versions.length - 1
+  return { id: it.id, seq: it.seq, role: 'assistant', createdAt, content: it.content, versions, activeVersion: Math.max(0, active), srv,
     wake: it.wake, noReply: it.noReply }
 }
 
@@ -85,6 +89,11 @@ export async function deleteOnServer(seqs: number[]): Promise<void> {
     try { msg = (await r.json()).error || msg } catch {}
     throw new Error(msg)
   }
+}
+
+/** 她翻到了哪一版：记到后端，他以后只看得到这一版（失败不挡界面，下次翻再记） */
+export async function setActiveVersion(turn: string, seq: number): Promise<void> {
+  await fetch(`${BASE}/version`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ turn, seq }) })
 }
 
 /** 后端那一段里最新的 seq（只看后端来的） */

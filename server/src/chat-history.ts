@@ -11,6 +11,7 @@ import { join } from 'node:path'
 import { type DB, tx } from './db.ts'
 import { cleanHerText } from './recorder.ts'
 import { splitMoment, type Moment } from './moment.ts'
+import { activeChoices, setActiveVersion } from './versions.ts'
 
 export interface ChatTool { id: string; name: string; args: string; result?: string }
 export interface ChatVersion { moment?: Moment; seq: number; seqs: number[]; ts: string; content: string; thinking: string; tools: ChatTool[]; partial?: boolean }
@@ -30,6 +31,8 @@ export interface ChatItem {
   wake?: { id: string; trace?: string; tools?: string[]; silent?: boolean }
   /** 他这一轮选择已读不回（整条回复只有 [NO_REPLY]） */
   noReply?: boolean
+  /** 有好几版时，算数的是第几版（她翻到的那版，没翻过是最后一版）。他只看得到这一版 */
+  active?: number
 }
 
 /** 他已读不回时整条回复就是这个（思考照常写） */
@@ -185,6 +188,17 @@ export function buildItems(db: DB, rows: Row[]): ChatItem[] {
     items.push(it)
     byTurn.set(turn, it)
   }
+  // 有好几版的轮次：标出算数的是哪一版（她翻到的那版，她那边刷新后也接着看这版）
+  const chosen = activeChoices(db)
+  for (const it of items) {
+    if (!it.versions || it.versions.length < 2) continue
+    const pick = chosen.get(it.turn)
+    const i = pick === undefined ? -1 : it.versions.findIndex(v => v.seq === pick)
+    it.active = i >= 0 ? i : it.versions.length - 1
+    const v = it.versions[it.active]!
+    it.content = v.content
+    it.noReply = isNoReply(v.content) || undefined
+  }
   return items
 }
 
@@ -310,6 +324,16 @@ export async function handleChatApi(db: DB, ctx: { blobDir: string; xiaoke: Xiao
         after: intParam(url.searchParams.get('after')),
         limit: intParam(url.searchParams.get('limit')),
       }))
+      return true
+    }
+    // 她在聊天页翻到了哪一版（他只看得到这一版）
+    if (p === '/v1/eclipsis/chat/version' && req.method === 'POST') {
+      const body = await readJson(req)
+      const turn = typeof body?.turn === 'string' ? body.turn : ''
+      const seq = Number(body?.seq)
+      if (!turn || !Number.isInteger(seq) || seq <= 0) { json(res, 400, { error: '要给 turn 和 seq' }); return true }
+      try { json(res, 200, setActiveVersion(db, turn, seq)) }
+      catch (e: any) { json(res, 404, { error: String(e?.message || e) }) }
       return true
     }
     if (p === '/v1/eclipsis/chat/delete' && req.method === 'POST') {

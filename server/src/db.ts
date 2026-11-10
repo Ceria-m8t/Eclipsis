@@ -66,6 +66,12 @@ CREATE TABLE IF NOT EXISTS episodes (
   retracted_at TEXT,             -- 软删：有值的永远不进上下文
   retract_reason TEXT            -- xiaoke_deleted / not_in_xiaoke / cascade / manual
 );
+-- 同一轮有好几版回复时，她翻到的是哪一条（versions.ts；没记过的按最后一条算）
+CREATE TABLE IF NOT EXISTS turn_active (
+  turn TEXT PRIMARY KEY,
+  seq INTEGER NOT NULL,
+  updated_at TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_episodes_ts ON episodes(ts);
 CREATE INDEX IF NOT EXISTS idx_episodes_scope_ts ON episodes(scope, ts);
 `

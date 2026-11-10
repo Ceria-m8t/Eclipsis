@@ -17,6 +17,7 @@ import { handleChatApi, xiaokeApi } from './chat-history.ts'
 import { handleToolboxApi, setToolboxFile } from './toolbox.ts'
 import { shadowCompare } from './assembler/history.ts'
 import { stripMomentHistory } from './moment.ts'
+import { dropSupersededVersions } from './versions.ts'
 import { handleLlmRelay } from './llm-relay.ts'
 import { initStations, bindStationToConfig } from './station.ts'
 import { ensureWakeSchema, WakeScheduler, dispatchWake, handleWakeApi } from './wake/index.ts'
@@ -130,6 +131,13 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
           transforms.strip_wake_history = { stripped: r.stripped, saved_chars: r.savedChars }
           changed = true
         }
+      }
+      // 她重新生成过的那几轮：历史里（xiaoke 补的）还留着被她丢掉的那版，只给算数那条（DROP_OLD_VERSIONS=0 关）
+      if (process.env.DROP_OLD_VERSIONS !== '0' && Array.isArray(out.messages)) {
+        try {
+          const r = dropSupersededVersions(out.messages, db)
+          if (r.dropped) { out = { ...out, messages: r.messages }; transforms.drop_old_versions = { dropped: r.dropped }; changed = true }
+        } catch { /* 剪不了就原样发 */ }
       }
       // 他以前写的「这一刻」不再发回给他（MOMENT_HISTORY=0 关）
       if (process.env.MOMENT_HISTORY !== '0' && Array.isArray(out.messages)) {

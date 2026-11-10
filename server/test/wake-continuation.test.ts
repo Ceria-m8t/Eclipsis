@@ -9,7 +9,13 @@ import { loadChatContinuation, flattenTools, stripSceneBlock } from '../src/wake
 import { renderRecentWakeBlock } from '../src/wake/chat-block.ts'
 import { sha256 } from '../src/blobs.ts'
 import type { WakeOpportunity } from '../src/wake/types.ts'
-import { fakeUpstream, listen, close } from './helpers.ts'
+import { fakeUpstream, listen, close, tempDir } from './helpers.ts'
+import { setToolboxFile } from '../src/toolbox.ts'
+
+// 别读线上那份箱子配置（/etc/eclipsis/toolbox/boxes.json）：她加了箱子这个测试就会挂
+const box = tempDir()
+setToolboxFile(box.dir + '/boxes.json')
+process.on('exit', () => box.cleanup())
 
 function freshDb(): DB {
   const db = openDb(':memory:')

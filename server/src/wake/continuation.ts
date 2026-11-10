@@ -15,6 +15,7 @@
 // 取不到（没有聊天记录、太久没聊、拼装失败）就返回 null，调用方退回旧做法。
 import type { DB } from '../db.ts'
 import { stripThink } from './dispatch.ts'
+import { dropSupersededVersions } from '../versions.ts'
 
 /** 「此刻」块在 system 里的起点（assembler/index.ts 的 sceneBlock 以它开头） */
 export const SCENE_MARKER = '\n---\n# 此刻'
@@ -121,7 +122,8 @@ export function loadChatContinuation(db: DB, opts: { maxAgeHours?: number; now?:
     })
     if (msgs[0]?.role !== 'system') return null
     const system = stripSceneBlock(textOfParts(msgs[0].content))
-    const history = flattenTools(msgs.slice(1))
+    // 那份请求是原样存下来的：里面可能还有她重新生成前丢掉的那版回复（versions.ts）
+    const history = dropSupersededVersions(flattenTools(msgs.slice(1)), db).messages
     const reply = stripThink(ex.reply_content ?? '')
     if (reply) history.push({ role: 'assistant', content: reply })
     if (!history.length) return null
