@@ -48,8 +48,10 @@ function toLeaf(n: number) {
   leaf.value = n
   ;(document.activeElement as HTMLElement | null)?.blur?.()
   scrollEl.value?.scrollTo({ top: 0 })
-  nextTick(grow)
 }
+// 换页用的是 out-in：新的一页要等旧的淡出完才插进来，所以 toLeaf 里 nextTick 时它还不在。
+// 等它真插进来（enter）再按字数撑高 textarea，不然它停在最小高度、多出来的字被藏住，整页滑不动（11-11 修）
+function onLeafEnter() { grow() }
 // 左右划翻页：横着走得比竖着多一倍、超过 60px 才算（竖着滚照常）
 let touch: { x: number; y: number } | null = null
 function onTouchStart(e: TouchEvent) { const t = e.touches[0]; touch = t && e.touches.length === 1 ? { x: t.clientX, y: t.clientY } : null }
@@ -144,7 +146,7 @@ function remove() {
           </label>
         </div>
 
-        <Transition :name="'leaf-' + leafDir" mode="out-in">
+        <Transition :name="'leaf-' + leafDir" mode="out-in" @enter="onLeafEnter">
           <div v-if="kind !== 'main' || leaf === 0" key="p0" class="leaf">
             <textarea
               ref="area"
