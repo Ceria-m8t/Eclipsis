@@ -162,11 +162,6 @@ function pickBookFont(id: string) { bookFont.value = id; saveBookFont(id) }
         </label>
         <span class="hint">他回复的时候在后台放一段听不见的声音，切到别的 app 也不容易断。代价：会让正在放的音乐暂停。能撑多久由 iOS 决定。</span>
 
-        <RouterLink to="/settings/prompt" class="prompt-entry">
-          <span>系统提示词</span>
-          <small>他的人设、关系、文风，以及家里能做什么</small>
-        </RouterLink>
-
         <div class="section-title">外观</div>
 
         <div class="theme-block">
@@ -266,7 +261,7 @@ function pickBookFont(id: string) { bookFont.value = id; saveBookFont(id) }
         <div class="section-title">世界书</div>
         <RouterLink to="/study/shelf" class="prompt-entry">
           <span>去书房的书架</span>
-          <small>世界书和主提示词都在书架上，一本书就是一本世界书</small>
+          <small>主 Prompt（连同家里能做什么）和世界书都在书架上，一本书就是一本世界书</small>
         </RouterLink>
       </div>
     </main>

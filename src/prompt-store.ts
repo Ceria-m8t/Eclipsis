@@ -1,4 +1,4 @@
-// 系统提示词存储：可在设置里编辑，保留最近的历史版本，随时恢复。
+// 系统提示词存储：在书房书架的「主 Prompt」那本里编辑（正文 + 家里能做什么），保留最近的历史版本，随时恢复。
 // 代码里的 SYSTEM_PROMPT 只作为"出厂默认"，用户改过之后以保存的为准。
 //
 // 真正的那一份在后端（/api/eclipsis/prompts），聊天和 Wake 都从那里读。
@@ -153,6 +153,22 @@ export function queueWorldbookPush() {
     void pushDoc('worldbook', readLocal('worldbook') ?? [])
     void pushDoc('worldbookGroups', readLocal('worldbookGroups') ?? {})
   }, 1500)
+}
+
+/**
+ * 打开书架时再从后端拉一次主 Prompt：开发方会在后端改「家里能做什么」，
+ * App 一直开着的话缓存是旧的，在书里点完成会把旧的写回去。本机有没推上去的修改就不拉（以本机为准）。
+ */
+export async function refreshPrompt(): Promise<PromptData> {
+  if (dirtyKeys().includes('prompt')) return loadPrompt()
+  try {
+    const res = await fetch(API, { cache: 'no-store', signal: AbortSignal.timeout(5000) })
+    if (res.ok) {
+      const { docs } = await res.json() as { docs: Record<DocKey, { value: unknown } | null> }
+      if (docs.prompt?.value && !dirtyKeys().includes('prompt')) localStorage.setItem(KEY, JSON.stringify(docs.prompt.value))
+    }
+  } catch { /* 连不上就用缓存 */ }
+  return loadPrompt()
 }
 
 export type SyncResult = 'synced' | 'imported' | 'offline'

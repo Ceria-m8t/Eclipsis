@@ -16,10 +16,13 @@ const props = defineProps<{
   isNew: boolean
   titleFont: string
   titleWeight: number
+  // 只有主 Prompt 有：「家里能做什么」（功能说明，开发方会跟着功能改），拼在主 Prompt 正文后面
+  features?: string
+  featuresEnabled?: boolean
 }>()
 
 const emit = defineEmits<{
-  done: [v: { title: string; content: string; enabled: boolean; group: string; position: 'before' | 'after'; priority: number }]
+  done: [v: { title: string; content: string; enabled: boolean; group: string; position: 'before' | 'after'; priority: number; features?: string; featuresEnabled?: boolean }]
   discard: []
   remove: []
   history: []
@@ -31,22 +34,26 @@ const enabled = ref(props.enabled)
 const group = ref(props.group)
 const position = ref(props.position)
 const priority = ref(props.priority)
+const features = ref(props.features ?? '')
+const featuresOn = ref(props.featuresEnabled ?? true)
 const showMarks = ref(false)
 const confirmRemove = ref(false)
 
 const dirty = computed(() =>
   title.value !== props.title || content.value !== props.content || enabled.value !== props.enabled ||
-  group.value !== props.group || position.value !== props.position || priority.value !== props.priority)
+  group.value !== props.group || position.value !== props.position || priority.value !== props.priority ||
+  (props.kind === 'main' && (features.value !== (props.features ?? '') || featuresOn.value !== (props.featuresEnabled ?? true))))
 
 const area = ref<HTMLTextAreaElement | null>(null)
 const titleEl = ref<HTMLTextAreaElement | null>(null)
+const featArea = ref<HTMLTextAreaElement | null>(null)
 function fit(el: HTMLTextAreaElement | null) {
   if (!el) return
   el.style.height = 'auto'
   el.style.height = el.scrollHeight + 'px'
 }
-const grow = () => { fit(area.value); fit(titleEl.value) }
-watch([content, title], () => nextTick(grow))
+const grow = () => { fit(area.value); fit(titleEl.value); fit(featArea.value) }
+watch([content, title, features], () => nextTick(grow))
 onMounted(() => nextTick(grow))
 
 // 纸的高度：打开这页时的整屏高（那时键盘还没弹）
@@ -56,7 +63,8 @@ function done() {
   emit('done', {
     title: title.value.trim() || (props.kind === 'main' ? props.title : '无题'),
     content: content.value, enabled: enabled.value, group: group.value.trim() || '默认',
-    position: position.value, priority: Math.max(0, Math.min(100, Math.round(Number(priority.value) || 0)))
+    position: position.value, priority: Math.max(0, Math.min(100, Math.round(Number(priority.value) || 0))),
+    ...(props.kind === 'main' ? { features: features.value, featuresEnabled: featuresOn.value } : {})
   })
 }
 function remove() {
@@ -120,6 +128,24 @@ function remove() {
           :placeholder="kind === 'main' ? '写下他是谁……' : '在这页写下这本书的内容……'"
           spellcheck="false"
         ></textarea>
+
+        <!-- 主 Prompt 的第二部分：家里能做什么。拼的时候紧跟在上面那段后面 -->
+        <template v-if="kind === 'main'">
+          <div class="part-title" :style="{ fontFamily: titleFont, fontWeight: titleWeight }">家里能做什么</div>
+          <div class="meta">
+            <label class="toggle"><input v-model="featuresOn" type="checkbox" /> {{ featuresOn ? '拼在上面那段后面' : '没拼进去' }}</label>
+          </div>
+          <p class="part-hint">告诉他 Eclipsis 里有哪些功能、哪些还没有。加功能、改功能时，开发这边会顺手更新这里。</p>
+          <textarea
+            ref="featArea"
+            v-model="features"
+            class="body features"
+            :class="{ off: !featuresOn }"
+            placeholder="家里有哪些能做的……"
+            spellcheck="false"
+            aria-label="家里能做什么"
+          ></textarea>
+        </template>
 
         <button v-if="kind === 'world' && !isNew" class="remove" @click="remove">{{ confirmRemove ? '再点一次，抽走这本' : '抽走这本' }}</button>
       </div>
@@ -254,6 +280,23 @@ function remove() {
     rgba(50, 60, 110, 0.2) calc(var(--lh) - 1px),
     rgba(50, 60, 110, 0.2) var(--lh)
   );
+}
+.body.features { min-height: 30vh; }
+.body.features.off { opacity: 0.45; }
+.part-title {
+  margin-top: 40px;
+  text-align: center;
+  font-size: 21px;
+  letter-spacing: 2px;
+  color: #1d2140;
+  text-shadow: 0 1px 0 rgba(255, 250, 235, 0.6);
+}
+.part-hint {
+  margin: 8px 0 0;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgba(29, 33, 64, 0.55);
 }
 .body::placeholder { color: rgba(40, 28, 16, 0.38); }
 

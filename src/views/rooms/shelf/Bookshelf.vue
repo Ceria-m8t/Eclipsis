@@ -19,7 +19,7 @@ import {
   loadBookFont, shelfOrder, applyShelfOrder, lastPriority, newBookId, type BookLook, type WorldbookEntry
 } from './books'
 import meta from './book-assets.json'
-import { loadPrompt, savePrompt } from '../../../prompt-store'
+import { loadPrompt, savePrompt, refreshPrompt } from '../../../prompt-store'
 
 const router = useRouter()
 
@@ -29,6 +29,14 @@ const NEW_TITLE = '新的一本'
 // ── 数据 ──
 const entries = ref<WorldbookEntry[]>(loadWorldbook())
 const mainText = ref(loadPrompt().main)
+// 主 Prompt 的第二部分「家里能做什么」（以前在设置页，11-10 搬进这本书）
+const featuresText = ref(loadPrompt().features)
+const featuresOn = ref(loadPrompt().featuresEnabled)
+function usePrompt(p: { main: string; features: string; featuresEnabled: boolean }) {
+  mainText.value = p.main; featuresText.value = p.features; featuresOn.value = p.featuresEnabled
+}
+// 进书架时拉一次最新的（开发方可能在后端改过功能说明）；主 Prompt 正翻开着就不动它
+void refreshPrompt().then(p => { if (editing.value?.kind !== 'main') usePrompt(p) })
 
 // ── 书名字体（在设置页「外观」里选）──
 const font = loadBookFont()
@@ -501,17 +509,25 @@ function toast(m: string) {
   toastTimer = setTimeout(() => (toastMsg.value = ''), 2600)
 }
 
-async function onDone(v: WorldbookEntry) {
+async function onDone(v: WorldbookEntry & { features?: string; featuresEnabled?: boolean }) {
   const ed = editing.value
   if (!ed) return
   if (ed.kind === 'main') {
     if (!v.content.trim()) { toast('主 Prompt 不能是空的'); return }
-    let onServer = true
-    if (v.content !== mainText.value) {
-      const cur = loadPrompt()
-      try { onServer = await savePrompt({ main: v.content, features: cur.features, featuresEnabled: cur.featuresEnabled }) }
+    const mainChanged = v.content !== mainText.value
+    const featChanged = (v.features ?? featuresText.value) !== featuresText.value || (v.featuresEnabled ?? featuresOn.value) !== featuresOn.value
+    if (mainChanged || featChanged) {
+      // 只换她这次改了的那部分，另一部分用后端最新的：书翻开期间开发方改了功能说明，也不会被她这次写回旧的
+      const cur = await refreshPrompt()
+      const next = {
+        main: mainChanged ? v.content : cur.main,
+        features: featChanged ? (v.features ?? cur.features) : cur.features,
+        featuresEnabled: featChanged ? (v.featuresEnabled ?? cur.featuresEnabled) : cur.featuresEnabled,
+      }
+      let onServer = true
+      try { onServer = await savePrompt(next) }
       catch { toast('没存上：本机存储空间不够'); return }
-      mainText.value = v.content
+      usePrompt(next)
       toast(onServer ? '存好了，下一条消息开始生效' : '先存在了本机，服务器连上后会自动同步')
     }
     await closeBook()
@@ -770,6 +786,8 @@ const animSpineLabel = computed(() => anim.value ? (void fontsReady.value, spine
         :is-new="editing.isNew"
         :title-font="font.family"
         :title-weight="font.weight"
+        :features="editing.kind === 'main' ? featuresText : undefined"
+        :features-enabled="editing.kind === 'main' ? featuresOn : undefined"
         @done="onDone"
         @discard="onDiscard"
         @remove="onRemove"
