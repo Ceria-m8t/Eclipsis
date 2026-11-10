@@ -27,7 +27,8 @@ export interface StartInput {
   linked: boolean               // 上游入口：请求里带了前端出口给的 rid
   path: string
   headers: Record<string, string | string[] | undefined>
-  body: any                     // 已解析的 JSON（实际发出去的内容）
+  body: any                     // 已解析的 JSON（实际发出去的内容，加工过）
+  clientBody?: any              // 调用方原来发的那份：经历表按它记
   transforms?: Record<string, unknown> | null
 }
 
@@ -122,6 +123,8 @@ export class Recorder {
     this.onTurnComplete = opts.onTurnComplete
   }
 
+  // body = 真正发出去的那份（加工过的，message_hashes 记它）；clientBody = 调用方原来发的那份，经历表按它记。
+  // 两份不一样很要紧：加工会把文件标记换成整份文件的正文，按加工后的记，她那条消息会变成几千字的文件内容（11-11 踩过）
   start(input: StartInput): ExchangeCtx {
     const now = new Date()
     const scene = header(input.headers, 'x-eclipsis-scene')
@@ -132,6 +135,9 @@ export class Recorder {
     const body = input.body && typeof input.body === 'object' ? input.body : {}
     const messages: any[] = Array.isArray(body.messages) ? body.messages : []
     const stored = messages.map(m => this.blobs.putMessage(m))
+    const clientBody = input.clientBody && typeof input.clientBody === 'object' ? input.clientBody : body
+    const clientMessages: any[] = Array.isArray(clientBody.messages) ? clientBody.messages : messages
+    const storedClient = clientBody === body ? stored : clientMessages.map(m => this.blobs.putMessage(m))
     const { messages: _m, eclipsis_rid: _r, ...options } = body
     const optionsHash = this.blobs.putText('options', JSON.stringify(options))
     // 只看最后一条 user：xiaoke 会把以前的唤醒提示当成历史注入回来
@@ -143,7 +149,7 @@ export class Recorder {
     const ctx: ExchangeCtx = {
       id: 0, tap: input.tap, rid: input.rid, linked: input.linked,
       scene, conversation, turn, version, startedAt: now.toISOString(), startMs: now.getTime(), wake, derive,
-      herText: derive ? lastHerTurn(messages) : undefined
+      herText: derive ? lastHerTurn(clientMessages) : undefined
     }
     let newErica: string[] = []
     tx(this.db, () => {
@@ -155,7 +161,7 @@ export class Recorder {
         input.transforms ? JSON.stringify(input.transforms) : null
       )
       ctx.id = Number(r.lastInsertRowid)
-      if (derive) newErica = this.startEpisodes(ctx, stored)
+      if (derive) newErica = this.startEpisodes(ctx, storedClient)
     })
     if (newErica.length && this.onEricaMessage) {
       try { this.onEricaMessage(newErica.join('\n')) } catch { /* 通知失败不影响记录 */ }

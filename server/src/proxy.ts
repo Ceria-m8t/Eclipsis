@@ -136,7 +136,7 @@ export function createTap(opts: TapOptions): Server {
       try {
         ctx = opts.recorder.start({
           tap: opts.tap, rid: prepared.rid, linked: prepared.linked, path, headers: req.headers,
-          body: prepared.json ?? json, transforms: prepared.transforms
+          body: prepared.json ?? json, clientBody: json, transforms: prepared.transforms
         })
       }
       catch (e) { log('记录 start 失败', e) }

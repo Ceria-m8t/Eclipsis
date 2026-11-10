@@ -22,7 +22,7 @@ import {
   looksNoReply, splitHeart, READ_SIGNAL, setActiveVersion
 } from '../chat-store'
 import { splitMoment, parseMoment, type MomentView } from '../moment'
-import { uploadFile, splitFiles, FILE_ACCEPT, humanSize, fileUrl, fileBadge, type UploadedFile } from '../files'
+import { uploadFile, splitFiles, loadFileText, FILE_ACCEPT, humanSize, fileUrl, fileBadge, type UploadedFile, type FileText } from '../files'
 
 const settings = ref(getSettings())
 
@@ -393,6 +393,13 @@ const inputText = ref('')
 const pendingImages = ref<string[]>([])
 // 她选好、已经传到后端、还没发出去的文件
 const pendingFiles = ref<UploadedFile[]>([])
+// 点开的文件：在前端里看抽出来的文字
+const openFile = ref<{ name: string; loading: boolean; data: FileText | null; error: string }>({ name: '', loading: false, data: null, error: '' })
+async function showFile(f: { name: string; hash: string }) {
+  openFile.value = { name: f.name, loading: true, data: null, error: '' }
+  try { openFile.value = { name: f.name, loading: false, data: await loadFileText(f.hash), error: '' } }
+  catch (e: any) { openFile.value = { name: f.name, loading: false, data: null, error: e?.message || '打不开' } }
+}
 const uploading = ref(0)
 const inputEl = ref<HTMLTextAreaElement | null>(null)
 const composing = ref(false)
@@ -1203,13 +1210,13 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
             <div v-if="row.noReply && !row.thinking" class="read-signal his">他看了，没回你</div>
 
             <div v-if="row.msg.files?.length" class="msg-files" :class="{ mine: row.msg.role === 'user' }">
-              <a v-for="f in row.msg.files" :key="f.hash" class="msg-file glass" :href="fileUrl(f.hash)" :download="f.name">
+              <button v-for="f in row.msg.files" :key="f.hash" class="msg-file glass" @click="showFile(f)">
                 <span class="file-badge">{{ fileBadge(f.name) }}</span>
                 <span class="file-main">
                   <span class="file-name">{{ f.name }}</span>
                   <span class="file-size">{{ f.size ? humanSize(f.size) : '' }}{{ f.note ? ' · 他看不到内容' : f.chars ? ` · ${f.chars} 字` : '' }}</span>
                 </span>
-              </a>
+              </button>
             </div>
             <div v-if="row.msg.images?.length" class="msg-images">
               <!-- 好几张：叠成一摞，左右划翻页；一张：照常 -->
@@ -1303,6 +1310,29 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
       <!-- 底部占位：高度 = 输入栏实际高度，最后一条消息才能滚到输入栏上面 -->
       <div class="chat-tail" aria-hidden="true"></div>
     </main>
+
+    <!-- 点开文件：看后端抽出来的文字 -->
+    <Teleport to="body">
+      <div v-if="openFile.name" class="file-view" @click.self="openFile = { name: '', loading: false, data: null, error: '' }">
+        <div class="fv-sheet glass-strong" data-glass-backdrop>
+          <header class="fv-head">
+            <span class="file-badge">{{ fileBadge(openFile.name) }}</span>
+            <span class="fv-title">{{ openFile.name }}</span>
+            <a v-if="openFile.data" class="fv-dl" :href="fileUrl(openFile.data.hash)" :download="openFile.name">原件</a>
+            <button class="fv-close" aria-label="关闭" @click="openFile = { name: '', loading: false, data: null, error: '' }"><Icon name="close" :size="16" /></button>
+          </header>
+          <p v-if="openFile.data" class="fv-meta">
+            {{ humanSize(openFile.data.size) }}<template v-if="openFile.data.chars"> · {{ openFile.data.chars }} 字</template><template v-if="openFile.data.truncated"> · 他只看到前 3 万字</template>
+          </p>
+          <div class="fv-body">
+            <p v-if="openFile.loading" class="fv-hint">正在读…</p>
+            <p v-else-if="openFile.error" class="fv-hint">{{ openFile.error }}</p>
+            <p v-else-if="openFile.data?.note" class="fv-hint">{{ openFile.data.note }}（原件能下载）</p>
+            <pre v-else class="fv-text">{{ openFile.data?.text }}</pre>
+          </div>
+        </div>
+      </div>
+    </Teleport>
 
     <!-- ===== 输入栏 ===== -->
     <footer ref="footerEl" class="input-footer">
@@ -2083,6 +2113,30 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
   display: flex;
   flex-direction: column;
 }
+/* 点开文件看内容 */
+.file-view {
+  position: fixed; inset: 0; z-index: 320;
+  background: rgba(20, 22, 34, 0.55);
+  display: flex; align-items: flex-end;
+}
+.fv-sheet {
+  width: 100%; max-height: 82vh;
+  border-radius: 20px 20px 0 0;
+  padding: 14px 16px calc(16px + var(--safe-bottom, 0px));
+  display: flex; flex-direction: column;
+}
+.fv-head { display: flex; align-items: center; gap: 8px; }
+.fv-title { flex: 1; font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fv-dl { font-size: 13px; color: var(--accent); text-decoration: none; }
+.fv-close { border: none; background: none; color: var(--text-3); display: flex; }
+.fv-meta { margin: 4px 0 0; font-size: 11.5px; color: var(--text-3); }
+.fv-body { margin-top: 10px; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; }
+.fv-hint { font-size: 13px; color: var(--text-2); line-height: 1.7; }
+.fv-text {
+  margin: 0; font-size: 13.5px; line-height: 1.75; color: var(--text);
+  white-space: pre-wrap; word-break: break-word; font-family: var(--app-font, var(--sans));
+}
+
 /* 待发送的文件 */
 .pending-files { display: flex; flex-direction: column; gap: 6px; padding: 2px 0 8px; }
 .pending-file {
@@ -2118,6 +2172,7 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
 .msg-file .file-name { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .msg-file .file-size { font-size: 11.5px; color: var(--text-3); }
 .msg-file:active { transform: scale(var(--press-scale)); }
+.msg-file { border: none; text-align: left; font: inherit; cursor: pointer; }
 .pending-images { display: flex; gap: 8px; padding: 2px 0 8px; overflow-x: auto; }
 .pending-thumb { position: relative; flex-shrink: 0; }
 .pending-thumb img { width: 56px; height: 56px; object-fit: cover; border-radius: 12px; display: block; }

@@ -175,3 +175,30 @@ test('聊天记录接口：她发的文件拆成文件项，正文里不留标�
     assert.deepEqual(it.files, [{ name: '周报.md', hash: f.hash.slice(0, 12), size: 12, kind: 'text', chars: 4, note: null }])
   } finally { t.cleanup() }
 })
+
+test('经历表按她原来发的那份记：文件标记不会被换成整份正文（11-11 的 bug）', async () => {
+  const { t, db, blobs } = setup()
+  const { Recorder } = await import('../src/recorder.ts')
+  try {
+    const f = await saveFile(db, blobs, Buffer.from('文件里的四千字', 'utf8'), '长文.md', 'text/markdown')
+    const mark = `[文件 长文.md #${f.hash.slice(0, 12)}]`
+    const client = { messages: [{ role: 'system', content: 'sys' }, { role: 'user', content: `${mark}\n看看这个` }] }
+    const sent = attachFiles(structuredClone(client.messages), db).messages
+    assert.match(sent[1]!.content, /文件里的四千字/, '发出去的那份带文件正文')
+
+    const rec = new Recorder(db, blobs, {})
+    const ctx = rec.start({
+      tap: 'front', rid: 'r1', linked: false, path: '/v1/chat/completions', headers: { 'x-eclipsis-scene': 'chat' },
+      body: { ...client, messages: sent }, clientBody: client,
+    })
+    assert.ok(ctx.id > 0)
+    const ep = db.prepare(`SELECT content FROM episodes WHERE actor = 'erica' ORDER BY seq DESC LIMIT 1`).get() as any
+    assert.equal(ep.content, `${mark}\n看看这个`, '经历表里是标记，不是文件正文')
+    assert.doesNotMatch(ep.content, /文件里的四千字/)
+    // 发给站的那份照旧记在 message_hashes 里（他醒来接聊天要用）
+    const ex = db.prepare('SELECT message_hashes FROM exchanges WHERE rid = ?').get('r1') as any
+    const hashes = JSON.parse(ex.message_hashes) as string[]
+    const last = db.prepare('SELECT text FROM blobs WHERE hash = ?').get(hashes[1]!) as any
+    assert.match(last.text, /文件里的四千字/)
+  } finally { t.cleanup() }
+})

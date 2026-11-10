@@ -229,7 +229,8 @@ function readBody(req: IncomingMessage, max: number): Promise<Buffer> {
 
 /**
  *   POST /v1/eclipsis/chat/upload   原始字节 + x-file-name（URL 编码）→ { hash, name, size, kind, chars, note, mark }
- *   GET  /v1/eclipsis/file/<hash>   下载原件（她在聊天页点文件）
+ *   GET  /v1/eclipsis/file/<hash>        下载原件（她在聊天页长按/点「下载原件」）
+ *   GET  /v1/eclipsis/file/<hash>/text   抽出来的文字（她在聊天页点文件，直接在前端里看）
  */
 export async function handleFileApi(
   db: DB, blobs: BlobStore, req: IncomingMessage, res: ServerResponse
@@ -249,6 +250,17 @@ export async function handleFileApi(
     } catch (e: any) {
       json(res, e?.status || 500, { error: String(e?.message || e) })
     }
+    return true
+  }
+  // 抽出来的文字：她点文件时在前端里直接看（不用交给 WPS）
+  const mt = /^\/v1\/eclipsis\/file\/([0-9a-f]{12,64})\/text$/.exec(p)
+  if (mt && req.method === 'GET') {
+    const f = findFiles(db, [mt[1]!.slice(0, 12)]).get(mt[1]!.slice(0, 12))
+    if (!f) { json(res, 404, { error: 'not found' }); return true }
+    json(res, 200, {
+      hash: f.hash.slice(0, 12), name: f.name, mime: f.mime, size: f.size, kind: f.kind,
+      chars: f.chars, truncated: f.truncated, note: f.note, text: f.text || '',
+    })
     return true
   }
   const m = /^\/v1\/eclipsis\/file\/([0-9a-f]{12,64})$/.exec(p)

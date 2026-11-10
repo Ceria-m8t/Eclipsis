@@ -62,6 +62,19 @@ export function splitFiles(text: string): { text: string; files: MsgFile[] } {
 
 export const fileUrl = (hash: string) => `${BASE}/file/${hash}`
 
+export interface FileText {
+  hash: string; name: string; mime: string; size: number
+  kind: UploadedFile['kind']; chars: number; truncated: boolean; note: string | null; text: string
+}
+
+/** 点开文件：拿后端抽出来的文字，在前端里直接看 */
+export async function loadFileText(hash: string): Promise<FileText> {
+  const r = await fetch(`${BASE}/file/${hash}/text`, { cache: 'no-store' })
+  const d = await r.json().catch(() => ({}))
+  if (!r.ok) throw new Error((d as any).error || `打不开（HTTP ${r.status}）`)
+  return d as FileText
+}
+
 /** 文件图标按类型分：只用来挑一个字，前端没有多余素材 */
 export function fileBadge(nameOrKind: string): string {
   const s = nameOrKind.toLowerCase()
