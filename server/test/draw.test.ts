@@ -226,11 +226,12 @@ test('垫图：他按名字挑，走 /images/edits 传图；提示词里写明�
     saveRef(s.db, s.blobs, { name: '小克', note: '像素小螃蟹', data: PNG, mime: 'image/png', byDefault: true })
     saveRef(s.db, s.blobs, { name: '糯糯', note: '她家的狗', data: PNG, mime: 'image/png' })
     assert.equal(listRefs(s.db).length, 3)
+    assert.deepEqual(listRefs(s.db).map(r => r.photos.length), [1, 1, 1])
 
     const r = await draw(s.db, s.blobs, '两个人靠在一起看手机', { refs: ['她', '小克'] })
     assert.deepEqual(r.refs, ['她', '小克'])
     assert.equal(seen.at(-1)!.path, '/v1/images/edits')
-    assert.deepEqual(seen.at(-1)!.files, ['她.png', '小克.png'])
+    assert.deepEqual(seen.at(-1)!.files, ['她1.png', '小克1.png'])
     assert.match(seen.at(-1)!.prompt!, /第 1 张是她（长头发，戴眼镜）；第 2 张是小克（像素小螃蟹）/)
     assert.match(seen.at(-1)!.prompt!, /别换人/)
 
@@ -270,4 +271,50 @@ test('画风：默认那个自动用；能换默认；他也能临时指定', as
     const out = composePrompt({ prompt: '她在看书', style: findStyle(s.db, '二次元'), refs: [] })
     assert.match(out, /^日系二次元[\s\S]*她在看书$/)
   } finally { s.cleanup() }
+})
+
+test('一个名字下面放好几张：同名再传就接着放，画图时一起传，提示词写成「第 1–3 张」', async () => {
+  const s = setup()
+  const seen: { prompt?: string; files: string[] }[] = []
+  const srv = createServer((req, res) => {
+    const chunks: Buffer[] = []
+    req.on('data', c => chunks.push(c as Buffer))
+    req.on('end', () => {
+      const raw = Buffer.concat(chunks).toString('utf8')
+      seen.push({
+        prompt: /name="prompt"\r\n\r\n([\s\S]*?)\r\n--/.exec(raw)?.[1],
+        files: [...raw.matchAll(/name="image\[\]"; filename="([^"]+)"/g)].map(m => m[1]!),
+      })
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ data: [{ b64_json: PNG.toString('base64') }] }))
+    })
+  })
+  const port = await listen(srv)
+  try {
+    saveImageStation({ name: '站', url: `http://127.0.0.1:${port}/v1`, key: 'k', model: 'gpt-image-2', mode: 'images' })
+    const { saveRef, listRefs, deleteRefPhoto, MAX_PHOTOS_PER_REF } = await import('../src/draw-refs.ts')
+    // 同一个名字连着传三次 → 一个垫图，三张图
+    for (let i = 0; i < 3; i++) saveRef(s.db, s.blobs, { name: '她', note: '长头发，戴眼镜', data: Buffer.concat([PNG, Buffer.from([i])]), mime: 'image/png' })
+    saveRef(s.db, s.blobs, { name: '小克', note: '像素小螃蟹', data: PNG, mime: 'image/png' })
+    const refs = listRefs(s.db)
+    assert.equal(refs.length, 2)
+    assert.equal(refs.find(r => r.name === '她')!.photos.length, 3)
+
+    const r = await draw(s.db, s.blobs, '她和小克坐在沙发上', { refs: ['她', '小克'] })
+    assert.equal(r.photos, 4, '三张她 + 一张小克')
+    assert.deepEqual(seen.at(-1)!.files, ['她1.png', '她2.png', '她3.png', '小克1.png'])
+    assert.match(seen.at(-1)!.prompt!, /第 1–3 张是她（长头发，戴眼镜），同一个，不同角度；第 4 张是小克（像素小螃蟹）/)
+
+    // 每个名字最多传 MAX_PHOTOS_PER_REF 张
+    for (let i = 0; i < 3; i++) saveRef(s.db, s.blobs, { name: '她', data: Buffer.concat([PNG, Buffer.from([9, i])]), mime: 'image/png' })
+    assert.equal(listRefs(s.db).find(r2 => r2.name === '她')!.photos.length, 6)
+    const r2 = await draw(s.db, s.blobs, '只画她', { refs: ['她'] })
+    assert.equal(r2.photos, MAX_PHOTOS_PER_REF)
+
+    // 删掉某一张；删到最后一张时这个名字也没了
+    const ke = listRefs(s.db).find(r3 => r3.name === '小克')!
+    deleteRefPhoto(s.db, ke.photos[0]!.id)
+    assert.ok(!listRefs(s.db).some(r4 => r4.name === '小克'))
+    assert.ok(listRefs(s.db).some(r5 => r5.name === '她'))
+  } finally { await close(srv); s.cleanup() }
 })

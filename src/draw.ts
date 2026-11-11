@@ -1,13 +1,14 @@
 // 生图：垫图、画风、她自己出图（2026-11-11）
 const BASE = '/api/eclipsis/draw'
 
-export interface DrawRefInfo { id: string; name: string; note: string; size: number; enabled: boolean; byDefault: boolean; url: string }
+export interface RefPhotoInfo { id: string; url: string; size: number }
+export interface DrawRefInfo { id: string; name: string; note: string; enabled: boolean; byDefault: boolean; photos: RefPhotoInfo[] }
 export interface DrawStyleInfo { id: string; name: string; prompt: string; isDefault: boolean }
 export interface DrawInfo {
   ready: boolean; station: string | null; model: string | null; size: string | null
   refs: DrawRefInfo[]; styles: DrawStyleInfo[]; defaultStyle: string | null
 }
-export interface Drawn { hash: string; url: string; mime: string; bytes: number; mode: string; station: string; style: string | null; refs: string[] }
+export interface Drawn { hash: string; url: string; mime: string; bytes: number; mode: string; station: string; style: string | null; refs: string[]; photos: number }
 
 async function post(path: string, body: unknown): Promise<any> {
   const r = await fetch(BASE + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
@@ -43,6 +44,7 @@ export async function uploadRef(blob: Blob, name: string, note: string, byDefaul
 }
 export const editRef = (b: { id: string; name?: string; note?: string; byDefault?: boolean; enabled?: boolean }) => post('/refs/edit', b)
 export const deleteRef = (id: string) => post('/refs/delete', { id })
+export const deleteRefPhoto = (id: string) => post('/refs/photo/delete', { id })
 export const saveStyle = (b: { id?: string; name: string; prompt: string; isDefault?: boolean }) => post('/styles', b)
 export const setDefaultStyle = (id: string) => post('/styles/default', { id })
 export const deleteStyle = (id: string) => post('/styles/delete', { id })

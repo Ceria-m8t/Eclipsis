@@ -3,9 +3,10 @@
 // 垫图 = 几张固定参考图（她、小克、糯糯、家），他画图时按名字挑，画出来才是他们俩。
 // 画风 = 几段提示词，设一个默认；她和他都不用每次写风格。以后加真人照片就再加一个画风、切默认。
 import { ref, onMounted } from 'vue'
+import Icon from './Icon.vue'
 import { compressImage } from '../image'
 import {
-  drawInfo, uploadRef, editRef, deleteRef, saveStyle, setDefaultStyle, deleteStyle,
+  drawInfo, uploadRef, editRef, deleteRef, deleteRefPhoto, saveStyle, setDefaultStyle, deleteStyle,
   type DrawInfo, type DrawRefInfo, type DrawStyleInfo,
 } from '../draw'
 
@@ -16,6 +17,8 @@ const msg = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
 const pendingName = ref('')
 const pendingNote = ref('')
+// 往已有的名字下面再加一张时，记住是哪个
+const addingTo = ref<DrawRefInfo | null>(null)
 const styleDraft = ref<{ id?: string; name: string; prompt: string; isDefault: boolean } | null>(null)
 
 async function reload() {
@@ -25,6 +28,14 @@ onMounted(reload)
 
 function pick() {
   if (!pendingName.value.trim()) { msg.value = '先给这张垫图起个名字（他按名字挑，比如「她」「小克」）'; return }
+  addingTo.value = null
+  msg.value = ''
+  fileInput.value?.click()
+}
+
+/** 往这个名字下面再加一张（不同角度，画出来更像） */
+function addPhoto(r: DrawRefInfo) {
+  addingTo.value = r
   msg.value = ''
   fileInput.value?.click()
 }
@@ -34,17 +45,24 @@ async function onFile(e: Event) {
   const f = input.files?.[0]
   input.value = ''
   if (!f) return
+  const target = addingTo.value
   busy.value = 'upload'
   try {
     // 垫图压到 1024 够模型看清，省上传时间
     const dataUrl = await compressImage(f, 1024, 0.92)
     const blob = await (await fetch(dataUrl)).blob()
-    await uploadRef(blob, pendingName.value.trim(), pendingNote.value.trim(), true)
-    pendingName.value = ''
-    pendingNote.value = ''
-    msg.value = '加好了'
+    if (target) {
+      await uploadRef(blob, target.name, target.note, target.byDefault)
+      msg.value = `「${target.name}」又多了一张`
+    } else {
+      await uploadRef(blob, pendingName.value.trim(), pendingNote.value.trim(), true)
+      pendingName.value = ''
+      pendingNote.value = ''
+      msg.value = '加好了。同一个人可以多放几张不同角度的，画出来更像'
+    }
     await reload()
   } catch (e2: any) { msg.value = e2?.message || '没传上去' }
+  addingTo.value = null
   busy.value = ''
 }
 
@@ -62,8 +80,12 @@ async function rename(r: DrawRefInfo) {
   busy.value = ''
 }
 async function remove(r: DrawRefInfo) {
-  if (!confirm(`删掉垫图「${r.name}」？`)) return
+  if (!confirm(`删掉垫图「${r.name}」和它下面的 ${r.photos.length} 张图？`)) return
   try { await deleteRef(r.id); await reload() } catch (e: any) { msg.value = e.message }
+}
+async function removePhoto(r: DrawRefInfo, id: string) {
+  if (r.photos.length === 1 && !confirm(`这是「${r.name}」最后一张，删了这个垫图就没了。继续？`)) return
+  try { await deleteRefPhoto(id); await reload() } catch (e: any) { msg.value = e.message }
 }
 
 async function useStyle(s: DrawStyleInfo) {
@@ -87,7 +109,8 @@ async function removeStyle(s: DrawStyleInfo) {
 <template>
   <div class="draw">
     <p class="dw-hint">
-      他的画笔和你的「生图」都用这里的设置。<strong>垫图</strong>是固定参考图，他画到你们俩时照着画；
+      他的画笔和你的「生图」都用这里的设置。<strong>垫图</strong>是固定参考图，他画到你们俩时照着画，
+      同一个人可以放好几张不同角度的（一次画图每人最多用 3 张、总共 6 张）；
       <strong>画风</strong>设一个默认就行，他和你都不用每次写风格。
     </p>
     <p v-if="err" class="dw-err">{{ err }}</p>
@@ -97,18 +120,24 @@ async function removeStyle(s: DrawStyleInfo) {
     <div class="section-title">垫图</div>
     <div v-if="!info?.refs.length" class="dw-meta">还没有。加几张：你、他的形象、糯糯、家里的样子。</div>
     <div v-for="r in info?.refs || []" :key="r.id" class="dw-ref">
-      <img :src="r.url" :alt="r.name" />
-      <div class="dw-ref-main">
+      <div class="dw-head">
         <span class="dw-ref-name">{{ r.name }}</span>
-        <span class="dw-ref-note">{{ r.note || '（没写说明）' }}</span>
-        <div class="dw-row">
-          <label class="dw-flag"><input type="checkbox" :checked="r.enabled" :disabled="!!busy" @change="flip(r, 'enabled')" />他能用</label>
-          <label class="dw-flag"><input type="checkbox" :checked="r.byDefault" :disabled="!!busy" @change="flip(r, 'byDefault')" />我生图时默认带</label>
-        </div>
-      </div>
-      <div class="dw-ref-act">
+        <span class="dw-badge plain">{{ r.photos.length }} 张</span>
+        <span class="dw-spacer"></span>
+        <button class="dw-btn" :disabled="!!busy" @click="addPhoto(r)">再加一张</button>
         <button class="dw-btn" @click="rename(r)">改</button>
         <button class="dw-btn danger" @click="remove(r)">删</button>
+      </div>
+      <p class="dw-ref-note">{{ r.note || '（没写说明）' }}</p>
+      <div class="dw-photos">
+        <div v-for="ph in r.photos" :key="ph.id" class="dw-thumb">
+          <img :src="ph.url" :alt="r.name" />
+          <button aria-label="删掉这一张" @click="removePhoto(r, ph.id)"><Icon name="close" :size="11" /></button>
+        </div>
+      </div>
+      <div class="dw-row">
+        <label class="dw-flag"><input type="checkbox" :checked="r.enabled" :disabled="!!busy" @change="flip(r, 'enabled')" />他能用</label>
+        <label class="dw-flag"><input type="checkbox" :checked="r.byDefault" :disabled="!!busy" @change="flip(r, 'byDefault')" />我生图时默认带</label>
       </div>
     </div>
 
@@ -157,9 +186,16 @@ async function removeStyle(s: DrawStyleInfo) {
   border: 1px solid rgba(0, 0, 0, 0.08); border-radius: 12px; padding: 10px 12px;
   background: var(--glass-bg-soft);
 }
-.dw-ref { display: flex; gap: 10px; align-items: flex-start; }
-.dw-ref img { width: 56px; height: 56px; object-fit: cover; border-radius: 10px; flex-shrink: 0; }
-.dw-ref-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.dw-ref { display: flex; flex-direction: column; gap: 6px; }
+.dw-photos { display: flex; gap: 6px; flex-wrap: wrap; }
+.dw-thumb { position: relative; }
+.dw-thumb img { width: 56px; height: 56px; object-fit: cover; border-radius: 10px; display: block; }
+.dw-thumb button {
+  position: absolute; top: -5px; right: -5px; width: 19px; height: 19px;
+  border-radius: 50%; border: none; background: rgba(40, 44, 60, 0.72); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+}
+.dw-badge.plain { border-color: rgba(127, 127, 127, 0.35); color: var(--text-3); }
 .dw-ref-name { font-weight: 600; font-size: 14px; color: var(--text); }
 .dw-ref-note { font-size: 11.5px; line-height: 1.55; color: var(--text-3); }
 .dw-ref-act { display: flex; flex-direction: column; gap: 4px; }

@@ -10,7 +10,10 @@ import type { DB } from './db.ts'
 import type { BlobStore } from './blobs.ts'
 import { addEpisode } from './db.ts'
 import { currentImageStation, type DrawMode, type ImageStation } from './image-station.ts'
-import { composePrompt, defaultRefs, defaultStyle, findRefsByName, findStyle, listRefs, listStyles, type DrawRef } from './draw-refs.ts'
+import {
+  composePrompt, defaultRefs, defaultStyle, findRefsByName, findStyle, listRefs, listStyles,
+  MAX_PHOTOS_PER_REF, MAX_PHOTOS_TOTAL, type DrawRef,
+} from './draw-refs.ts'
 
 export interface DrawResult { data: Buffer; mime: string; mode: DrawMode; revised?: string }
 
@@ -169,6 +172,8 @@ export async function drawWith(st: ImageStation, prompt: string, opts: { size?: 
 export interface DrawnImage {
   hash: string; url: string; mime: string; bytes: number; mode: DrawMode; station: string
   style: string | null; refs: string[]; prompt: string
+  /** 这次真传了几张垫图 */
+  photos: number
 }
 
 /**
@@ -187,24 +192,34 @@ export async function draw(db: DB, blobs: BlobStore, prompt: string, opts: {
   const picked: DrawRef[] = opts.refs?.length
     ? findRefsByName(db, opts.refs)
     : (opts.useDefaultRefs ? defaultRefs(db) : [])
-  const full = composePrompt({ prompt: text, style, refs: picked })
+  // 一个名字下面可能有好几张（不同角度）：每个最多 MAX_PHOTOS_PER_REF 张，一次总共不超过 MAX_PHOTOS_TOTAL
   const refImages: RefImage[] = []
+  const used: { name: string; note: string; count: number }[] = []
   for (const r of picked) {
-    const data = blobs.readFile(r.hash)
-    if (data) refImages.push({ name: r.name, mime: r.mime, data })
+    let n = 0
+    for (const ph of r.photos.slice(0, MAX_PHOTOS_PER_REF)) {
+      if (refImages.length >= MAX_PHOTOS_TOTAL) break
+      const data = blobs.readFile(ph.hash)
+      if (!data) continue
+      refImages.push({ name: `${r.name}${n + 1}`, mime: ph.mime, data })
+      n++
+    }
+    if (n) used.push({ name: r.name, note: r.note, count: n })
   }
+  const full = composePrompt({ prompt: text, style, refs: used })
   const r = await drawWith(st, full, { size: opts.size, refs: refImages })
   const hash = blobs.putFile(r.mime, r.data)
   return {
     hash, url: `/api/eclipsis/blob/${hash}`, mime: r.mime, bytes: r.data.length, mode: r.mode, station: st.name,
-    style: style?.name ?? null, refs: picked.map(x => x.name), prompt: full,
+    style: style?.name ?? null, refs: used.map(x => x.name), prompt: full,
+    photos: refImages.length,
   }
 }
 
 /** 他的画笔说明里要写清楚现在有哪些垫图和画风 */
-export function drawMenu(db: DB): { refs: { name: string; note: string }[]; styles: string[]; defaultStyle: string | null } {
+export function drawMenu(db: DB): { refs: { name: string; note: string; photos: number }[]; styles: string[]; defaultStyle: string | null } {
   return {
-    refs: listRefs(db).filter(r => r.enabled).map(r => ({ name: r.name, note: r.note })),
+    refs: listRefs(db).filter(r => r.enabled).map(r => ({ name: r.name, note: r.note, photos: r.photos.length })),
     styles: listStyles(db).map(s => s.name),
     defaultStyle: defaultStyle(db)?.name ?? null,
   }

@@ -15,7 +15,7 @@ import type { BlobStore } from './blobs.ts'
 import { draw } from './draw.ts'
 import { currentImageStation } from './image-station.ts'
 import {
-  listRefs, saveRef, deleteRef, listStyles, saveStyle, setDefaultStyle, deleteStyle, defaultStyle,
+  listRefs, saveRef, deleteRef, deleteRefPhoto, listStyles, saveStyle, setDefaultStyle, deleteStyle, defaultStyle,
 } from './draw-refs.ts'
 
 const MAX_REF_BYTES = 8 * 1024 * 1024
@@ -46,8 +46,8 @@ const header = (req: IncomingMessage, k: string) => {
   try { return decodeURIComponent(raw) } catch { return raw }
 }
 const publicRef = (r: ReturnType<typeof listRefs>[number]) => ({
-  id: r.id, name: r.name, note: r.note, size: r.size, enabled: r.enabled, byDefault: r.byDefault,
-  url: `/api/eclipsis/blob/${r.hash}`,
+  id: r.id, name: r.name, note: r.note, enabled: r.enabled, byDefault: r.byDefault,
+  photos: r.photos.map(p => ({ id: p.id, url: `/api/eclipsis/blob/${p.hash}`, size: p.size })),
 })
 
 export async function handleDrawApi(db: DB, blobs: BlobStore, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
@@ -97,6 +97,13 @@ export async function handleDrawApi(db: DB, blobs: BlobStore, req: IncomingMessa
         enabled: typeof b?.enabled === 'boolean' ? b.enabled : cur.enabled,
       })
       json(res, 200, publicRef(r))
+      return true
+    }
+    // 删一个名字下面的某一张
+    if (sub === 'refs/photo/delete' && req.method === 'POST') {
+      const b = await readJson(req)
+      deleteRefPhoto(db, String(b?.id || ''))
+      json(res, 200, { ok: true })
       return true
     }
     if (sub === 'refs/delete' && req.method === 'POST') {

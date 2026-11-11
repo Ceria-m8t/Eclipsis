@@ -10,17 +10,22 @@
 import type { DB } from './db.ts'
 import type { BlobStore } from './blobs.ts'
 
+export interface RefPhoto { id: string; hash: string; mime: string; size: number }
+
 export interface DrawRef {
   id: string
   name: string
   note: string
-  hash: string
-  mime: string
-  size: number
+  /** 一个名字下面可以放好几张（不同角度/表情，模型更容易画像）。第一张当封面 */
+  photos: RefPhoto[]
   enabled: boolean
   /** 她自己点生图时默认带上 */
   byDefault: boolean
 }
+
+/** 一次画图最多传几张（站那边也有上限，多了又贵又容易糊） */
+export const MAX_PHOTOS_PER_REF = 3
+export const MAX_PHOTOS_TOTAL = 6
 
 export interface DrawStyle {
   id: string
@@ -35,13 +40,24 @@ export function ensureDrawSchema(db: DB): void {
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL UNIQUE,
       note TEXT NOT NULL DEFAULT '',
-      hash TEXT NOT NULL,
-      mime TEXT NOT NULL,
-      size INTEGER NOT NULL,
+      hash TEXT,
+      mime TEXT,
+      size INTEGER,
       enabled INTEGER NOT NULL DEFAULT 1,
       by_default INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL
     );
+    -- 一个垫图名字下面的好几张图（2026-11-11：一张不够像）
+    CREATE TABLE IF NOT EXISTS draw_ref_photos (
+      id TEXT PRIMARY KEY,
+      ref_id TEXT NOT NULL,
+      hash TEXT NOT NULL,
+      mime TEXT NOT NULL,
+      size INTEGER NOT NULL,
+      ord INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_ref_photos ON draw_ref_photos(ref_id, ord);
     CREATE TABLE IF NOT EXISTS draw_styles (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL UNIQUE,
@@ -61,14 +77,16 @@ export function ensureDrawSchema(db: DB): void {
   }
 }
 
-const rowToRef = (r: any): DrawRef => ({
-  id: r.id, name: r.name, note: r.note, hash: r.hash, mime: r.mime, size: r.size,
-  enabled: !!r.enabled, byDefault: !!r.by_default,
-})
-
 export function listRefs(db: DB): DrawRef[] {
   ensureDrawSchema(db)
-  return (db.prepare('SELECT * FROM draw_refs ORDER BY created_at').all() as any[]).map(rowToRef)
+  const rows = db.prepare('SELECT * FROM draw_refs ORDER BY created_at').all() as any[]
+  const photos = db.prepare('SELECT * FROM draw_ref_photos ORDER BY ord, created_at').all() as any[]
+  return rows.map(r => {
+    const mine = photos.filter(p => p.ref_id === r.id).map(p => ({ id: p.id, hash: p.hash, mime: p.mime, size: p.size }))
+    // 老库里一个垫图只有一张图，存在 draw_refs 上
+    if (!mine.length && r.hash) mine.push({ id: r.id + '-0', hash: r.hash, mime: r.mime || 'image/png', size: r.size || 0 })
+    return { id: r.id, name: r.name, note: r.note, photos: mine, enabled: !!r.enabled, byDefault: !!r.by_default }
+  })
 }
 
 export function findRefsByName(db: DB, names: string[]): DrawRef[] {
@@ -88,43 +106,72 @@ export function defaultRefs(db: DB): DrawRef[] {
   return listRefs(db).filter(r => r.enabled && r.byDefault)
 }
 
-export function saveRef(db: DB, blobs: BlobStore, input: { id?: string; name: string; note?: string; byDefault?: boolean; enabled?: boolean; data?: Buffer; mime?: string }): DrawRef {
+/**
+ * 加一张图：name 已经存在就往那个名字下面接着放（她要放三张「她」就连着传三次）。
+ * 不带 data 时只改名字/说明/开关。
+ */
+export function saveRef(db: DB, blobs: BlobStore, input: {
+  id?: string; name: string; note?: string; byDefault?: boolean; enabled?: boolean; data?: Buffer; mime?: string
+}): DrawRef {
   ensureDrawSchema(db)
   const name = String(input.name ?? '').trim()
   if (!name) throw new Error('要给这张垫图起个名字（他按名字挑）')
   if (name.length > 24) throw new Error('名字短一点（24 字以内）')
-  const old = input.id ? (db.prepare('SELECT * FROM draw_refs WHERE id = ?').get(input.id) as any) : null
-  if (input.id && !old) throw new Error('找不到这张垫图')
-  const clash = db.prepare('SELECT id FROM draw_refs WHERE name = ? AND id != ?').get(name, old?.id ?? '') as any
-  if (clash) throw new Error(`已经有一张叫「${name}」的垫图了`)
-  let hash = old?.hash as string | undefined
-  let mime = old?.mime as string | undefined
-  let size = old?.size as number | undefined
+  const byId = input.id ? (db.prepare('SELECT * FROM draw_refs WHERE id = ?').get(input.id) as any) : null
+  if (input.id && !byId) throw new Error('找不到这张垫图')
+  const byName = byId ? null : (db.prepare('SELECT * FROM draw_refs WHERE name = ?').get(name) as any)
+  const old = byId ?? byName
+  if (byId) {
+    const clash = db.prepare('SELECT id FROM draw_refs WHERE name = ? AND id != ?').get(name, byId.id) as any
+    if (clash) throw new Error(`已经有一张叫「${name}」的垫图了`)
+  }
+  const now = new Date().toISOString()
+  const id = old?.id ?? `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`
+  const note = String(input.note ?? old?.note ?? '').trim().slice(0, 300)
+  const enabled = input.enabled ?? (old ? !!old.enabled : true)
+  const byDefault = input.byDefault ?? (old ? !!old.by_default : false)
+  db.prepare(`INSERT INTO draw_refs(id, name, note, enabled, by_default, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET name = excluded.name, note = excluded.note,
+      enabled = excluded.enabled, by_default = excluded.by_default`)
+    .run(id, name, note, enabled ? 1 : 0, byDefault ? 1 : 0, now)
   if (input.data?.length) {
     if (!/^image\//.test(input.mime || '')) throw new Error('垫图要是图片')
-    hash = blobs.putFile(input.mime!, input.data)
-    mime = input.mime!
-    size = input.data.length
+    const have = (db.prepare('SELECT COUNT(*) AS n FROM draw_ref_photos WHERE ref_id = ?').get(id) as { n: number }).n
+    const legacy = old?.hash ? 1 : 0
+    if (have + legacy >= 8) throw new Error('一个名字下面最多放 8 张')
+    const hash = blobs.putFile(input.mime!, input.data)
+    db.prepare('INSERT INTO draw_ref_photos(id, ref_id, hash, mime, size, ord, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(`p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`, id, hash, input.mime!, input.data.length, have + legacy, now)
   }
-  if (!hash) throw new Error('要选一张图')
-  const ref: DrawRef = {
-    id: old?.id ?? `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`,
-    name, note: String(input.note ?? old?.note ?? '').trim().slice(0, 300),
-    hash, mime: mime!, size: size!,
-    enabled: input.enabled ?? (old ? !!old.enabled : true),
-    byDefault: input.byDefault ?? (old ? !!old.by_default : false),
-  }
-  db.prepare(`INSERT INTO draw_refs(id, name, note, hash, mime, size, enabled, by_default, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET name = excluded.name, note = excluded.note, hash = excluded.hash,
-      mime = excluded.mime, size = excluded.size, enabled = excluded.enabled, by_default = excluded.by_default`)
-    .run(ref.id, ref.name, ref.note, ref.hash, ref.mime, ref.size, ref.enabled ? 1 : 0, ref.byDefault ? 1 : 0, new Date().toISOString())
+  const ref = listRefs(db).find(r => r.id === id)!
+  if (!ref.photos.length) throw new Error('要选一张图')
   return ref
 }
 
 export function deleteRef(db: DB, id: string): void {
   ensureDrawSchema(db)
+  db.prepare('DELETE FROM draw_ref_photos WHERE ref_id = ?').run(id)
   db.prepare('DELETE FROM draw_refs WHERE id = ?').run(id)
+}
+
+/** 删一个名字下面的某一张（最后一张删掉就把这个名字也删了） */
+export function deleteRefPhoto(db: DB, photoId: string): void {
+  ensureDrawSchema(db)
+  const row = db.prepare('SELECT ref_id FROM draw_ref_photos WHERE id = ?').get(photoId) as any
+  if (row) {
+    db.prepare('DELETE FROM draw_ref_photos WHERE id = ?').run(photoId)
+    const left = listRefs(db).find(r => r.id === row.ref_id)
+    if (left && !left.photos.length) deleteRef(db, row.ref_id)
+    return
+  }
+  // 老库那张（存在 draw_refs 上）
+  const legacy = db.prepare('SELECT id FROM draw_refs WHERE id = ?').get(photoId.replace(/-0$/, '')) as any
+  if (legacy) {
+    db.prepare('UPDATE draw_refs SET hash = NULL, mime = NULL, size = NULL WHERE id = ?').run(legacy.id)
+    const left = listRefs(db).find(r => r.id === legacy.id)
+    if (left && !left.photos.length) deleteRef(db, legacy.id)
+  }
 }
 
 // ── 画风 ──
@@ -185,13 +232,19 @@ export function deleteStyle(db: DB, id: string): void {
   }
 }
 
-/** 拼最终提示词：画风 + 她/他写的那句 + 垫图是谁 */
-export function composePrompt(input: { prompt: string; style: DrawStyle | null; refs: DrawRef[] }): string {
+/** 拼最终提示词：画风 + 她/他写的那句 + 第几张是谁（一个名字好几张时写成「第 1–3 张」） */
+export function composePrompt(input: { prompt: string; style: DrawStyle | null; refs: { name: string; note: string; count: number }[] }): string {
   const parts: string[] = []
   if (input.style) parts.push(input.style.prompt)
   parts.push(input.prompt.trim())
   if (input.refs.length) {
-    const who = input.refs.map((r, i) => `第 ${i + 1} 张是${r.name}${r.note ? `（${r.note}）` : ''}`).join('；')
+    let n = 0
+    const who = input.refs.map(r => {
+      const from = n + 1
+      n += r.count
+      const range = r.count > 1 ? `第 ${from}–${n} 张` : `第 ${from} 张`
+      return `${range}是${r.name}${r.note ? `（${r.note}）` : ''}${r.count > 1 ? '，同一个，不同角度' : ''}`
+    }).join('；')
     parts.push(`参考图：${who}。画里的这些人/东西要照参考图的样子，别换人。`)
   }
   return parts.filter(Boolean).join('\n')
