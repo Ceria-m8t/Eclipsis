@@ -22,6 +22,7 @@ import {
   looksNoReply, splitHeart, READ_SIGNAL, setActiveVersion
 } from '../chat-store'
 import { splitMoment, parseMoment, type MomentView } from '../moment'
+import { splitPixel, renderPixel } from '../pixel'
 import { uploadFile, splitFiles, loadFileText, FILE_ACCEPT, humanSize, fileUrl, fileBadge, type UploadedFile, type FileText } from '../files'
 import { drawImage } from '../draw'
 
@@ -340,12 +341,18 @@ const rows = computed<Row[]>(() => {
     let parts: string[]
     let thinking = ''
     let noReply = false
+    let pixelImages: string[] = []
     let moment: Row['moment'] = null
     if (m.role === 'assistant') {
       const sp = splitThink(text)
       // 他学着写她的心声格式：不显示；「这一刻」拆出来挂在气泡下面（后端拆过的用后端的，本地生成中的自己拆）
       const mo = splitMoment(splitHeart(sp.body).text)
-      text = mo.text
+      // 他自己摆的像素小画：那段 JSON 不显示，本地画成图（后端也会存一份，刷新后用后端那张）
+      const pix = splitPixel(mo.text)
+      text = pix.text
+      if (pix.arts.length && !m.images?.length) {
+        try { pixelImages = pix.arts.map(a => renderPixel(a)) } catch { /* 画不出来就算了 */ }
+      }
       const raw = curVersion(m)?.moment ?? mo.moment
       moment = raw ? { locked: raw.locked, view: raw.locked ? null : parseMoment(raw.text) } : null
       thinking = [curVersion(m)?.thinking?.trim(), sp.think].filter(Boolean).join('\n\n')
@@ -357,7 +364,7 @@ const rows = computed<Row[]>(() => {
     }
     return {
       key: m.id,
-      msg: m,
+      msg: pixelImages.length ? { ...m, images: pixelImages } : m,
       index: i,
       parts,
       thinking,

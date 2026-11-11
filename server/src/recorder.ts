@@ -3,6 +3,7 @@
 import { type DB, tx, addEpisode } from './db.ts'
 import { type BlobStore, sha256 } from './blobs.ts'
 import { type Reply, parseReply } from './reply.ts'
+import { splitPixel, type PixelArt } from './pixel.ts'
 
 // Dylan wake_up.js 发出的唤醒请求里固定有这句
 export const WAKE_MARKER = '你现在处于后台自主唤醒状态'
@@ -115,12 +116,19 @@ export class Recorder {
   onEricaMessage?: (text: string) => void
   /** 一轮聊天正常说完（不是中途调工具）时调用：她说的、他回的。异常不影响记录 */
   onTurnComplete?: (her: string, his: string) => void
+  /** 他在回复里摆了像素小画：渲染成图片挂到这条经历上（main.ts 接） */
+  onPixelArt?: (seq: number, arts: PixelArt[]) => void
 
-  constructor(db: DB, blobs: BlobStore, opts: { onEricaMessage?: (text: string) => void; onTurnComplete?: (her: string, his: string) => void } = {}) {
+  constructor(db: DB, blobs: BlobStore, opts: {
+    onEricaMessage?: (text: string) => void
+    onTurnComplete?: (her: string, his: string) => void
+    onPixelArt?: (seq: number, arts: PixelArt[]) => void
+  } = {}) {
     this.db = db
     this.blobs = blobs
     this.onEricaMessage = opts.onEricaMessage
     this.onTurnComplete = opts.onTurnComplete
+    this.onPixelArt = opts.onPixelArt
   }
 
   // body = 真正发出去的那份（加工过的，message_hashes 记它）；clientBody = 调用方原来发的那份，经历表按它记。
@@ -273,7 +281,9 @@ export class Recorder {
   // 前端出口：他的回复文字、他发起的工具调用
   private finishEpisodes(ctx: ExchangeCtx, reply: Reply, partial: boolean, ts: string) {
     const { channel, scope } = sceneInfo(ctx.scene)
-    const text = reply.content.trim()
+    // 他自己摆的像素小画：块从正文里拆掉（她看到的是图），画坏了正文里留一句原因
+    const pix = splitPixel(reply.content)
+    const text = (pix.arts.length || pix.errors.length ? pix.text : reply.content).trim()
     if (text) {
       addEpisode(this.db, {
         ts, channel, scope, actor: 'ai', kind: 'message', content: text,
@@ -281,10 +291,15 @@ export class Recorder {
           rid: ctx.rid, turn: ctx.turn, version: ctx.version,
           regenerated: (ctx.version ?? 0) > 0 || undefined,
           partial: partial || undefined, finish_reason: reply.finishReason,
-          via: ctx.tap === 'upstream' ? 'upstream' : undefined
+          via: ctx.tap === 'upstream' ? 'upstream' : undefined,
+          ...(pix.arts.length ? { pixel: pix.arts.length } : {}),
         },
         sourceRef: `${ctx.tap}:reply:${ctx.rid}`
       })
+      if (pix.arts.length && this.onPixelArt) {
+        const row = this.db.prepare('SELECT seq FROM episodes WHERE source_ref = ?').get(`${ctx.tap}:reply:${ctx.rid}`) as { seq: number } | undefined
+        if (row) { try { this.onPixelArt(row.seq, pix.arts) } catch { /* 渲染失败不影响记录 */ } }
+      }
     }
     reply.toolCalls.forEach((c, i) => {
       addEpisode(this.db, {

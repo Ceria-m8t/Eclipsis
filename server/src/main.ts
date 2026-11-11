@@ -18,6 +18,7 @@ import { handleToolboxApi, setToolboxFile, setToolboxBlobs } from './toolbox.ts'
 import { shadowCompare, replaceHistory } from './assembler/history.ts'
 import { stripMomentHistory } from './moment.ts'
 import { handleModelsApi } from './models.ts'
+import { attachPixelArt } from './pixel-attach.ts'
 import { attachFiles, handleFileApi, ensureFileSchema } from './files.ts'
 import { handleStationsApi } from './stations-api.ts'
 import { handleDrawApi } from './draw-api.ts'
@@ -70,7 +71,11 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
   ensureFileSchema(db)
   ensureDrawSchema(db)        // 垫图和画风（出厂带三个画风）
   setToolboxBlobs(blobs)      // 他的画笔要用它存图
-  const recorder = new Recorder(db, blobs, { onEricaMessage: opts.onEricaMessage, onTurnComplete: opts.onTurnComplete })
+  const recorder = new Recorder(db, blobs, {
+    onEricaMessage: opts.onEricaMessage, onTurnComplete: opts.onTurnComplete,
+    // 他摆的像素小画：渲染成 PNG 挂到那条经历上（聊天页按图片显示，历史里他也看得到）
+    onPixelArt: (seq, arts) => { void attachPixelArt(db, blobs, seq, arts).catch(e => opts.log?.(`[pixel] 渲染失败：${String(e)}`)) },
+  })
 
   // 发给中转站时的请求头（换掉调用方的 key，用站的 key）
   const stationHeaders = (req: IncomingMessage): Record<string, string> => {
