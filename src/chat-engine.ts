@@ -7,7 +7,16 @@ import { type McpServer, type ToolCall, buildToolDefinitions, executeToolCall } 
 import { localToolDefinitions, isLocalTool, runLocalTool } from './local-tools'
 import type { ChatMessage, MessageVersion, ToolEvent, ApiTurn } from './db'
 
-const MAX_TOOL_ROUNDS = 8
+// 一轮里最多连着用几次工具（设置页可调；每一次 = 给中转站多发一次请求）。
+// 2026-11-11 Erica 报的：他在小镇逛到第 8 次就断在「到了商店。看看有什么卖的。」——
+// 以前到上限是调完最后一个工具就收摊，结果她那边像话没说完，他也不知道为什么停。
+const DEFAULT_TOOL_ROUNDS = 12
+const MAX_TOOL_ROUNDS_CAP = 30
+
+/** 到上限时挂在最后一条工具结果后面，让他自己把话收住（不是她说的） */
+export const toolCapNote = (n: number) =>
+  `〔系统提示，不是她说的：这一轮的工具用到上限了（${n} 次），接下来不能再调了。` +
+  `用一两句话把现在的情况告诉她，这一轮就先结束；还想接着做就等她回你。〕`
 
 // ===== token 估算 =====
 // 不引入 tokenizer：中日韩字符约 1 token/字，其他约 4 字符/token。误差 ±20% 左右，用来截断够用。
@@ -285,9 +294,16 @@ export async function generate(
     }
   }
 
-  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+  const maxRounds = Math.min(Math.max(Math.round(settings.toolRounds || DEFAULT_TOOL_ROUNDS), 1), MAX_TOOL_ROUNDS_CAP)
+  for (let round = 0; round < maxRounds; round++) {
+    // 到上限的这一轮不再给工具，只让他说话收尾（round > 0：第一轮永远给工具）
+    const wrapUp = round > 0 && round === maxRounds - 1
+    if (wrapUp) {
+      const last = messages[messages.length - 1]
+      if (last?.role === 'tool' && typeof last.content === 'string') last.content += `\n\n${toolCapNote(maxRounds - 1)}`
+    }
     const body: any = { model: settings.model, messages, stream: true }
-    if (tools.length) body.tools = tools
+    if (tools.length && !wrapUp) body.tools = tools
 
     // 多轮之间用空行隔开，展示时会拆成不同气泡
     if (round > 0 && version.content && !version.content.endsWith('\n\n')) version.content += '\n\n'
@@ -324,8 +340,9 @@ export async function generate(
     }
     version.trail!.push(turn)
 
-    if (round === MAX_TOOL_ROUNDS - 1) {
-      version.content += `\n\n（工具调用已连续 ${MAX_TOOL_ROUNDS} 轮，先停在这里）`
+    // 收尾那一轮没给工具，正常不会走到这儿；真走到了（站无视 tools 照样调）就留一句
+    if (round === maxRounds - 1) {
+      version.content += `\n\n（工具用到上限 ${maxRounds} 次了，先停在这里）`
       emit()
     }
   }

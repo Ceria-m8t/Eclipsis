@@ -10,6 +10,7 @@ export interface Settings {
   nameUser: string
   chatSubtitle: string   // 顶栏名字下面那行小字
   contextTokens: number  // 发给模型的聊天历史上限（估算值，不含系统提示词）
+  toolRounds: number     // 一轮里他最多连着用几次工具（每次 = 给中转站多发一次请求）
   splitBubbles: boolean  // 他的回复按段落拆成多个气泡
   keepAlive: boolean     // 他回复时后台静音保活（切到别的 app 不断）
 }
@@ -26,6 +27,7 @@ const DEFAULT_SETTINGS: Settings = {
   nameUser: 'Erica',
   chatSubtitle: '',
   contextTokens: 60000,
+  toolRounds: 12,
   splitBubbles: true,
   keepAlive: true
 }

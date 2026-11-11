@@ -151,6 +151,60 @@ describe('generate', () => {
     tools: [{ name: 'add', description: '', input_schema: { type: 'object' }, serverId: 'm' }]
   }
 
+  it('用到上限：最后一轮不给工具、工具结果后面告诉他收尾，不再断在半空', async () => {
+    const requests: any[] = []
+    let n = 0
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: any) => {
+      // 状态工具自己会往后端写一次，不算聊天请求
+      if (!String(url).includes('/chat/completions')) return new Response('{"status":null}', { headers: { 'content-type': 'application/json' } })
+      requests.push(JSON.parse(init.body))
+      n++
+      // 每一轮都想继续调工具（他在小镇一直逛）
+      if (n < 3) {
+        return sse([
+          delta({ content: `第 ${n} 步` }),
+          delta({ tool_calls: [{ index: 0, id: 'c' + n, type: 'function', function: { name: 'eclipsis_set_status', arguments: '{"emoji":"🏘️","text":"逛小镇"}' } }] }),
+          delta({}, 'tool_calls')
+        ])
+      }
+      return sse([delta({ content: '到商店了，先停在这儿。' }), delta({}, 'stop')])
+    }))
+
+    const settings = { ...getSettings(), apiBase: 'https://example.com/v1', toolRounds: 3 }
+    const v: MessageVersion = { content: '', createdAt: 0 }
+    await generate(settings, [user('一起逛小镇')], [], new AbortController().signal, v, { onUpdate: () => {} })
+
+    expect(requests).toHaveLength(3)
+    // 前两轮给工具，最后一轮（收尾）不给
+    expect(requests[0].tools?.length).toBeGreaterThan(0)
+    expect(requests[1].tools?.length).toBeGreaterThan(0)
+    expect(requests[2].tools).toBeUndefined()
+    // 收尾那一轮：上一条工具结果后面挂了提示（不是她说的）
+    const lastTool = requests[2].messages.at(-1)
+    expect(lastTool.role).toBe('tool')
+    expect(lastTool.content).toContain('工具用到上限了（2 次）')
+    expect(lastTool.content).toContain('不是她说的')
+    // 前面的请求里没有这句
+    expect(JSON.stringify(requests[1].messages)).not.toContain('工具用到上限了')
+    // 他自己把话说完了，不再出现那句机器味的括号
+    expect(v.content).toBe('第 1 步\n\n第 2 步\n\n到商店了，先停在这儿。')
+    expect(v.content).not.toContain('先停在这里')
+    vi.unstubAllGlobals()
+  })
+
+  it('toolRounds=1 时第一轮照样给工具（不然他一次工具都用不了）', async () => {
+    const requests: any[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: any) => {
+      if (!String(url).includes('/chat/completions')) return new Response('{"status":null}', { headers: { 'content-type': 'application/json' } })
+      requests.push(JSON.parse(init.body))
+      return sse([delta({ content: '嗯' }), delta({}, 'stop')])
+    }))
+    const settings = { ...getSettings(), apiBase: 'https://example.com/v1', toolRounds: 1 }
+    await generate(settings, [user('在吗')], [], new AbortController().signal, { content: '', createdAt: 0 }, { onUpdate: () => {} })
+    expect(requests[0].tools?.length).toBeGreaterThan(0)
+    vi.unstubAllGlobals()
+  })
+
   it('工具调用：参数分片拼接（后续分片不带 id）→ 调 MCP → 第二轮回复', async () => {
     const requests: any[] = []
     let chatRound = 0

@@ -247,6 +247,11 @@ function pickBookFont(id: string) { bookFont.value = id; saveBookFont(id) }
             <input v-model.number="settings.contextTokens" type="range" min="10000" max="180000" step="5000" />
             <span class="hint">每次发给他的聊天记录最多这么多，超出的旧消息不发送，本地记录不会删除。不含系统提示词和世界书。</span>
           </label>
+          <label>
+            他一轮里最多连着用几次工具（{{ settings.toolRounds }} 次）
+            <input v-model.number="settings.toolRounds" type="range" min="4" max="24" step="1" />
+            <span class="hint">他每用一次工具（翻记忆、逛小镇、画图……）就要给中转站多发一次请求，整段聊天记录跟着重发一遍——按次计费的站，一轮就按这个次数花钱。调高他能一口气做完更多事（比如在小镇连着逛好几个地方），调低省钱。到上限时他会先把话说完再停，不会断在半空。</span>
+          </label>
           <label class="check-row">
             <input v-model="settings.splitBubbles" type="checkbox" />
             他的回复按行拆成多个气泡
