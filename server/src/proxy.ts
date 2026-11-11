@@ -31,7 +31,7 @@ export interface TapOptions {
   authorize: (req: IncomingMessage) => boolean
   target: (path: string) => string | null                    // null = 未配置，返回 503
   outgoingHeaders: (req: IncomingMessage) => Record<string, string>
-  prepare: (json: any | null, raw: Buffer) => Prepared
+  prepare: (json: any | null, raw: Buffer, headers?: IncomingMessage['headers']) => Prepared
   recorder: Recorder | null
   headerTimeoutMs: number
   /** 等不到响应头时再试几次（站卡住了，一个字节都没回，重发是安全的）。默认 1 */
@@ -130,7 +130,7 @@ export function createTap(opts: TapOptions): Server {
     }
     let prepared: Prepared = { rid: randomUUID(), linked: false, body: raw }
     if (json) {
-      try { prepared = opts.prepare(json, raw) } catch (e) { log('prepare 失败，按原样转发', e) }
+      try { prepared = opts.prepare(json, raw, req.headers) } catch (e) { log('prepare 失败，按原样转发', e) }
     }
 
     let ctx: ExchangeCtx | null = null

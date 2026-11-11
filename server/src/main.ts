@@ -11,7 +11,7 @@ import { openDb, type DB } from './db.ts'
 import { BlobStore } from './blobs.ts'
 import { Recorder } from './recorder.ts'
 import { createTap, forwardHeaders, type Prepared } from './proxy.ts'
-import { stripWakeHistory, stripThinkHistory, stripOldImages, reorderByTime, markMissingImages, type TimeLookup } from './transforms.ts'
+import { stripWakeHistory, stripThinkHistory, stripOldImages, reorderByTime, markMissingImages, type TimeLookup, markToolRound } from './transforms.ts'
 import { handleApi } from './api.ts'
 import { handleChatApi, xiaokeApi } from './chat-history.ts'
 import { handleToolboxApi, setToolboxFile, setToolboxBlobs } from './toolbox.ts'
@@ -34,7 +34,7 @@ import {
   WeatherFetcher, refreshXinchaoBridge,
   pruneHrHistory, detectFromRecentChat
 } from './pulse/index.ts'
-import { assembleSceneBlock, injectSceneBlock, renderRecentGroupBlock } from './assembler/index.ts'
+import { assembleSceneBlockForTurn, injectSceneBlock, renderRecentGroupBlock } from './assembler/index.ts'
 import { renderRecentWakeBlock } from './wake/chat-block.ts'
 import { notifyXinchaoPresence, notifyXinchaoExchange } from './xinchao-client.ts'
 import { ensurePromptSchema, handlePromptApi } from './prompts.ts'
@@ -122,8 +122,8 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
       ? (cfg.upstreamUrl ? joinV1(cfg.upstreamUrl, path) : null)
       : joinV1(cfg.dylanUrl, path)),
     outgoingHeaders: req => (cfg.bypassXiaoke ? stationHeaders(req) : forwardHeaders(req)),
-    prepare: (json, raw): Prepared => {
-      if (cfg.bypassXiaoke) return stationPrepare(json, raw)
+    prepare: (json, raw, headers): Prepared => {
+      if (cfg.bypassXiaoke) return stationPrepare(json, raw, headers)
       const rid = crypto.randomUUID()
       if (!opts.linkRid) return { rid, linked: false, body: raw }
       return { rid, linked: false, body: Buffer.from(JSON.stringify({ ...json, eclipsis_rid: rid })) }
@@ -142,7 +142,13 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
   return { front, tap }
 
   // ── 发给中转站之前对请求做的全部加工（两个入口共用：经 xiaoke 时在上游入口跑，直连时在前端出口跑）──
-  function stationPrepare(json: any, raw: Buffer): Prepared {
+  function stationPrepare(json: any, raw: Buffer, headers?: Record<string, string | string[] | undefined>): Prepared {
+      // 一轮里的第几次请求：工具轮和第一次用同一个 turn，「此刻」要跟着冻住
+      const turnHeader = (() => {
+        const v = headers?.['x-eclipsis-turn']
+        const t = (Array.isArray(v) ? v[0] : v)?.trim()
+        return t && t.length <= 200 ? t : null
+      })()
       const linkedRid = typeof json?.eclipsis_rid === 'string' && /^[\w-]{8,64}$/.test(json.eclipsis_rid) ? json.eclipsis_rid : null
       const rid = linkedRid || crypto.randomUUID()
       let out = json
@@ -234,10 +240,15 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
         const r = markMissingImages(out.messages)
         if (r.marked) { out = { ...out, messages: r.messages }; transforms.mark_missing_images = { marked: r.marked }; changed = true }
       }
+      // 工具轮：在工具结果后面挑明「你还在同一轮里，她还没法回你」（TOOL_ROUND_NOTE=0 关）
+      if (process.env.TOOL_ROUND_NOTE !== '0' && Array.isArray(out.messages)) {
+        const r = markToolRound(out.messages)
+        if (r.marked) { out = { ...out, messages: r.messages }; transforms.tool_round_note = true; changed = true }
+      }
       // 组装器 v1：注入现场状态（时间+脉+天气）到 system message 末尾
       if (opts.assembler && Array.isArray(out.messages)) {
         try {
-          const scene = assembleSceneBlock(db)
+          const scene = assembleSceneBlockForTurn(db, turnHeader)
           const groupBlock = process.env.CHAT_GROUP_BLOCK === '1' ? renderRecentGroupBlock(db) : ''
           // 他醒来时发的消息和念头（默认开，CHAT_WAKE_BLOCK=0 关）
           let wakeBlock = ''

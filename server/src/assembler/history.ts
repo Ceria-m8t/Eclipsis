@@ -320,6 +320,7 @@ export interface TodaySummary {
   herLines: number             // 她今天说了几句
   hisLines: number             // 他今天回了几条
   lastAtMs: number | null      // 最后一句（谁说的都算）距现在多少毫秒
+  herLastAtMs?: number | null  // 她的最后一句距现在多少毫秒
 }
 
 export function todaySummary(db: DB, now = Date.now()): TodaySummary | null {
@@ -333,6 +334,11 @@ export function todaySummary(db: DB, now = Date.now()): TodaySummary | null {
     herLines: today.filter(r => r.actor === 'erica').length,
     hisLines: today.filter(r => r.actor === 'ai').length,
     lastAtMs: now - Date.parse(today[today.length - 1]!.ts),
+    // 她的最后一句（「上一句」要说的是她，不是他自己刚说的半截话）
+    herLastAtMs: (() => {
+      for (let i = today.length - 1; i >= 0; i--) if (today[i]!.actor === 'erica') return now - Date.parse(today[i]!.ts)
+      return null
+    })(),
   }
 }
 
@@ -357,6 +363,7 @@ export function renderTodayLine(db: DB, now = Date.now()): string {
   }
   const parts = [`今天她 ${hhmm(s.herWakeAt)} 起（睡醒后第一句）`]
   parts.push(`到现在她说了 ${s.herLines} 句、你回了 ${s.hisLines} 条`)
-  if (s.lastAtMs != null) parts.push(`上一句 ${ago(s.lastAtMs)}`)
+  if (s.herLastAtMs != null) parts.push(`她上一句 ${ago(s.herLastAtMs)}`)
+  else if (s.lastAtMs != null) parts.push(`上一句 ${ago(s.lastAtMs)}`)
   return parts.join('，')
 }

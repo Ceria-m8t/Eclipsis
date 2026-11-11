@@ -7,6 +7,8 @@ import { openDb, addEpisode, type DB } from '../src/db.ts'
 import { loadConfig, type Config } from '../src/config.ts'
 import { WAKE_MARKER } from '../src/recorder.ts'
 import { chatHistory } from '../src/chat-history.ts'
+import { forgetTurnScenes } from '../src/assembler/index.ts'
+import { renderTodayLine } from '../src/assembler/history.ts'
 import { listen, close, fakeUpstream, sseChunk, tempDir, type Seen } from './helpers.ts'
 
 const TAP_KEY = 'tap-key-for-test'
@@ -575,6 +577,86 @@ test('BYPASS_XIAOKE=1：前端出口直接连中转站，一轮只记一行，�
     assert.deepEqual(eps.map(e => `${e.actor}:${e.content}`), ['ai:直连成功', 'erica:直连测试'])
   } finally {
     if (prevOur === undefined) delete process.env.OUR_HISTORY; else process.env.OUR_HISTORY = prevOur
+    await close(s.front); await close(s.tap)
+  }
+})
+
+test('今日概况：「她上一句」算的是她，不是他自己刚说的半截话', () => {
+  const db2 = openDb(':memory:')
+  const now = Date.parse('2026-11-12T00:10:00Z')
+  const t = (min: number) => new Date(now - min * 60_000).toISOString()
+  addEpisode(db2, { ts: t(40), channel: 'chat', scope: 'daily', actor: 'erica', kind: 'message', content: '在吗', sourceRef: 'x:u1' })
+  addEpisode(db2, { ts: t(39), channel: 'chat', scope: 'daily', actor: 'ai', kind: 'message', content: '在', sourceRef: 'x:a1' })
+  addEpisode(db2, { ts: t(20), channel: 'chat', scope: 'daily', actor: 'erica', kind: 'message', content: '我有点焦虑', sourceRef: 'x:u2' })
+  // 他刚说的半截话（工具轮里「上一句」以前指的就是这条）
+  addEpisode(db2, { ts: t(0), channel: 'chat', scope: 'daily', actor: 'ai', kind: 'message', content: '焦虑什么', sourceRef: 'x:a2' })
+  const line = renderTodayLine(db2, now)
+  assert.match(line, /她上一句 20 分钟前/)
+  assert.doesNotMatch(line, /上一句 刚刚/)
+})
+
+// 一轮里几次请求（他调工具）：此刻冻住 + 工具结果后面挑明她还没法回
+test('工具轮：「此刻」在一轮里冻住，工具结果后面挑明她还没法回', async () => {
+  forgetTurnScenes()
+  const db2 = openDb(':memory:')
+  const cfg: Config = {
+    ...loadConfig({}),
+    dylanUrl: 'http://127.0.0.1:1/v1',
+    upstreamUrl: `http://127.0.0.1:${stationPortRef}/v1`, upstreamKey: STATION_KEY,
+    bypassXiaoke: true, dbPath: ':memory:', blobDir: tmp.dir, headerTimeoutMs: 5000,
+  }
+  for (let i = 0; i < 10; i++) {
+    addEpisode(db2, { ts: new Date(Date.now() - (60 - i) * 60_000).toISOString(), channel: 'chat', scope: 'daily',
+      actor: i % 2 ? 'ai' : 'erica', kind: 'message', content: `第 ${i} 句`, sourceRef: 'f' + i })
+  }
+  const s = buildServers(cfg, db2, { assembler: true, stripThinkHistory: true, log: () => {} })
+  const port = await listen(s.front)
+  const h = { 'content-type': 'application/json', 'x-eclipsis-scene': 'chat', 'x-eclipsis-turn': 'frozen1', 'x-eclipsis-version': '0' }
+  const post = (messages: any[]) => fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+    method: 'POST', headers: h, body: JSON.stringify({ model: 'm', stream: true, messages })
+  })
+  try {
+    stationReply = streamReply([
+      sseChunk({ content: '焦虑什么。吃完饭了吗。' }),
+      sseChunk({ tool_calls: [{ index: 0, id: 'ct1', function: { name: 'open_town', arguments: '{}' } }] }),
+      sseChunk({}, 'tool_calls')
+    ])
+    await (await post([{ role: 'system', content: 'sp' }, { role: 'user', content: '我有点焦虑' }])).text()
+    await settle()
+    // 工具轮：她在界面上插不进话
+    stationReply = streamReply([sseChunk({ content: '小镇开了。' }), sseChunk({}, 'stop')])
+    await (await post([
+      { role: 'system', content: 'sp' }, { role: 'user', content: '我有点焦虑' },
+      { role: 'assistant', content: '焦虑什么。吃完饭了吗。', tool_calls: [{ id: 'ct1', type: 'function', function: { name: 'open_town', arguments: '{}' } }] },
+      { role: 'tool', tool_call_id: 'ct1', content: '打开了，里面有：home' }
+    ])).text()
+    await settle()
+
+    const sent = station.seen.filter(x => !x.url.startsWith('/v1/models')).slice(-2).map(x => JSON.parse(x.body))
+    assert.match(sent[0].messages[0].content, /# 此刻/)
+    // 同一轮两次请求的 system 一模一样（他不会看到时间和条数在一轮里跳；以后开 prompt caching 才有前缀可缓存）
+    assert.equal(sent[1].messages[0].content, sent[0].messages[0].content)
+    // 工具结果后面那句
+    const toolMsg = sent[1].messages.at(-1)
+    assert.equal(toolMsg.role, 'tool')
+    assert.match(toolMsg.content, /^打开了，里面有：home/)
+    assert.match(toolMsg.content, /你还在同一轮里/)
+    assert.match(toolMsg.content, /不是她不理你/)
+    // 第一次请求（最后一条是她的话）不加这句
+    assert.doesNotMatch(JSON.stringify(sent[0].messages), /你还在同一轮里/)
+    assert.equal(JSON.parse((db2.prepare('SELECT transforms FROM exchanges ORDER BY id DESC LIMIT 1').get() as any).transforms).tool_round_note, true)
+
+    // 换一轮：重新算
+    stationReply = streamReply([sseChunk({ content: '嗯' }), sseChunk({}, 'stop')])
+    await (await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+      method: 'POST', headers: { ...h, 'x-eclipsis-turn': 'frozen2' },
+      body: JSON.stringify({ model: 'm', stream: true, messages: [{ role: 'system', content: 'sp' }, { role: 'user', content: '在吗' }] })
+    })).text()
+    await settle()
+    const next = JSON.parse(station.seen.filter(x => !x.url.startsWith('/v1/models')).at(-1)!.body)
+    assert.match(next.messages[0].content, /# 此刻/)
+    assert.doesNotMatch(JSON.stringify(next.messages), /你还在同一轮里/)
+  } finally {
     await close(s.front); await close(s.tap)
   }
 })

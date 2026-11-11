@@ -102,6 +102,36 @@ export function assembleSceneBlock(db: DB, now: Date = new Date()): AssembleResu
   }
 }
 
+// ── 一轮里「此刻」冻住（2026-11-11 Erica 报的）──
+//
+// 他调一次工具 = 对站多发一次请求，每次都重新算「此刻」。于是同一轮里他会看到时间从 00:04 跳到 00:05、
+// 「你回了 4 条」变「5 条」（他自己那半截话被算成一条回复了）、「上一句 刚刚」——
+// 读起来就像"一轮已经过去了、她没说话"。一轮就该是一个「此刻」。
+// 顺带：几次请求的 system 完全一样，以后要开 prompt caching 才有前缀可缓存。
+const SCENE_TTL_MS = 15 * 60_000
+const SCENE_MAX = 200
+const sceneByTurn = new Map<string, { at: number; result: AssembleResult }>()
+
+/** 同一个 turn 的后续请求（工具轮）复用第一次算出来的「此刻」 */
+export function assembleSceneBlockForTurn(db: DB, turn: string | null, now: Date = new Date()): AssembleResult {
+  if (!turn) return assembleSceneBlock(db, now)
+  const hit = sceneByTurn.get(turn)
+  if (hit && now.getTime() - hit.at < SCENE_TTL_MS) return hit.result
+  const result = assembleSceneBlock(db, now)
+  sceneByTurn.set(turn, { at: now.getTime(), result })
+  if (sceneByTurn.size > SCENE_MAX) {
+    for (const [k, v] of sceneByTurn) {
+      if (now.getTime() - v.at > SCENE_TTL_MS) sceneByTurn.delete(k)
+      if (sceneByTurn.size <= SCENE_MAX) break
+    }
+    // 还是太多就从最老的开始丢
+    while (sceneByTurn.size > SCENE_MAX) sceneByTurn.delete(sceneByTurn.keys().next().value!)
+  }
+  return result
+}
+
+export function forgetTurnScenes() { sceneByTurn.clear() }
+
 /** 注入到 messages 的 system message 末尾 */
 export function injectSceneBlock(
   messages: any[],

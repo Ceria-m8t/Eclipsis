@@ -213,3 +213,22 @@ export function reorderByTime(messages: any[], lookup: TimeLookup): { messages: 
   if (!moved) return { messages, moved: 0 }
   return { messages: [...messages.slice(0, head), ...sorted.flatMap(u => u.msgs), ...messages.slice(tail)], moved }
 }
+
+// 工具轮里跟他说清楚：这还是同一轮（2026-11-11 Erica 问的）。
+//
+// 他调一次工具就多一次请求，中间她在界面上根本插不进话。他在工具前问了她一句、工具回来以后接着说，
+// 容易读成"她没理我"。这句挂在最后一条工具结果后面（不是单独一条消息，省 token，也不动前面的前缀）。
+export const TOOL_ROUND_NOTE =
+  '\n\n〔系统提示，不是她说的：你还在同一轮里。她看着你说话，但要等你这一轮说完才能开口——' +
+  '你刚才问她的话她还没机会回，不是她不理你。〕'
+
+/** 最后一条是工具结果 = 这是工具轮的续写。在它后面补一句，告诉他她还没法回 */
+export function markToolRound(messages: any[]): { messages: any[]; marked: boolean } {
+  const last = messages[messages.length - 1]
+  if (last?.role !== 'tool') return { messages, marked: false }
+  const text = typeof last.content === 'string' ? last.content : null
+  if (text === null || text.includes('你还在同一轮里')) return { messages, marked: false }
+  const out = [...messages]
+  out[out.length - 1] = { ...last, content: text + TOOL_ROUND_NOTE }
+  return { messages: out, marked: true }
+}
