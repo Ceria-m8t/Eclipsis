@@ -17,10 +17,24 @@ describe('像素小画（她这边）', () => {
     expect(r.arts).toHaveLength(0)
   })
 
-  it('画坏了：显示一句话，不显示 JSON', () => {
-    const r = splitPixel('[[PIXEL]]{"w":2,"h":2,"palette":["#0000"],"grid":[0,0,0]}[[/PIXEL]]')
+  it('画坏了（差太多）：显示一句话，不显示 JSON', () => {
+    const r = splitPixel('[[PIXEL]]{"w":16,"h":16,"palette":["#0000"],"grid":[0,0,0]}[[/PIXEL]]')
     expect(r.text).toBe('〔像素小画没画成〕')
     expect(r.arts).toHaveLength(0)
+  })
+
+  it('按行画：短行补透明，宽高自己算', () => {
+    const r = splitPixel(['看这个', '[[PIXEL]]', 'palette: .=#0000 1=#C8909A', '..11..', '.11.', '[[/PIXEL]]'].join('\n'))
+    expect(r.text).toBe('看这个')
+    expect(r.arts[0]!.w).toBe(6)
+    expect(r.arts[0]!.h).toBe(2)
+    expect(r.arts[0]!.grid).toEqual([0, 0, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0])
+  })
+
+  it('JSON 差一格：自动补齐，还是画出来', () => {
+    const r = splitPixel('[[PIXEL]]{"w":4,"h":4,"palette":["#0000","#fff"],"grid":' + JSON.stringify(Array(15).fill(1)) + '}[[/PIXEL]]')
+    expect(r.arts).toHaveLength(1)
+    expect(r.arts[0]!.grid).toHaveLength(16)
   })
 
   it('没有像素块的回复原样返回', () => {
@@ -31,6 +45,7 @@ describe('像素小画（她这边）', () => {
     expect(parsePixel('{"w":0,"h":1,"palette":["#0000"],"grid":[]}')).toBeNull()
     expect(parsePixel('{"w":65,"h":1,"palette":["#0000"],"grid":[0]}')).toBeNull()
     expect(parsePixel('{"w":1,"h":1,"palette":["#0000"],"grid":[3]}')).toBeNull()
+    expect(parsePixel('{"w":16,"h":16,"palette":["#0000"],"grid":[0]}')).toBeNull()
     expect(parsePixel('坏的')).toBeNull()
   })
 })
