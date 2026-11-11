@@ -66,3 +66,22 @@ describe('assembleSceneBlock + 心潮', () => {
     assert.deepEqual(messages[1], msgs[1])
   })
 })
+
+describe('尾巴（最靠近对话的一句提醒）', () => {
+ it('最后一句提醒他思考用 <think> + 中文（THINK_HINT=0 关）', () => {
+  const db = openDb(':memory:')
+  const block = assembleSceneBlock(db).sceneBlock
+  const lines = block.trimEnd().split('\n')
+  assert.match(lines[lines.length - 1]!, /<think>…<\/think>/)
+  assert.match(lines[lines.length - 1]!, /用中文想/)
+  assert.doesNotMatch(block, /思维链/)   // 不复述她世界书里那条规范
+
+  const prev = process.env.THINK_HINT
+  process.env.THINK_HINT = '0'
+  try {
+    assert.doesNotMatch(assembleSceneBlock(db).sceneBlock, /<think>/)
+  } finally {
+    if (prev === undefined) delete process.env.THINK_HINT; else process.env.THINK_HINT = prev
+  }
+})
+})

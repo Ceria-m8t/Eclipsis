@@ -91,16 +91,56 @@ export async function callTool(cfg: LetoMcpConfig, name: string, args: Record<st
   return { text, isError: !!result?.isError, raw: result }
 }
 
+// ── 工具说明压一压（2026-11-11，Erica 定）──
+//
+// 工具定义比聊天记录还贵：他一打开小镇，工具定义从 8 个 2.1k 字变成 20 个 34.2k 字
+// （小镇 12 个工具，home 一个的说明就 3.4k 字），而且这一轮后面每次请求都重新带一遍。
+// 砍说明（不动参数名、不动 enum，那些是真要用的）：34.2k → 26.3k 字，省 23%。
+// 小镇这套本来就是「细则问 action_help」的设计，砍掉长篇手册不影响他用。
+// TOOL_DESC_MAX / TOOL_PARAM_DESC_MAX 可调，设 0 = 不砍。
+const descMax = () => {
+  const v = Number(process.env.TOOL_DESC_MAX)
+  return Number.isFinite(v) && v >= 0 ? v : 600
+}
+const paramDescMax = () => {
+  const v = Number(process.env.TOOL_PARAM_DESC_MAX)
+  return Number.isFinite(v) && v >= 0 ? v : 140
+}
+
+/** 在句子/换行处截断，留个尾巴告诉他还有细则 */
+export function cutDesc(s: string, max: number, tail: string): string {
+  if (!max || s.length <= max) return s
+  const slice = s.slice(0, max)
+  const br = Math.max(slice.lastIndexOf('\n'), slice.lastIndexOf('。'), slice.lastIndexOf('；'))
+  return (br > max * 0.5 ? slice.slice(0, br + 1) : slice).trimEnd() + tail
+}
+
+function shrinkTool(f: { name: string; description: string; parameters: any }) {
+  const dm = descMax(), pm = paramDescMax()
+  if (dm && typeof f.description === 'string') {
+    f.description = cutDesc(f.description, dm, '…（说明长，细则问这个箱子里的帮助工具，或者直接试）')
+  }
+  const props = f.parameters?.properties
+  if (pm && props && typeof props === 'object') {
+    for (const k of Object.keys(props)) {
+      const p = (props as Record<string, any>)[k]
+      if (p && typeof p.description === 'string') p.description = cutDesc(p.description, pm, '…')
+    }
+  }
+  return f
+}
+
 /** 把 Leto 的 MCP 工具转成 OpenAI chat/completions 的 function 定义 */
 export function toOpenAITools(tools: McpTool[], allow?: (name: string) => boolean): any[] {
   return tools
     .filter(t => (allow ? allow(t.name) : true))
     .map(t => ({
       type: 'function',
-      function: {
+      function: shrinkTool({
         name: t.name,
         description: t.description ?? '',
-        parameters: t.inputSchema ?? { type: 'object', properties: {} }
-      }
+        // 参数里的说明会被改，拷一份，别动缓存里那份原始工具表
+        parameters: structuredClone(t.inputSchema ?? { type: 'object', properties: {} })
+      })
     }))
 }

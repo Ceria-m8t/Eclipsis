@@ -95,6 +95,14 @@ export function assembleSceneBlock(db: DB, now: Date = new Date()): AssembleResu
     parts.push('')
     parts.push(...xinchaoLines)
   }
+  // 尾巴（《提示词分层》的最后一层）：最靠近对话的一句提醒。
+  // 2026-11-11 Erica：他的思考一会儿中文一会儿英文、标签一会儿 <think> 一会儿 <thinking>。
+  // 世界书里那条规范在 4 万字 system 的中段、而且她那份文本有一处串行（见交接），
+  // 这句放在最末尾只花 ~40 字，是整段 prompt 里最管得住的位置。THINK_HINT=0 关。
+  if (process.env.THINK_HINT !== '0') {
+    parts.push('')
+    parts.push('（写之前先在 <think>…</think> 里想——只用这一种写法，不要 thinking/Thought；用中文想，英文只留给标签名和专有名词。）')
+  }
 
   return {
     sceneBlock: parts.join('\n'),

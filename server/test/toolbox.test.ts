@@ -6,6 +6,7 @@ import { existsSync, statSync } from 'node:fs'
 import { openDb } from '../src/db.ts'
 import { boxesFor, openBox, callBoxTool, handleToolboxApi, setToolboxFile } from '../src/toolbox.ts'
 import { listen, close, tempDir } from './helpers.ts'
+import { toOpenAITools } from '../src/leto/mcp-client.ts'
 
 // 假 MCP：两个工具；调 echo 返回参数
 function fakeMcp(tools: string[]) {
@@ -140,4 +141,57 @@ test('她加的箱子能设「不让他用的」：工具名直接不给；命�
     await api(db, 'POST', '/v1/eclipsis/toolbox', { id: add.body.id, title: 'AIsay', entryName: 'open_aisay', description: 'AI 小镇', url: `http://127.0.0.1:${port}/mcp` })
     assert.deepEqual((await api(db, 'GET', '/v1/eclipsis/toolbox')).body.boxes.find((x: any) => x.id === add.body.id).blocked, ['account.rotate_token', 'wipe'])
   } finally { await close(m.server); t.cleanup(); setToolboxFile('/etc/eclipsis/toolbox/boxes.json') }
+})
+
+// ── 工具说明压一压（2026-11-11）──
+test('工具说明太长就截断，参数名和 enum 不动', () => {
+  const long = '第一句。' + 'x'.repeat(900) + '。最后一句。'
+  const defs = toOpenAITools([{
+    name: 'home',
+    description: long,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', description: 'y'.repeat(400) },
+        duo: { type: 'string', enum: ['贴贴', '拥抱', 'cuddle', 'hug'], description: '短的' },
+      },
+      required: ['action'],
+    },
+  }])
+  const f = defs[0].function
+  assert.ok(f.description.length < 700, `说明砍到 ${f.description.length} 字`)
+  assert.ok(f.description.startsWith('第一句。'), '开头留着（一次直达的例子在最前面）')
+  assert.match(f.description, /细则问这个箱子里的帮助工具/)
+  assert.ok(f.parameters.properties.action.description.length <= 145)
+  // 参数名、enum、required 一个都不能少
+  assert.deepEqual(Object.keys(f.parameters.properties), ['action', 'duo'])
+  assert.deepEqual(f.parameters.properties.duo.enum, ['贴贴', '拥抱', 'cuddle', 'hug'])
+  assert.deepEqual(f.parameters.required, ['action'])
+  assert.equal(f.parameters.properties.duo.description, '短的')
+})
+
+test('短说明原样不动；TOOL_DESC_MAX=0 关掉不砍', () => {
+  const tool = { name: 't', description: '短说明', inputSchema: { type: 'object', properties: {} } }
+  assert.equal(toOpenAITools([tool])[0].function.description, '短说明')
+
+  const long = 'a'.repeat(2000)
+  const prev = process.env.TOOL_DESC_MAX
+  process.env.TOOL_DESC_MAX = '0'
+  try {
+    assert.equal(toOpenAITools([{ ...tool, description: long }])[0].function.description.length, 2000)
+  } finally {
+    if (prev === undefined) delete process.env.TOOL_DESC_MAX; else process.env.TOOL_DESC_MAX = prev
+  }
+})
+
+test('砍说明不会改到缓存里那份原始工具表（同一份工具转两次结果一样）', () => {
+  const tool = {
+    name: 't', description: '第一句。' + 'x'.repeat(900),
+    inputSchema: { type: 'object', properties: { a: { type: 'string', description: 'y'.repeat(400) } } },
+  }
+  const a = toOpenAITools([tool])[0].function
+  const b = toOpenAITools([tool])[0].function
+  assert.equal(a.description, b.description)
+  assert.equal(a.parameters.properties.a.description, b.parameters.properties.a.description)
+  assert.equal(tool.inputSchema.properties.a.description.length, 400, '原始那份没被改')
 })
