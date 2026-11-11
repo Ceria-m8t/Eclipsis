@@ -1,54 +1,93 @@
 // @vitest-environment happy-dom
-import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { localToolDefinitions, isLocalTool, runLocalTool } from '../src/local-tools'
-import { aiStatus, setStatus } from '../src/status'
-import { loadPrompt, savePrompt, loadHistory, upgradeFeatures, defaultPrompt, STATUS_SECTION } from '../src/prompt-store'
+// 顶栏状态：后端是那一份，localStorage 只是缓存（2026-11-11）
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { aiStatus, setStatus, fetchStatus, pushStatus } from '../src/status'
 
-beforeEach(() => { localStorage.clear(); setStatus(null) })
+const KEY = 'eclipsis-ai-status'
+const SETTINGS = 'our-home-settings'
 
-// savePrompt 会把改动推到后端；这里只测本地行为
-beforeEach(() => { vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 }))) })
+function mockFetch(impl: (url: string, init?: RequestInit) => any) {
+  const spy = vi.fn((url: any, init?: any) => Promise.resolve(impl(String(url), init)))
+  vi.stubGlobal('fetch', spy)
+  return spy
+}
+const ok = (body: unknown) => ({ ok: true, status: 200, json: async () => body })
 
-describe('eclipsis_set_status', () => {
-  it('作为 function 工具暴露给模型', () => {
-    const defs = localToolDefinitions()
-    expect(defs[0].type).toBe('function')
-    expect(defs[0].function.name).toBe('eclipsis_set_status')
-    expect(isLocalTool('eclipsis_set_status')).toBe(true)
-    expect(isLocalTool('search')).toBe(false)
-  })
+beforeEach(() => {
+  localStorage.clear()
+  setStatus(null)
+})
+afterEach(() => vi.unstubAllGlobals())
 
-  it('设置状态并存到本机', () => {
-    const r = runLocalTool({ id: 'c1', name: 'eclipsis_set_status', arguments: '{"emoji":"☕","text":"在厨房泡茶"}' })
-    expect(r.is_error).toBeFalsy()
-    expect(aiStatus.value?.text).toBe('在厨房泡茶')
-    expect(JSON.parse(localStorage.getItem('eclipsis-ai-status')!).emoji).toBe('☕')
-  })
-
-  it('clear 清空；空文字和坏 JSON 报错', () => {
-    runLocalTool({ id: 'c1', name: 'eclipsis_set_status', arguments: '{"text":"在"}' })
-    runLocalTool({ id: 'c2', name: 'eclipsis_set_status', arguments: '{"clear":true}' })
-    expect(aiStatus.value).toBeNull()
-    expect(runLocalTool({ id: 'c3', name: 'eclipsis_set_status', arguments: '{"text":"  "}' }).is_error).toBe(true)
-    expect(runLocalTool({ id: 'c4', name: 'eclipsis_set_status', arguments: '{bad' }).is_error).toBe(true)
+describe('本机缓存', () => {
+  it('setStatus 写 ref 和 localStorage，清掉时两边都清', () => {
+    setStatus({ emoji: '☕', text: '在厨房泡茶' })
+    expect(aiStatus.value!.text).toBe('在厨房泡茶')
+    expect(JSON.parse(localStorage.getItem(KEY)!).emoji).toBe('☕')
+    setStatus(null)
+    expect(aiStatus.value).toBe(null)
+    expect(localStorage.getItem(KEY)).toBe(null)
   })
 })
 
-describe('提示词补上状态说明', () => {
-  it('出厂默认已包含', () => {
-    expect(defaultPrompt().features).toContain('eclipsis_set_status')
+describe('fetchStatus', () => {
+  it('后端有就用后端那份（他醒来时改的这样回到顶栏），带上原本的时间', async () => {
+    setStatus({ emoji: '☕', text: '旧的' })
+    mockFetch(() => ok({ status: { emoji: '🌙', text: '等她睡', updatedAt: '2026-11-11T02:00:00.000Z', source: 'wake' } }))
+    await fetchStatus()
+    expect(aiStatus.value).toEqual({
+      emoji: '🌙', text: '等她睡', updatedAt: Date.parse('2026-11-11T02:00:00.000Z')
+    })
   })
 
-  it('改过的提示词：插在"还没有的"前面，旧版进历史，只补一次', () => {
-    const d = defaultPrompt()
-    const old = d.features.replace(STATUS_SECTION + '\n\n', '')
-    savePrompt({ main: '我的人设', features: old, featuresEnabled: true })
-    upgradeFeatures()
-    const p = loadPrompt()
-    expect(p.main).toBe('我的人设')
-    expect(p.features.indexOf('eclipsis_set_status')).toBeLessThan(p.features.indexOf('## 还没有的'))
-    expect(loadHistory()[0]!.features).toBe(old)
-    upgradeFeatures()
-    expect(p.features.split('eclipsis_set_status').length).toBe(loadPrompt().features.split('eclipsis_set_status').length)
+  it('后端说没有就清掉（他清过）', async () => {
+    setStatus({ emoji: '☕', text: '在泡茶' })
+    mockFetch(() => ok({ status: null }))
+    await fetchStatus()
+    expect(aiStatus.value).toBe(null)
+  })
+
+  it('后端连不上/报错时保持现在显示的，不闪空', async () => {
+    setStatus({ emoji: '☕', text: '在泡茶' })
+    mockFetch(() => { throw new Error('连不上') })
+    await fetchStatus()
+    expect(aiStatus.value!.text).toBe('在泡茶')
+    mockFetch(() => ({ ok: false, status: 500, json: async () => ({}) }))
+    await fetchStatus()
+    expect(aiStatus.value!.text).toBe('在泡茶')
+  })
+
+  it('直连别的 API（填了 apiBase）时不问后端', async () => {
+    localStorage.setItem(SETTINGS, JSON.stringify({ apiBase: 'https://example.com/v1' }))
+    const spy = mockFetch(() => ok({ status: null }))
+    await fetchStatus()
+    expect(spy).not.toHaveBeenCalled()
+  })
+})
+
+describe('pushStatus', () => {
+  it('顶栏先更新，再 POST 给后端', async () => {
+    const spy = mockFetch(() => ok({ status: { emoji: '☕', text: '在厨房泡茶' } }))
+    const err = await pushStatus({ emoji: '☕', text: '在厨房泡茶' })
+    expect(err).toBe(null)
+    expect(aiStatus.value!.text).toBe('在厨房泡茶')
+    const [url, init] = spy.mock.calls[0] as any[]
+    expect(url).toBe('/api/eclipsis/status')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body)).toEqual({ emoji: '☕', text: '在厨房泡茶', source: 'chat' })
+  })
+
+  it('清空发 clear', async () => {
+    const spy = mockFetch(() => ok({ status: null }))
+    await pushStatus(null)
+    expect(JSON.parse((spy.mock.calls[0] as any[])[1].body)).toEqual({ clear: true })
+    expect(aiStatus.value).toBe(null)
+  })
+
+  it('存不上时返回原因（顶栏还是改了，他会被告知）', async () => {
+    mockFetch(() => ({ ok: false, status: 500, json: async () => ({ error: '数据库锁了' }) }))
+    const err = await pushStatus({ emoji: '☕', text: '在泡茶' })
+    expect(err).toBe('数据库锁了')
+    expect(aiStatus.value!.text).toBe('在泡茶')
   })
 })

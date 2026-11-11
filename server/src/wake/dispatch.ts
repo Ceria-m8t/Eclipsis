@@ -13,6 +13,7 @@ import { recordOutcome, isNearDuplicate } from './scheduler.ts'
 import { inferUserState, type UserState } from './sources.ts'
 import { composeSystemPrompt } from '../prompts.ts'
 import { assembleSceneBlock } from '../assembler/index.ts'
+import { runStatusTool } from '../status.ts'
 import { loadChatContinuation } from './continuation.ts'
 import { chooseModel } from '../station.ts'
 import { runWakeAgent } from './agent.ts'
@@ -576,6 +577,8 @@ async function runWithTools(
 
   const res = await runWakeAgent(messages, {
     boxes, callModel: callModelT, send,
+    // 顶栏状态：醒着的时候也能改，她下次打开聊天就看到（2026-11-11）
+    setStatus: args => runStatusTool(db, args, 'wake'),
     maxModelTurns: Number(process.env.WAKE_MAX_MODEL_TURNS) || 30,
     maxMessages: Number(process.env.WAKE_MAX_MESSAGES) || 5,
     log: cfg.log

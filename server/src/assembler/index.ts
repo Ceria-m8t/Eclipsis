@@ -10,6 +10,7 @@ import type { DB } from '../db.ts'
 import { loadPulseState, renderVitalsLine } from '../pulse/index.ts'
 import { getXinchaoBridgeCache } from '../pulse/xinchao-bridge.ts'
 import { renderTodayLine } from './history.ts'
+import { renderStatusLine } from '../status.ts'
 
 export interface AssembleResult {
   sceneBlock: string
@@ -20,6 +21,7 @@ export interface AssembleResult {
     xinchaoEmotion: string | null
     xinchaoLines: number
     todayLine: string | null
+    statusLine: string | null
   }
 }
 
@@ -83,6 +85,10 @@ export function assembleSceneBlock(db: DB, now: Date = new Date()): AssembleResu
   let todayLine = ''
   try { todayLine = renderTodayLine(db, now.getTime()) } catch { /* 读不到就不写这一行 */ }
   if (todayLine) parts.push(todayLine)
+  // 他顶栏挂着的状态：他自己看不到的话就想不起来换（2026-11-11）
+  let statusLine = ''
+  try { statusLine = renderStatusLine(db, now) } catch { /* 读不到就不写这一行 */ }
+  if (statusLine) parts.push(statusLine)
   if (vitalsLine) parts.push(`身体：${vitalsLine}`)
   if (weatherDesc) parts.push(`上海天气：${weatherDesc}`)
   if (xinchaoLines.length) {
@@ -92,7 +98,7 @@ export function assembleSceneBlock(db: DB, now: Date = new Date()): AssembleResu
 
   return {
     sceneBlock: parts.join('\n'),
-    meta: { vitalsLine, timeBeijing: timeStr, weather: weatherDesc, xinchaoEmotion, xinchaoLines: xinchaoLines.length, todayLine: todayLine || null }
+    meta: { vitalsLine, timeBeijing: timeStr, weather: weatherDesc, xinchaoEmotion, xinchaoLines: xinchaoLines.length, todayLine: todayLine || null, statusLine: statusLine || null }
   }
 }
 

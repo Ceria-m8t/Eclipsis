@@ -313,7 +313,7 @@ export async function generate(
       emit()
       const res = entryOf.has(c.name) ? await openBoxForTurn(c)
         : boxToolOwner.has(c.name) ? await runBoxTool(c)
-        : isLocalTool(c.name) ? runLocalTool(c) : await executeToolCall(servers, c)
+        : isLocalTool(c.name) ? await runLocalTool(c) : await executeToolCall(servers, c)
       if (signal.aborted) throw new DOMException('aborted', 'AbortError')
       ev.result = res.content
       ev.isError = res.is_error

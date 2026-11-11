@@ -21,6 +21,7 @@ import { handleModelsApi } from './models.ts'
 import { attachPixelArt } from './pixel-attach.ts'
 import { attachFiles, handleFileApi, ensureFileSchema } from './files.ts'
 import { handleStationsApi } from './stations-api.ts'
+import { ensureStatusSchema, handleStatusApi } from './status.ts'
 import { handleDrawApi } from './draw-api.ts'
 import { ensureDrawSchema } from './draw-refs.ts'
 import { dropSupersededVersions } from './versions.ts'
@@ -69,6 +70,7 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
   ensurePromptSchema(db)
   const blobs = new BlobStore(db, cfg.blobDir)
   ensureFileSchema(db)
+  ensureStatusSchema(db)
   ensureDrawSchema(db)        // 垫图和画风（出厂带三个画风）
   setToolboxBlobs(blobs)      // 他的画笔要用它存图
   const recorder = new Recorder(db, blobs, {
@@ -103,6 +105,8 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
       if (await handleFileApi(db, blobs, req, res)) return true
       // 中转站面板（聊天的站 + 画图的站）、她自己点生图
       if (await handleStationsApi(db, req, res)) return true
+      // 他顶栏的状态（她的手机读；聊天里他调完工具前端写回来）
+      if (await handleStatusApi(db, req, res)) return true
       if (await handleDrawApi(db, blobs, req, res)) return true
       if (await handleChatApi(db, {
         blobDir: cfg.blobDir, xiaoke: xiaokeApi(cfg.xiaokeUrl, cfg.xiaokeKey), xiaokeHasNewMessages: !cfg.bypassXiaoke

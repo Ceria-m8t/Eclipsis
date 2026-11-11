@@ -8,6 +8,7 @@
 import type { ChatMessage, ModelResponse, ToolCall } from '../leto/responder.ts'
 import { toOpenAITools } from '../leto/mcp-client.ts'
 import type { WakeBox, ToolResult } from './boxes.ts'
+import { STATUS_TOOL, STATUS_TOOL_DEF } from '../status.ts'
 
 export const SEND_TOOL = 'send_to_erica'
 
@@ -34,6 +35,8 @@ export interface WakeAgentDeps {
   callModel: (messages: ChatMessage[], tools: any[]) => Promise<WakeModelResult>
   /** 发一条给她。返回没发出去的原因（比如和最近发的太像、推送失败） */
   send: (text: string) => Promise<{ ok: true } | { ok: false; reason: string }>
+  /** 改顶栏状态（2026-11-11）。不传就没有这个工具 */
+  setStatus?: (args: Record<string, unknown>) => string
   /** 最多调几轮模型，默认 30 */
   maxModelTurns?: number
   /** 一次醒来最多发几条，默认 5 */
@@ -73,6 +76,7 @@ export async function runWakeAgent(initial: ChatMessage[], deps: WakeAgentDeps):
   const baseDefs = [
     fn(SEND_TOOL, `发一条消息给她，会推送到她手机上。发完这次醒来不会结束，你还可以接着做别的；一次醒来最多发 ${maxMessages} 条。`,
       { text: { type: 'string', description: '要跟她说的话' } }, ['text']),
+    ...(deps.setStatus ? [fn(STATUS_TOOL, STATUS_TOOL_DEF.description, STATUS_TOOL_DEF.parameters.properties)] : []),
     ...deps.boxes.map(b => fn(b.entryName, b.entryDescription))
   ]
 
@@ -98,6 +102,10 @@ export async function runWakeAgent(initial: ChatMessage[], deps: WakeAgentDeps):
       if (!r.ok) return `（没发出去：${r.reason}）`
       sent.push(text)
       return '发出去了，推送到了她手机上。'
+    }
+
+    if (name === STATUS_TOOL && deps.setStatus) {
+      try { return deps.setStatus(args) } catch (e: any) { return `（没改成：${String(e?.message || e)}）` }
     }
 
     const box = entries.get(name)

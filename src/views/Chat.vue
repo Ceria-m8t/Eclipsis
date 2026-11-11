@@ -11,7 +11,7 @@ import { compressImage } from '../image'
 import { copyText, hexToRgba, hhmm, dividerTime, downloadText } from '../utils'
 import { keyboardOpen } from '../viewport'
 import { pageBackdrop } from '../theme'
-import { aiStatus } from '../status'
+import { aiStatus, fetchStatus } from '../status'
 import { fontName, setFontFile, clearFont } from '../font'
 import { LiquidStage, measureLum, type GlassParams } from '../liquid/stage'
 import { liquidActive, setGlobalTint } from '../liquid/global'
@@ -286,7 +286,7 @@ function syncNew(dropLocal: ChatMessage[] = []): Promise<void> {
   return syncing
 }
 let pollTimer = 0
-function onVisible() { if (!document.hidden && !generating.value) syncNew() }
+function onVisible() { if (!document.hidden && !generating.value) { syncNew(); fetchStatus() } }
 
 function nextSeq(): number {
   const last = messages.value[messages.value.length - 1]
@@ -991,6 +991,7 @@ onMounted(async () => {
   if (!loaded.value) { loaded.value = true; scrollToBottom(true) }
   pollTimer = window.setInterval(onVisible, 20_000)
   document.addEventListener('visibilitychange', onVisible)
+  fetchStatus()
 
   if (footerEl.value && 'ResizeObserver' in window) {
     ro = new ResizeObserver(() => {
@@ -1022,6 +1023,7 @@ onActivated(() => {
   pollTimer = window.setInterval(onVisible, 20_000)
   document.addEventListener('visibilitychange', onVisible)
   stage?.invalidate()
+  fetchStatus()
   if (!generating.value) syncNew()
   scrollToBottom()
 })
