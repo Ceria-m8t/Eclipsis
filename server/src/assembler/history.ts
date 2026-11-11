@@ -15,7 +15,19 @@ export const TARGET = 220            // 大约两百多条
 export const MAX_TODAY = 600         // 今天聊得特别多时也有个上限（再多就从今天的开头截）
 export const SLEEP_GAP_MS = 5 * 3600_000   // 她连续这么久没说话 = 睡了一觉，之后算新的一天
 
-export interface HistRow { seq: number; ts: string; actor: 'erica' | 'ai'; content: string; partial?: number | null }
+export interface HistRow {
+  seq: number; ts: string; actor: 'erica' | 'ai'; content: string; partial?: number | null
+  /** 这条消息带的图（她发的照片、他用画笔画的）：blobs 里的哈希 */
+  images?: string[]
+}
+
+/** 把哈希换成真图（main.ts 传 blobs.readImage） */
+export type ImageResolver = (hash: string) => { mime: string; data: Buffer } | null
+
+/** 历史里还原成真图的条数（更早的还是「这张你看不到」）。和 transforms.ts 的 IMG_KEEP_RECENT 一个意思 */
+export const IMAGES_KEEP = 4
+/** 一次最多塞这么多字节的图（照片压过也有几百 KB） */
+export const IMAGES_MAX_BYTES = 4 * 1024 * 1024
 
 const WEEK = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
 /** 中国时间的日期标签：11月9日 周一 */
@@ -43,13 +55,21 @@ function nextHer(rows: HistRow[], from: number): number {
 }
 
 export function loadRecent(db: DB, limit = MAX_TODAY + TARGET, beforeSeq?: number): HistRow[] {
-  const rows = db.prepare(`SELECT seq, ts, actor, content, json_extract(meta, '$.partial') AS partial FROM episodes
+  const rows = db.prepare(`SELECT seq, ts, actor, content, json_extract(meta, '$.partial') AS partial,
+      json_extract(meta, '$.images') AS images FROM episodes
     WHERE channel = 'chat' AND scope = 'daily' AND kind = 'message' AND actor IN ('erica', 'ai') AND retracted_at IS NULL
       AND (? IS NULL OR seq < ?)
     ORDER BY seq DESC LIMIT ?`).all(beforeSeq ?? null, beforeSeq ?? null, limit) as unknown as HistRow[]
   // 同一轮重新生成过的：只留算数那条（她翻到的，没翻过是最后一条）
   const dead = supersededSeqs(db)
-  return rows.reverse().filter(r => !dead.has(r.seq))
+  return rows.reverse().filter(r => !dead.has(r.seq)).map(r => {
+    const raw = (r as any).images
+    if (typeof raw !== 'string') return r
+    try {
+      const list = JSON.parse(raw)
+      return Array.isArray(list) ? { ...r, images: list.filter(h => typeof h === 'string' && /^[0-9a-f]{64}$/.test(h)) } : r
+    } catch { return r }
+  })
 }
 
 export interface Assembled {
@@ -73,11 +93,40 @@ export function selectHistory(all: HistRow[], now = Date.now()): Assembled {
   return { rows, todayFrom: start - from, days }
 }
 
-/** 拼成发给他的消息：日期分隔挂在每天她的第一句前面（不加在他的话上，免得他学着写日期） */
-export function toMessages(a: Assembled, now = Date.now()): any[] {
+const IMG_PLACEHOLDER = /^[ \t]*(\[图片\]|（图片）)(?:[ \t]+(\[图片\]|（图片）))*[ \t]*$/gm
+
+/**
+ * 拼成发给他的消息：日期分隔挂在每天她的第一句前面（不加在他的话上，免得他学着写日期）。
+ * opts.images 给了的话，最近 IMAGES_KEEP 条带图的消息还原成真图：
+ *   她发的照片挂在她那条上；他用画笔画的挂在紧跟其后的一条「系统记录」上
+ *   （OpenAI 格式的 assistant 消息不能带图，所以借 user 那一侧给他看）。
+ * 更早的还是「[图片]」，上游入口会改写成「这张你现在看不到」。
+ */
+export function toMessages(a: Assembled, now = Date.now(), opts: { images?: ImageResolver; keep?: number; maxBytes?: number } = {}): any[] {
   const out: any[] = []
   const todayKey = dayKey(now), yKey = dayKey(now - 86_400_000)
   const pendingDay = new Map<number, string>()
+  // 哪几条还原成真图：从后往前数带图的几条
+  const withImages = new Set<number>()
+  if (opts.images) {
+    const keep = opts.keep ?? IMAGES_KEEP
+    for (let i = a.rows.length - 1; i >= 0 && withImages.size < keep; i--) {
+      if (a.rows[i]!.images?.length) withImages.add(i)
+    }
+  }
+  let imgBytes = 0
+  const maxBytes = opts.maxBytes ?? IMAGES_MAX_BYTES
+  const loadParts = (hashes: string[]) => {
+    const parts: any[] = []
+    for (const h of hashes) {
+      const got = opts.images?.(h)
+      if (!got) continue
+      if (imgBytes + got.data.length > maxBytes) break
+      imgBytes += got.data.length
+      parts.push({ type: 'image_url', image_url: { url: `data:${got.mime};base64,${got.data.toString('base64')}` } })
+    }
+    return parts
+  }
   for (const d of a.days) {
     const k = dayKey(Date.parse(a.rows[d.at]!.ts))
     const rel = k === todayKey ? '（今天）' : k === yKey ? '（昨天）' : ''
@@ -88,7 +137,24 @@ export function toMessages(a: Assembled, now = Date.now()): any[] {
   }
   a.rows.forEach((r, i) => {
     const sep = pendingDay.get(i)
-    out.push({ role: r.actor === 'erica' ? 'user' : 'assistant', content: sep ? `${sep}\n${r.content}` : r.content })
+    const role = r.actor === 'erica' ? 'user' : 'assistant'
+    const parts = withImages.has(i) ? loadParts(r.images!) : []
+    if (!parts.length) {
+      out.push({ role, content: sep ? `${sep}\n${r.content}` : r.content })
+      return
+    }
+    if (role === 'user') {
+      // 真图在这条里了，正文里的「[图片]」占位去掉
+      const text = (sep ? `${sep}\n${r.content}` : r.content).replace(IMG_PLACEHOLDER, '').replace(/\n{3,}/g, '\n\n').trim()
+      out.push({ role, content: [...(text ? [{ type: 'text', text }] : []), ...parts] })
+      return
+    }
+    // 他画的：他那条照常，图挂在后面一条系统记录上（assistant 不能带图）
+    out.push({ role, content: sep ? `${sep}\n${r.content}` : r.content })
+    out.push({
+      role: 'user',
+      content: [{ type: 'text', text: '〔系统记录，不是她说的：这是你刚画的那张图，她看到的就是它。〕' }, ...parts],
+    })
   })
   return out
 }
@@ -186,7 +252,7 @@ export function tailStart(messages: any[], head: number): number {
   return tail
 }
 
-export interface ReplaceInfo { before: number; after: number; today: number; days: number; trimmed?: number }
+export interface ReplaceInfo { before: number; after: number; today: number; days: number; trimmed?: number; images?: number }
 
 /**
  * 把请求里 system 之后、这一轮之前的那一大段历史，换成我们自己从经历表拼的那份。
@@ -194,7 +260,7 @@ export interface ReplaceInfo { before: number; after: number; today: number; day
  * 不该换的请求返回 null。
  */
 export function replaceHistory(
-  messages: any[], db: DB, now = Date.now(), opts: { insertWhenEmpty?: boolean } = {}
+  messages: any[], db: DB, now = Date.now(), opts: { insertWhenEmpty?: boolean; images?: ImageResolver } = {}
 ): { messages: any[]; info: ReplaceInfo } | null {
   // 直连中转站以后，前端只发这一轮，请求里根本没有历史：那就是「插进去」而不是「换掉」。
   // 经过 xiaoke 时请求里带着一大段，没有历史的请求多半不是正常聊天（起标题之类），照旧不动。
@@ -228,10 +294,14 @@ export function replaceHistory(
     if (hit / theirs.length < 0.5) return null       // 真实轮次实测 83–89%
   }
 
-  const ours = toMessages(a, now)
+  const ours = toMessages(a, now, { images: opts.images })
   return {
     messages: [...messages.slice(0, head), ...ours, ...messages.slice(tail)],
-    info: { before: tail - head, after: ours.length, today: ours.length - a.todayFrom, days: a.days.length, ...(trim.trimmed ? { trimmed: trim.trimmed } : {}) },
+    info: {
+      before: tail - head, after: ours.length, today: ours.length - a.todayFrom, days: a.days.length,
+      ...(trim.trimmed ? { trimmed: trim.trimmed } : {}),
+      ...(() => { const n = ours.filter(m => Array.isArray(m.content) && m.content.some((p: any) => p?.type === 'image_url')).length; return n ? { images: n } : {} })(),
+    },
   }
 }
 

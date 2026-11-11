@@ -149,7 +149,11 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
       let ourHistory = false
       if (process.env.OUR_HISTORY === '1' && Array.isArray(out.messages)) {
         try {
-          const r = replaceHistory(out.messages, db, Date.now(), { insertWhenEmpty: cfg.bypassXiaoke })
+          const r = replaceHistory(out.messages, db, Date.now(), {
+            insertWhenEmpty: cfg.bypassXiaoke,
+            // 最近几条带图的还原成真图：他画完下一轮能看见自己画的，她发的照片也能多撑几轮
+            images: process.env.HISTORY_IMAGES === '0' ? undefined : (h => blobs.readImage(h)),
+          })
           if (r) {
             out = { ...out, messages: r.messages }
             transforms.our_history = r.info
@@ -197,7 +201,7 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
           changed = true
         }
       }
-      if (opts.stripOldImages && Array.isArray(out.messages)) {
+      if (opts.stripOldImages && !ourHistory && Array.isArray(out.messages)) {
         const r = stripOldImages(out.messages)
         if (r.stripped) {
           out = { ...out, messages: r.messages }

@@ -71,6 +71,16 @@ export class BlobStore {
   }
 
   // 存一条消息（图片已拆出），返回哈希、替换后的消息、图片哈希
+  /** 读回一张图（历史里要把真图还给他时用） */
+  readImage(hash: string): { mime: string; data: Buffer } | null {
+    const row = this.db.prepare(`SELECT mime FROM blobs WHERE hash = ? AND kind = 'file'`).get(hash) as { mime: string | null } | undefined
+    if (!row) return null
+    const data = this.readFile(hash)
+    if (!data) return null
+    const mime = row.mime && /^image\//.test(row.mime) ? row.mime : 'image/jpeg'
+    return { mime, data }
+  }
+
   /** 读回原件（她点文件下载时用） */
   readFile(hash: string): Buffer | null {
     const file = join(this.dir, hash.slice(0, 2), hash)

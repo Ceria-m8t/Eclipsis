@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { openDb, addEpisode } from '../src/db.ts'
-import { todayStart, selectHistory, toMessages, requestHistory, TARGET, type HistRow, replaceHistory, renderTodayLine } from '../src/assembler/history.ts'
+import { todayStart, selectHistory, toMessages, requestHistory, TARGET, type HistRow, replaceHistory, renderTodayLine, loadRecent } from '../src/assembler/history.ts'
 
 const H = 3600_000
 const base = Date.parse('2026-11-09T10:00:00Z')   // 中国时间 11-09 18:00
@@ -187,4 +187,43 @@ test('直连中转站后前端只发这一轮：历史是插进去的，不是�
   assert.equal(r.messages.length, 8)
   // 起标题这类还是不碰
   assert.equal(replaceHistory([{ role: 'system', content: 'sys' }, { role: 'user', content: '给这段对话起一个简短的标题' }], db, now, { insertWhenEmpty: true }), null)
+})
+
+test('历史里最近几条带图的还原成真图：她的照片挂在她那条，他画的挂在后面一条系统记录上', () => {
+  const db = openDb(':memory:')
+  const now = Date.parse('2026-11-11T06:00:00Z')
+  const hash = (n: number) => String(n).repeat(64).slice(0, 64)
+  const put = (actor: 'erica' | 'ai', min: number, content: string, images?: string[]) =>
+    addEpisode(db, {
+      ts: new Date(now - min * 60_000).toISOString(), channel: 'chat', scope: 'daily', actor, kind: 'message',
+      content, meta: images ? { images } : undefined, sourceRef: `${actor}${min}`,
+    })
+  put('erica', 50, '看这个\n[图片]', [hash(1)])          // 很早的一张（超出 keep=2）
+  put('ai', 49, '好看。')
+  put('erica', 30, '这张呢\n[图片]', [hash(2)])
+  put('ai', 29, '也好看。')
+  put('erica', 20, '给我画一张')
+  put('ai', 19, '[图片]', [hash(3)])                      // 他画的
+  put('erica', 10, '画得不错')
+
+  const store = new Map([[hash(2), { mime: 'image/jpeg', data: Buffer.from('JPEGDATA') }], [hash(3), { mime: 'image/png', data: Buffer.from('PNGDATA') }]])
+  const msgs = toMessages(selectHistory(loadRecent(db), now), now, { images: h => store.get(h) ?? null, keep: 2 })
+
+  const withImg = msgs.filter(m => Array.isArray(m.content) && m.content.some((p: any) => p.type === 'image_url'))
+  assert.equal(withImg.length, 2)
+  // 她那条：正文里的 [图片] 占位去掉，真图挂上
+  const hers = withImg[0]!
+  assert.equal(hers.role, 'user')
+  assert.equal(hers.content[0].text.replace(/^——.*——\n/, ''), '这张呢')
+  assert.match(hers.content[1].image_url.url, /^data:image\/jpeg;base64,/)
+  // 他画的：他那条照常，图在紧跟其后的「系统记录」里
+  const i = msgs.findIndex(m => m.role === 'assistant' && m.content === '[图片]')
+  assert.ok(i >= 0)
+  assert.equal(msgs[i + 1]!.role, 'user')
+  assert.match(msgs[i + 1]!.content[0].text, /系统记录，不是她说的：这是你刚画的那张图/)
+  assert.match(msgs[i + 1]!.content[1].image_url.url, /^data:image\/png;base64,/)
+  // 更早那张还是占位（上游入口会改写成「看不到」）
+  assert.ok(msgs.some(m => typeof m.content === 'string' && m.content.includes('看这个') && m.content.includes('[图片]')))
+  // 不给 resolver 就全是文字（老行为）
+  assert.ok(toMessages(selectHistory(loadRecent(db), now), now).every(m => typeof m.content === 'string'))
 })
