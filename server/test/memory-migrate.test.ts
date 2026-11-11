@@ -292,6 +292,20 @@ describe('搬家', () => {
     } finally { rmSync(root, { recursive: true, force: true }) }
   })
 
+  it('人物卡：次数每次重算，他手写的那半永不被覆盖', () => {
+    const root = sample()
+    const db = openDb(':memory:')
+    try {
+      migrateOb(db, { root })
+      db.prepare("UPDATE people SET his_note = '她提过她的狗很黏人', card_enabled = 1 WHERE slug = 'nuonuo'").run()
+      db.prepare('UPDATE people SET mentions = 0').run()
+      migrateOb(db, { root, reset: true })
+      const p = db.prepare("SELECT his_note, card_enabled, mentions FROM people WHERE slug = 'nuonuo'").get() as any
+      assert.equal(p.his_note, '她提过她的狗很黏人', '他写的那半不许被搬家覆盖')
+      assert.equal(p.card_enabled, 1, '启用状态也不许被搬家改回去')
+    } finally { rmSync(root, { recursive: true, force: true }) }
+  })
+
   it('再跑一遍不会搬出第二份（幂等）', () => {
     const root = sample()
     const db = openDb(':memory:')

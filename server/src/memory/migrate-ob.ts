@@ -155,9 +155,13 @@ export function migrateOb(db: DB, opts: { root?: string; dryRun?: boolean; reset
       }
     }
 
-    const pins = db.prepare(`INSERT OR IGNORE INTO people
+    // 人物卡：次数每次重算，**他手写的那半（his_note）永不覆盖**
+    const pins = db.prepare(`INSERT INTO people
       (slug, name, aliases, relation, ambiguous, kin, card_enabled, mentions, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`)
+      VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+      ON CONFLICT(slug) DO UPDATE SET aliases = excluded.aliases, relation = excluded.relation,
+        ambiguous = excluded.ambiguous, kin = excluded.kin, mentions = excluded.mentions,
+        updated_at = excluded.updated_at`)
     for (const s of PEOPLE_SEEDS) {
       pins.run(s.slug, s.name, JSON.stringify(s.aliases), s.relation, s.ambiguous ? 1 : 0, s.kin ? 1 : 0,
         mentions.get(s.slug) ?? 0, now, now)
