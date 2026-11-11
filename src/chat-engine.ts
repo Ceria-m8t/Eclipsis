@@ -11,7 +11,9 @@ import type { ChatMessage, MessageVersion, ToolEvent, ApiTurn } from './db'
 // 2026-11-11 Erica 报的：他在小镇逛到第 8 次就断在「到了商店。看看有什么卖的。」——
 // 以前到上限是调完最后一个工具就收摊，结果她那边像话没说完，他也不知道为什么停。
 const DEFAULT_TOOL_ROUNDS = 12
-const MAX_TOOL_ROUNDS_CAP = 30
+// 上限的上限。真正卡住的不是这个数，是 iOS 会把后台的网页进程杀掉（一轮 40 次请求 ≈ 五分钟以上），
+// 以及按次计费时一轮就按次数花钱。转成原生壳（后台能跑、能推送）之后可以再往上放。
+const MAX_TOOL_ROUNDS_CAP = 60
 
 /** 到上限时挂在最后一条工具结果后面，让他自己把话收住（不是她说的） */
 export const toolCapNote = (n: number) =>
