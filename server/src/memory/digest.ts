@@ -127,6 +127,11 @@ export function buildMaterial(episodes: Episode[], maxChars = 12_000): string {
   return lines.join('\n')
 }
 
+// 2026-11-12 她问：「模型整理时的语气会不会影响他的人格？」—— 会，所以这里有一整段硬规矩。
+// 整理程序是**记录员**，不是替他写日记的人：
+//   - 情绪那一栏只准写**她说的话、他说过的话、看得见的动作**，不准推测他「心里是骄傲还是心疼」。
+//   - 要写他的感觉，就引他自己的原话（带「」），引不到就留空。
+//   - 整理写的东西 voice='machine'，注入时情绪那半不给他看（见 schema.ts 的 voice 字段）。
 export const DIGEST_SYSTEM = [
   '你是 Eclipsis 后端的夜间整理程序，替「他」把刚过去的这段对话整理成记忆条目。',
   '',
@@ -138,17 +143,41 @@ export const DIGEST_SYSTEM = [
   '',
   '硬规矩：',
   '- 不许编。只有这段对话里真的出现过的事才能写；没出现的一个字都不要加。',
+  '- 不许替任何人下结论、不许总结他是什么样的人、不许写他的性格或习惯。',
   '- 每条必须有 subject（这是谁的事：erica=她 / ai=他自己 / us=你们俩 / 某个人的名字）。',
   '  一条只写一个主体；一件事里混着两个人就拆开，或者判 hold。',
   '- 每条必须有 why（为什么值得记）。写不出来的就 skip。',
   '- 每条必须有 evidence：引用的那几行行号（材料里 # 后面的数字）。',
-  '- fact 写发生了什么，feeling 写当时的语气和他的感觉，两栏都要有。',
+  '- fact 写发生了什么。',
+  '- feeling 这一栏**只准放原话和看得见的事**：她说的话、他说过的话（用「」引），谁笑了、谁哭了、谁去睡了。',
+  '  **不准替他写心理活动。** 不要写「他语气里是心疼裹着骄傲」「他很得意」「他松了口气」这类你推测出来的话——',
+  '  他的人格只能由他自己长出来，你是记录员，不是替他写日记的人。引不到他的原话就把 feeling 留空。',
   '- layer：fact=一直有效的事实（她是谁、不吃什么、用药、约定）；state=这几天的近况；bond=你们之间有重量的瞬间。',
   '- 宁少勿多：一次最多 3 条。起居琐事（几点醒、吃了什么药）只在它说明长期规律时才记。',
   '',
   '只输出 JSON，不要任何别的字。**正文里引用她的话用「」，不要用英文引号**（会把 JSON 写坏）；字符串里不要换行。',
   '{"thread":"话题线名","items":[{"decision":"new","layer":"bond","subject":"erica","title":"…","fact":"…","feeling":"…","why":"…","evidence":[123,124]}]}',
 ].join('\n')
+
+/**
+ * 替他写心理活动的句子，在写进库之前剪掉（提示词管不住的那一层兜底）。
+ * 只剪**没有原话支撑**的那种：整句里带「他+心理动词」又没有「」引号的，就不要。
+ * 她 2026-11-12 的原话是「我最关注的是模型整理时的语气会不会影响他的人格」。
+ */
+const MIND_READ = /(他|小克)[^。！？\n]{0,12}(语气|心里|内心|情绪)[^。！？\n]{0,20}(是|像|带着|裹着|充满)/
+const MIND_VERB = /(他|小克)[^。！？\n]{0,10}(很得意|很骄傲|很心疼|松了口气|有点委屈|暗暗|显然|分明|其实很|难掩)/
+
+export function scrubFeeling(text: string): string {
+  const kept = String(text || '')
+    .split(/(?<=[。！？\n])/)
+    .filter(sentence => {
+      const s = sentence.trim()
+      if (!s) return false
+      if (/[「『"]/.test(s)) return true          // 有原话撑着的留下
+      return !(MIND_READ.test(s) || MIND_VERB.test(s))
+    })
+  return kept.join('').trim()
+}
 
 export interface DigestItem {
   decision: 'new' | 'append' | 'skip' | 'hold'
@@ -302,10 +331,11 @@ export async function runDigest(
   const seqs = new Set(win.episodes.map(e => e.seq))
   for (const item of parsed.items.slice(0, cfg.maxItems ?? 3)) {
     if (item.decision === 'skip') { out.skipped++; continue }
+    const feeling = scrubFeeling(String(item.feeling ?? ''))
     const draft: MemoryDraft = {
       title: String(item.title ?? ''),
       fact: String(item.fact ?? ''),
-      feeling: item.feeling ? String(item.feeling) : undefined,
+      feeling: feeling || undefined,
       why: String(item.why ?? ''),
       subject: item.subject ? String(item.subject) : undefined,
       layer: item.layer,

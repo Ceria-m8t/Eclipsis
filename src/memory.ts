@@ -80,4 +80,26 @@ export const decideCandidates = (ids: number[], action: 'accept' | 'skip') =>
   post<{ results: { id: number; ok: boolean; error?: string }[]; inbox: number }>('/inbox/decide', { ids, action })
 export const retractMemory = (id: number, reason: string) => post<{ ok: true }>(`/${id}/retract`, { reason })
 
+export interface Proposal {
+  id: number
+  memoryId: number
+  kind: 'merge' | 'split' | 'relayer' | 'why' | 'retract'
+  reason: string
+  payload: any
+  batch: string | null
+  createdAt: string
+  memory?: { title: string; layer: string; subjectLabel: string; fact: string; why: string | null; voice: string }
+}
+
+export const memoryProposals = () => get<{ proposals: Proposal[] }>('/proposals')
+export const decideProposals = (ids: number[], action: 'take' | 'drop') =>
+  post<{ results: { id: number; ok: boolean; error?: string }[]; open: number }>('/proposals/decide', { ids, action })
+export const runRejudgeBatch = (limit = 20, layer?: string) =>
+  post<{ batch: string; cards: number; proposals: number; skipped: number; rewrote: number; byKind: Record<string, number>; error?: string }>(
+    '/rejudge', { limit, layer })
+
+export const KIND_NAMES: Record<string, string> = {
+  merge: '合并', split: '拆开', relayer: '换层', why: '补「为什么记」', retract: '划掉',
+}
+
 export const LAYER_NAMES: Record<string, string> = { fact: '事实', state: '近况', bond: '我们之间' }

@@ -216,15 +216,18 @@ interface InsertInput {
   evidence: number[]
   thread: string | null
   source: string
+  /** 谁的笔。他随手记 = him；夜里整理 = machine（注入时情绪那半不给） */
+  voice?: string
 }
 
 function insertMemory(db: DB, o: InsertInput, ts: string): number {
   const r = db.prepare(`INSERT INTO memories
     (layer, subject, title, fact_body, feeling, why, tags, grade, valence, arousal, valid_from,
-     source, evidence, thread, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 'normal', ?, ?, ?, ?, ?, ?, ?, ?)`)
+     source, voice, evidence, thread, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 'normal', ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(o.layer, o.subject, o.title, o.fact, o.feeling, o.why, JSON.stringify(o.tags),
-      o.valence, o.arousal, o.validFrom, o.source, JSON.stringify(o.evidence), o.thread, ts, ts)
+      o.valence, o.arousal, o.validFrom, o.source, o.voice ?? (o.source === 'digest' ? 'machine' : 'him'),
+      JSON.stringify(o.evidence), o.thread, ts, ts)
   return Number(r.lastInsertRowid)
 }
 

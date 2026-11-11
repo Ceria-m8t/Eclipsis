@@ -6,14 +6,17 @@
 import { ref, computed, onMounted } from 'vue'
 import {
   memoryStats, memoryInbox, memoryList, decideCandidates, retractMemory,
-  LAYER_NAMES, type MemoryStats, type Candidate, type MemoryItem,
+  memoryProposals, decideProposals, runRejudgeBatch,
+  LAYER_NAMES, KIND_NAMES, type MemoryStats, type Candidate, type MemoryItem, type Proposal,
 } from '../memory'
 
 const stats = ref<MemoryStats | null>(null)
 const inbox = ref<Candidate[]>([])
 const list = ref<MemoryItem[]>([])
 const picked = ref<Set<number>>(new Set())
-const tab = ref<'inbox' | 'all' | 'review'>('inbox')
+const tab = ref<'inbox' | 'fix' | 'all' | 'review'>('inbox')
+const proposals = ref<Proposal[]>([])
+const rejudgeMsg = ref('')
 const err = ref('')
 const busy = ref(false)
 const expanded = ref<Set<number>>(new Set())
@@ -27,6 +30,9 @@ async function reload() {
     if (tab.value === 'inbox') {
       inbox.value = (await memoryInbox()).candidates
       picked.value = new Set()
+    } else if (tab.value === 'fix') {
+      proposals.value = (await memoryProposals()).proposals
+      picked.value = new Set()
     } else {
       list.value = (await memoryList({ review: tab.value === 'review', limit: 60 })).memories
     }
@@ -34,7 +40,39 @@ async function reload() {
 }
 onMounted(reload)
 
-function switchTab(t: 'inbox' | 'all' | 'review') { tab.value = t; void reload() }
+function switchTab(t: 'inbox' | 'fix' | 'all' | 'review') { tab.value = t; void reload() }
+
+const allFixPicked = computed(() => proposals.value.length > 0 && picked.value.size === proposals.value.length)
+function pickAllFix() { picked.value = allFixPicked.value ? new Set() : new Set(proposals.value.map(p => p.id)) }
+
+async function decideFix(ids: number[], action: 'take' | 'drop') {
+  if (!ids.length || busy.value) return
+  busy.value = true
+  try {
+    const r = await decideProposals(ids, action)
+    const bad = r.results.find(x => !x.ok)
+    if (bad) err.value = bad.error || '有一条没处理成功'
+    await reload()
+  } catch (e: any) { err.value = e.message }
+  busy.value = false
+}
+
+async function rejudge() {
+  if (busy.value) return
+  busy.value = true
+  rejudgeMsg.value = '正在看这一批…（他的字一个都不会被改，只会给建议）'
+  try {
+    const r = await runRejudgeBatch(20)
+    rejudgeMsg.value = r.error
+      ? `这一批失败了：${r.error}`
+      : `看了 ${r.cards} 张，给了 ${r.proposals} 条建议，${r.skipped} 张不用动` +
+        (r.rewrote ? `，${r.rewrote} 条因为它擅自改了原文被作废` : '')
+    await reload()
+  } catch (e: any) { rejudgeMsg.value = e.message }
+  busy.value = false
+}
+
+const kindName = (k: string) => KIND_NAMES[k] || k
 
 function toggle(id: number) {
   const s = new Set(picked.value)
@@ -92,6 +130,9 @@ async function strike(m: MemoryItem) {
       <button :class="['mem-tab', { on: tab === 'review' }]" @click="switchTab('review')">
         等看一眼<span v-if="stats?.needsReview" class="mem-dot">{{ stats.needsReview }}</span>
       </button>
+      <button :class="['mem-tab', { on: tab === 'fix' }]" @click="switchTab('fix')">
+        整理建议<span v-if="proposals.length" class="mem-dot">{{ proposals.length }}</span>
+      </button>
       <button :class="['mem-tab', { on: tab === 'all' }]" @click="switchTab('all')">全部</button>
     </div>
 
@@ -131,6 +172,52 @@ async function strike(m: MemoryItem) {
           </div>
         </div>
       </template>
+    </template>
+
+    <!-- 旧卡重整的建议 -->
+    <template v-else-if="tab === 'fix'">
+      <p class="mem-hint">
+        旧卡太碎的话，让程序看一批、提建议：合并、拆开、换层、补「为什么记」。
+        <b>它一个字都改不了他的原文</b>——要拆开只能从原文里原样复制片段，改过字的建议会直接作废。
+        采不采纳你说。
+      </p>
+      <div class="mem-bulk">
+        <button class="mem-btn" :disabled="busy" @click="rejudge">看一批（20 张）</button>
+        <span class="mem-spacer"></span>
+        <template v-if="proposals.length">
+          <label class="mem-flag"><input type="checkbox" :checked="allFixPicked" @change="pickAllFix" />全选</label>
+          <button class="mem-btn" :disabled="!picked.size || busy" @click="decideFix([...picked], 'drop')">不采纳</button>
+          <button class="mem-btn primary" :disabled="!picked.size || busy" @click="decideFix([...picked], 'take')">采纳</button>
+        </template>
+      </div>
+      <p v-if="rejudgeMsg" class="mem-meta">{{ rejudgeMsg }}</p>
+      <p v-if="!proposals.length" class="mem-empty">现在没有待处理的建议。</p>
+      <div v-for="p in proposals" :key="p.id" class="mem-item">
+        <div class="mem-head">
+          <input type="checkbox" :checked="picked.has(p.id)" @change="toggle(p.id)" />
+          <span class="mem-tag">{{ kindName(p.kind) }}</span>
+          <span class="mem-title" @click="toggleBody(p.id)">{{ p.memory?.title || ('#' + p.memoryId) }}</span>
+          <span class="mem-tag">{{ layerName(p.memory?.layer || '') }}</span>
+          <span class="mem-tag">{{ p.memory?.subjectLabel }}</span>
+          <span v-if="p.memory?.voice === 'machine'" class="mem-tag">程序整理的</span>
+        </div>
+        <p class="mem-unsure">{{ p.reason }}</p>
+        <p v-if="p.kind === 'why'" class="mem-why">草稿：{{ p.payload.why }}</p>
+        <p v-if="p.kind === 'relayer'" class="mem-why">{{ layerName(p.payload.from) }} → {{ layerName(p.payload.to) }}</p>
+        <template v-if="p.kind === 'split'">
+          <p v-for="(part, i) in p.payload.parts" :key="i" class="mem-body">［{{ part.subject }}］{{ part.quote }}</p>
+        </template>
+        <template v-if="expanded.has(p.id)">
+          <p class="mem-body">{{ p.memory?.fact }}</p>
+          <p v-if="p.memory?.why" class="mem-meta">原来的为什么记：{{ p.memory.why }}</p>
+        </template>
+        <div class="mem-row">
+          <button class="mem-link" @click="toggleBody(p.id)">{{ expanded.has(p.id) ? '收起' : '看原卡' }}</button>
+          <span class="mem-spacer"></span>
+          <button class="mem-btn" :disabled="busy" @click="decideFix([p.id], 'drop')">不采纳</button>
+          <button class="mem-btn primary" :disabled="busy" @click="decideFix([p.id], 'take')">采纳</button>
+        </div>
+      </div>
     </template>
 
     <!-- 库里的 -->

@@ -11,6 +11,10 @@ export {
 export { memoBox, MEMO_TOOLS, recentEvidence } from './box.ts'
 export {
   findDigestWindow, runDigest, DigestScheduler, buildMaterial, cleanForDigest, parseDigestReply,
-  stationCaller, DIGEST_SYSTEM, type DigestConfig, type DigestResult, type DigestItem,
+  stationCaller, scrubFeeling, DIGEST_SYSTEM, type DigestConfig, type DigestResult, type DigestItem,
 } from './digest.ts'
+export {
+  runRejudge, pickBatch, buildRejudgeMaterial, listProposals, takeProposal, dropProposal,
+  REJUDGE_SYSTEM, type RejudgeResult, type Proposal,
+} from './rejudge.ts'
 export { handleMemoryApi } from './api.ts'

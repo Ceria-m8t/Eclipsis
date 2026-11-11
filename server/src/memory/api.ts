@@ -7,11 +7,16 @@
 //   GET  /v1/eclipsis/memory/<id>         一条的全文 + 原话链接（evidence 对应的几句）
 //   POST /v1/eclipsis/memory/<id>/retract { reason }   她划掉一条（软删，不是真删）
 //   GET  /v1/eclipsis/memory/digest       夜里整理的近况（跑过几次、现在该不该跑）
+//   GET  /v1/eclipsis/memory/proposals    旧卡重整的建议（她点头才动库）
+//   POST /v1/eclipsis/memory/proposals/decide { id|ids, action: 'take'|'drop' }
+//   POST /v1/eclipsis/memory/rejudge      { limit, layer, maxChars } 跑一批重整（只提建议）
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { DB } from '../db.ts'
 import { ensureMemorySchema } from './schema.ts'
 import { listInbox, decideCandidate, inboxCount, labelWithPeople } from './write.ts'
-import { findDigestWindow } from './digest.ts'
+import { findDigestWindow, stationCaller } from './digest.ts'
+import { listProposals, takeProposal, dropProposal, runRejudge } from './rejudge.ts'
+import { chooseModel, currentStation } from '../station.ts'
 
 function json(res: ServerResponse, status: number, body: unknown) {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
@@ -104,6 +109,40 @@ export async function handleMemoryApi(db: DB, req: IncomingMessage, res: ServerR
         now: { ready: win.ready, why: win.why, pairs: win.pairs, quietMinutes: win.quietMinutes, episodes: win.episodes.length },
         runs,
       })
+      return true
+    }
+
+    if (p === '/v1/eclipsis/memory/proposals' && req.method === 'GET') {
+      json(res, 200, {
+        proposals: listProposals(db, { status: url.searchParams.get('status') || 'open', limit: Number(url.searchParams.get('limit')) || 50 }),
+      })
+      return true
+    }
+
+    if (p === '/v1/eclipsis/memory/proposals/decide' && req.method === 'POST') {
+      const b = await readJson(req)
+      const action = b?.action === 'drop' ? 'drop' : b?.action === 'take' ? 'take' : null
+      if (!action) { json(res, 400, { error: "action 只能是 take 或 drop" }); return true }
+      const ids: number[] = Array.isArray(b?.ids) ? b.ids.map(Number).filter(Number.isFinite) : [Number(b?.id)].filter(Number.isFinite)
+      if (!ids.length) { json(res, 400, { error: '要给 id 或 ids' }); return true }
+      const results = ids.map(id => ({ id, ...(action === 'take' ? takeProposal(db, id) : dropProposal(db, id)) }))
+      json(res, 200, { results, open: listProposals(db).length })
+      return true
+    }
+
+    if (p === '/v1/eclipsis/memory/rejudge' && req.method === 'POST') {
+      const b = await readJson(req)
+      // 跟着换站面板上现在那个站走（和聊天、Wake、心潮同一个）
+      const st = currentStation()
+      const cfg = { upstreamUrl: st.url, upstreamKey: st.key }
+      const model = String(b?.model || '').trim() || chooseModel(db) || st.defaultModel
+      if (!cfg.upstreamUrl || !model) { json(res, 503, { error: '还不知道用哪个站/哪个模型' }); return true }
+      const r = await runRejudge(db, stationCaller(cfg), model, {
+        limit: Number(b?.limit) || 20,
+        layer: b?.layer || undefined,
+        maxChars: Number(b?.maxChars) || undefined,
+      })
+      json(res, 200, r)
       return true
     }
 

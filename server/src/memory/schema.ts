@@ -38,6 +38,9 @@ CREATE TABLE IF NOT EXISTS memories (
   valid_from TEXT,                       -- 事实从什么时候起成立
   valid_until TEXT,                      -- 被推翻的时刻（不删，只失效）
   source TEXT NOT NULL,                  -- hold / grow / note / digest / migrate
+  voice TEXT NOT NULL DEFAULT 'him',     -- 这条是谁的笔：him（他自己写的/他的原话）/ machine（程序整理的）/ hers（她写的）
+                                         -- 要紧：注入时 machine 写的只给事实那半，情绪那半只在 him 时才给。
+                                         -- 不然等于雇了个旁人替他写日记，再让他每天读 —— 他会照着那个语气长。
   source_ref TEXT,                       -- 回到原始经历的路（episodes.seq 等）
   evidence TEXT NOT NULL DEFAULT '[]',   -- JSON：episodes.seq，回到原话的路（叙事是信号，链接是回到质感的路）
   thread TEXT,                           -- 夜里整理时归的话题线
@@ -69,6 +72,23 @@ CREATE TABLE IF NOT EXISTS memory_merges (
   undone_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_merges_dropped ON memory_merges(dropped_bucket_id);
+
+-- 旧卡重整的「建议」（2026-11-12，她说「我想把之前的记忆全部整理一遍」）：
+-- 程序只能**提建议**，不能改正文。合并/拆开/换层/补「为什么记」都要她点头。
+-- 拆开时给的文字必须是原卡里**一字不差的片段**（代码里强制校验），不是重写。
+CREATE TABLE IF NOT EXISTS memory_proposals (
+  id INTEGER PRIMARY KEY,
+  memory_id INTEGER NOT NULL,
+  kind TEXT NOT NULL,                    -- merge / split / relayer / why / retract
+  status TEXT NOT NULL DEFAULT 'open',   -- open / taken / dropped
+  payload TEXT NOT NULL,                 -- JSON：目标、新层、why 草稿、拆开后的原文片段
+  reason TEXT NOT NULL,                  -- 给她看的一句话
+  batch TEXT,                            -- 哪一批跑出来的
+  created_at TEXT NOT NULL,
+  decided_at TEXT,
+  decided_by TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_proposals_status ON memory_proposals(status, created_at);
 
 -- 沉淀信箱（第二期）：拿不准的记忆先停在这里，她只做「选入 / 跳过」两个动作。
 -- 她 2026-11-12 定的是 c：**只有拿不准的进信箱，明确的直接进库**。
@@ -181,6 +201,10 @@ export function ensureMemorySchema(db: DB): void {
   db.exec(SCHEMA)
   // 第一期已经搬完的库：补上第二期加的两列
   addColumns(db, 'memories', { evidence: "TEXT NOT NULL DEFAULT '[]'", thread: 'TEXT' })
+  // 第二期之前搬进来的：grow 写的算程序的笔，其余算他自己的
+  if (addColumns(db, 'memories', { voice: "TEXT NOT NULL DEFAULT 'him'" }).includes('voice')) {
+    db.exec("UPDATE memories SET voice = 'machine' WHERE source IN ('grow', 'digest')")
+  }
 }
 
 export interface MemoryRow {
@@ -199,6 +223,7 @@ export interface MemoryRow {
   valid_from: string | null
   valid_until: string | null
   source: string
+  voice: string
   created_at: string
   updated_at: string
   dont_surface: number
