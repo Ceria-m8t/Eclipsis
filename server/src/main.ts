@@ -26,7 +26,7 @@ import { handleDrawApi } from './draw-api.ts'
 import { ensureDrawSchema } from './draw-refs.ts'
 import { dropSupersededVersions } from './versions.ts'
 import { handleLlmRelay } from './llm-relay.ts'
-import { initStations, bindStationToConfig } from './station.ts'
+import { initStations, bindStationToConfig, chooseModel } from './station.ts'
 import { ensureWakeSchema, WakeScheduler, dispatchWake, handleWakeApi } from './wake/index.ts'
 import {
   ensurePulseSchema, handlePulseApi, doTick as pulseTick,
@@ -38,6 +38,7 @@ import { assembleSceneBlockForTurn, injectSceneBlock, renderRecentGroupBlock } f
 import { renderRecentWakeBlock } from './wake/chat-block.ts'
 import { notifyXinchaoPresence, notifyXinchaoExchange } from './xinchao-client.ts'
 import { ensurePromptSchema, handlePromptApi } from './prompts.ts'
+import { ensureMemorySchema, handleMemoryApi, DigestScheduler } from './memory/index.ts'
 import { handleLetoApi, handleLetoAdmin, loadAgents, type LetoApiDeps } from './leto/index.ts'
 
 function bearer(req: IncomingMessage): string {
@@ -72,6 +73,7 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
   ensureFileSchema(db)
   ensureStatusSchema(db)
   ensureDrawSchema(db)        // 垫图和画风（出厂带三个画风）
+  ensureMemorySchema(db)      // 记忆库（第一期搬家建的表；第二期开始往里写）
   setToolboxBlobs(blobs)      // 他的画笔要用它存图
   const recorder = new Recorder(db, blobs, {
     onEricaMessage: opts.onEricaMessage, onTurnComplete: opts.onTurnComplete,
@@ -107,6 +109,8 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
       if (await handleStationsApi(db, req, res)) return true
       // 他顶栏的状态（她的手机读；聊天里他调完工具前端写回来）
       if (await handleStatusApi(db, req, res)) return true
+      // 记忆库：她翻记忆、处理沉淀信箱（前端界面以后做）
+      if (await handleMemoryApi(db, req, res)) return true
       if (await handleDrawApi(db, blobs, req, res)) return true
       if (await handleChatApi(db, {
         blobDir: cfg.blobDir, xiaoke: xiaokeApi(cfg.xiaokeUrl, cfg.xiaokeKey), xiaokeHasNewMessages: !cfg.bypassXiaoke
@@ -454,8 +458,27 @@ function main() {
     }
   }
 
+  // ── 夜里整理记忆（第二期）。默认不开：开发完成不等于自动启用 ──
+  let digestScheduler: DigestScheduler | null = null
+  if (process.env.MEMORY_DIGEST === '1') {
+    if (!cfg.upstreamUrl) console.warn('[eclipsis] MEMORY_DIGEST=1 但没配中转站，夜里整理不启动')
+    else {
+      digestScheduler = new DigestScheduler(db, {
+        upstreamUrl: cfg.upstreamUrl,
+        upstreamKey: cfg.upstreamKey,
+        model: (process.env.MEMORY_DIGEST_MODEL || '').trim() || undefined,
+        pairsNeeded: Number(process.env.MEMORY_DIGEST_PAIRS) || 5,
+        quietMinutes: Number(process.env.MEMORY_DIGEST_QUIET_MIN) || 20,
+        maxItems: Number(process.env.MEMORY_DIGEST_MAX_ITEMS) || 3,
+        log,
+      }, () => chooseModel(db), Number(process.env.MEMORY_DIGEST_TICK_MS) || 10 * 60_000)
+      digestScheduler.start()
+    }
+  }
+
   const stop = () => {
     if (wakeScheduler) wakeScheduler.stop()
+    if (digestScheduler) digestScheduler.stop()
     weatherFetcher.stop()
     if (xinchaoBridgeTimer) clearInterval(xinchaoBridgeTimer)
     clearInterval(pulseTimer)

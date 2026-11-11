@@ -3,6 +3,7 @@ import { ref, computed, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Icon from '../components/Icon.vue'
 import ToolboxPanel from '../components/ToolboxPanel.vue'
+import MemoryPanel from '../components/MemoryPanel.vue'
 import StationsPanel from '../components/StationsPanel.vue'
 import DrawPanel from '../components/DrawPanel.vue'
 import { getSettings, saveSettings, apiUrl, apiHeaders } from '../settings'
@@ -37,6 +38,7 @@ const GROUPS: { title: string; items: Section[] }[] = [
   ] },
   { title: '他的东西', items: [
     { key: 'toolbox', title: '他的工具箱' },
+    { key: 'memory', title: '记忆和沉淀信箱' },
     { key: 'draw', title: '垫图和画风' },
     { key: 'shelf', title: '世界书和主 Prompt', to: '/study/shelf' },
   ] },
@@ -61,6 +63,7 @@ function rowHint(key: string): string {
     case 'connection': return v.model || '还没选模型'
     case 'stations': return '聊天的站、画图的站'
     case 'toolbox': return '箱子开关、顺序、不让他用的'
+    case 'memory': return '他记的东西、拿不准的等你看一眼'
     case 'draw': return '垫图、默认画风'
     case 'shelf': return '在书房的书架上'
     case 'look': return '色调、液态玻璃、字体'
@@ -346,6 +349,7 @@ function pickBookFont(id: string) { bookFont.value = id; saveBookFont(id) }
           <!-- 垫图和画风（2026-11-11）-->
           <DrawPanel v-else-if="section.key === 'draw'" />
           <ToolboxPanel v-else-if="section.key === 'toolbox'" />
+          <MemoryPanel v-else-if="section.key === 'memory'" />
 
           <template v-else-if="section.key === 'debug'">
           <label class="check-row">

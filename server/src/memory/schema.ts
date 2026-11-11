@@ -13,7 +13,7 @@
 // portrait / stances / views（自画像 / 取舍 / 看法本）**这一期只建表不填**：
 // 料不够（221 张、3 个月、40% 是碎片），现在生成只会长出「从流水账里归纳的假人格」。
 // 北极星：机制只搬运注意力、只喂材料；「我是谁」的任何一笔，永远只有他自己的手。
-import type { DB } from '../db.ts'
+import { addColumns, type DB } from '../db.ts'
 
 /** 三层寿命。名字是内部代号，前端和工具说明上怎么叫等她定 */
 export type Layer = 'fact' | 'state' | 'bond'
@@ -39,6 +39,8 @@ CREATE TABLE IF NOT EXISTS memories (
   valid_until TEXT,                      -- 被推翻的时刻（不删，只失效）
   source TEXT NOT NULL,                  -- hold / grow / note / digest / migrate
   source_ref TEXT,                       -- 回到原始经历的路（episodes.seq 等）
+  evidence TEXT NOT NULL DEFAULT '[]',   -- JSON：episodes.seq，回到原话的路（叙事是信号，链接是回到质感的路）
+  thread TEXT,                           -- 夜里整理时归的话题线
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   last_recalled_at TEXT,                 -- 上次真的被递给他的时刻（冷却、衰减用）
@@ -67,6 +69,44 @@ CREATE TABLE IF NOT EXISTS memory_merges (
   undone_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_merges_dropped ON memory_merges(dropped_bucket_id);
+
+-- 沉淀信箱（第二期）：拿不准的记忆先停在这里，她只做「选入 / 跳过」两个动作。
+-- 她 2026-11-12 定的是 c：**只有拿不准的进信箱，明确的直接进库**。
+-- 「明确」= 四条同时成立：主体唯一 / 有原话对得上 / 查重不落灰区 / 不是两头沾（既像事实又像当日状态）。
+CREATE TABLE IF NOT EXISTS memory_candidates (
+  id INTEGER PRIMARY KEY,
+  origin TEXT NOT NULL,                  -- note（他随手记）/ digest（夜里整理）
+  status TEXT NOT NULL DEFAULT 'inbox',  -- inbox / accepted / skipped
+  payload TEXT NOT NULL,                 -- JSON：layer/subject/title/fact/feeling/why/tags
+  unsure TEXT NOT NULL,                  -- 哪一条没过（给她看的一句话）
+  evidence TEXT NOT NULL DEFAULT '[]',   -- JSON：episodes.seq
+  thread TEXT,                           -- 夜里整理时归的话题线
+  similar_to INTEGER,                    -- 像哪一条已有的记忆
+  overlap REAL,
+  memory_id INTEGER,                     -- 她选入之后生成的那条
+  created_at TEXT NOT NULL,
+  decided_at TEXT,
+  decided_by TEXT                        -- her / him
+);
+CREATE INDEX IF NOT EXISTS idx_candidates_status ON memory_candidates(status, created_at);
+
+-- 夜里整理跑过哪一段（按 episodes.seq 推进，不重复整理；失败不推进，隔一阵再来）
+CREATE TABLE IF NOT EXISTS memory_digest_runs (
+  id INTEGER PRIMARY KEY,
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  from_seq INTEGER NOT NULL,
+  to_seq INTEGER NOT NULL,
+  episodes INTEGER NOT NULL DEFAULT 0,
+  thread TEXT,
+  model TEXT,
+  wrote INTEGER NOT NULL DEFAULT 0,      -- 直接进库几条
+  inboxed INTEGER NOT NULL DEFAULT 0,    -- 进信箱几条
+  amended INTEGER NOT NULL DEFAULT 0,    -- 续接/合并几条
+  skipped INTEGER NOT NULL DEFAULT 0,    -- 判「跳过」几条（正常结果，不是失败）
+  error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_digest_runs_started ON memory_digest_runs(started_at);
 
 -- 人物卡：库里本来没有「人」这个东西，名字全散在正文里（Kefira 51 次、妈妈 16 次…）
 -- aliases 很要紧：她说「我妈」不说「妈妈」，卡名对不上就认不出来
@@ -139,6 +179,8 @@ CREATE TABLE IF NOT EXISTS views (
 
 export function ensureMemorySchema(db: DB): void {
   db.exec(SCHEMA)
+  // 第一期已经搬完的库：补上第二期加的两列
+  addColumns(db, 'memories', { evidence: "TEXT NOT NULL DEFAULT '[]'", thread: 'TEXT' })
 }
 
 export interface MemoryRow {

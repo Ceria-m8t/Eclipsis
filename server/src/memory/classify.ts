@@ -16,6 +16,7 @@ export interface Classified {
   validFrom: string | null
   validUntil: string | null
   residentCandidate: boolean      // 够格进常驻，但等人点头（搬家时不自己放进去）
+  signals: { strongFact: boolean; weakFact: boolean; state: boolean; bond: boolean }
 }
 
 // 事实的信号分强弱两档。分开是因为「约定」「固定」这种词会出现在吵架、表白这类
@@ -168,7 +169,10 @@ export function classify(card: ObCard, people = PEOPLE_SEEDS): Classified {
   // 判成事实的卡不给候选资格 —— 那一类里混着吵架和表白，不该压进固定前缀。
   if (grade !== 'resident' && layer === 'fact' && strongFact && card.importance >= 9 && !needsReview) residentCandidate = true
 
-  return { layer, grade, subject: sub.subject, needsReview, reviewNote, reasons, validFrom, validUntil, residentCandidate }
+  return {
+    layer, grade, subject: sub.subject, needsReview, reviewNote, reasons, validFrom, validUntil, residentCandidate,
+    signals: { strongFact, weakFact, state: hasState, bond: bondSignal },
+  }
 }
 
 // ── 查重（和 15-碎片化体检.md 用的是同一个口径：2-gram 重合 ≥55%）──
@@ -240,4 +244,24 @@ export function dupGroups(cards: ObCard[], threshold = 0.55): DupGroup[] {
     })
   }
   return out.sort((a, b) => a.keep.created.localeCompare(b.keep.created))
+}
+
+
+/**
+ * 把一条新写入拼成「卡」的形状，好让它走和搬家**同一套**分层/主体规则。
+ * 两边共用一套规则，是为了以后改规则时不会出现「搬进来的和新记的判得不一样」。
+ */
+export function synthCard(o: {
+  title?: string; body: string; created?: string; tags?: string[]
+  valence?: number; arousal?: number; importance?: number; type?: string; sourceTool?: string
+}): ObCard {
+  const created = o.created ?? new Date().toISOString()
+  return {
+    file: '', bucketId: '', name: o.title ?? '', title: o.title ?? '',
+    type: o.type ?? 'dynamic', sourceTool: o.sourceTool ?? 'note',
+    created, lastActive: created,
+    importance: o.importance ?? 6, valence: o.valence ?? 0, arousal: o.arousal ?? 0,
+    domain: [], tags: o.tags ?? [], why: '', growBatchId: '', dontSurface: false, status: '',
+    body: o.body, raw: {},
+  }
 }

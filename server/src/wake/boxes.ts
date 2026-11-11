@@ -16,6 +16,7 @@ import { listTools, callTool, type LetoMcpConfig, type McpTool } from '../leto/m
 import { loadAgents } from '../leto/agent.ts'
 import * as T from './tools.ts'
 import { momentsBox } from './moments-box.ts'
+import { memoBox } from '../memory/box.ts'
 import { drawBox } from './draw-box.ts'
 import type { BlobStore } from '../blobs.ts'
 import type { FrequencyMode, SourceId } from './types.ts'
@@ -171,8 +172,12 @@ export function buildWakeBoxes(db: DB, env: NodeJS.ProcessEnv = process.env, blo
   if (memUrl) {
     boxes.push(mcpBox({
       id: 'memory', entryName: 'open_memory',
-      entryDescription: '打开记忆库（Ombre Brain）：翻记得的事（breath / breath_search / dream）、存新的记忆（hold / grow）、写信读信、感受和自我认知（feel / I / You / Them）、待办承诺（plan）。',
-      mcp: { baseUrl: '', url: memUrl, token: (env.WAKE_MCP_MEMORY_TOKEN || '').trim(), label: '记忆库', timeoutMs: 30_000 }
+      entryDescription: '打开记忆库（Ombre Brain）：翻记得的事（breath / breath_search / dream）、写信读信、感受和自我认知（feel / I / You / Them）、待办承诺（plan）。记新的记忆用 open_memo 里的 memory_note（要写「为什么记」、会自动查重分层）。',
+      mcp: { baseUrl: '', url: memUrl, token: (env.WAKE_MCP_MEMORY_TOKEN || '').trim(), label: '记忆库', timeoutMs: 30_000 },
+      // grow 不给了（MEMORY_GROW=1 放回来）：它一次把一天改写成 3–7 张碎片，43 张平均 132 字，
+      // 16 对重复里一半与它有关。夜里整理（memory/digest.ts）接它的位置，但带「归线 + 可以跳过」。
+      // OB 的另一个二改（Nocturne）也是因为同一个理由把它从 MCP 摘掉的。
+      allow: name => env.MEMORY_GROW === '1' || name !== 'grow'
     }))
   }
   const xcUrl = (env.WAKE_MCP_XINCHAO_URL || '').trim()
@@ -207,6 +212,7 @@ export function buildWakeBoxes(db: DB, env: NodeJS.ProcessEnv = process.env, blo
     }))
   }
   boxes.push(settingsBox(db))
+  boxes.push(memoBox(db))        // 随手记（写记忆的那条路，聊天和醒来都有）
   boxes.push(momentsBox(db))
   // 画笔：配了画图的站才有
   if (blobs) { const d = drawBox(db, blobs); if (d) boxes.push(d) }
