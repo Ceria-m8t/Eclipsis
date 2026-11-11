@@ -56,13 +56,17 @@ const LIST = `scope = 'daily' AND retracted_at IS NULL AND (
 
 interface Row { seq: number; ts: string; actor: string; kind: string; content: string; meta: string | null; source_ref: string | null }
 
-/** 他的回复里的 <think>…</think> 拆出来（开头没闭合的也算思考） */
+/**
+ * 他的回复里的 <think>…</think> 拆出来（开头没闭合的也算思考）。
+ * 拆完把空行收一收（和前端 markdown.splitThink、transforms.stripThinkText 同一条规则）：
+ * 一轮里调了工具的回复是几段接起来的，中间夹着思考，剪掉以后会留下三四个空行。
+ */
 export function splitThink(text: string): { body: string; think: string } {
   let think = ''
   let body = text.replace(/<think>([\s\S]*?)<\/think>/gi, (_, t) => { think += (think ? '\n\n' : '') + t.trim(); return '' })
   const open = body.search(/<think>/i)
   if (open >= 0) { think += (think ? '\n\n' : '') + body.slice(open + 7).trim(); body = body.slice(0, open) }
-  return { body: body.trim(), think: think.trim() }
+  return { body: body.replace(/\n{3,}/g, '\n\n').trim(), think: think.trim() }
 }
 
 function sourceOf(ref: string | null): ChatItem['source'] {

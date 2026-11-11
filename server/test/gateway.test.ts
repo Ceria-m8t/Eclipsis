@@ -6,6 +6,7 @@ import { buildServers } from '../src/main.ts'
 import { openDb, addEpisode, type DB } from '../src/db.ts'
 import { loadConfig, type Config } from '../src/config.ts'
 import { WAKE_MARKER } from '../src/recorder.ts'
+import { chatHistory } from '../src/chat-history.ts'
 import { listen, close, fakeUpstream, sseChunk, tempDir, type Seen } from './helpers.ts'
 
 const TAP_KEY = 'tap-key-for-test'
@@ -86,7 +87,8 @@ function chat(body: any, headers: Record<string, string> = {}) {
 const tapChat = (body: any, signal?: AbortSignal) => fetch(`http://127.0.0.1:${tapPort}/v1/chat/completions`, {
   method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${TAP_KEY}` }, body: JSON.stringify(body), signal
 })
-const episodes = () => db.prepare('SELECT actor, kind, channel, scope, content, meta, source_ref FROM episodes ORDER BY ts, seq').all() as any[]
+const episodes = () => db.prepare('SELECT actor, kind, channel, scope, content, meta, source_ref, retracted_at, retract_reason FROM episodes WHERE retracted_at IS NULL ORDER BY ts, seq').all() as any[]
+const allEpisodes = () => db.prepare('SELECT seq, actor, kind, content, retract_reason FROM episodes ORDER BY seq').all() as any[]
 const exchanges = () => db.prepare('SELECT * FROM exchanges ORDER BY id').all() as any[]
 // finish 在响应结束后才写库，给它一点时间
 const settle = () => new Promise(r => setTimeout(r, 30))
@@ -188,7 +190,7 @@ test('上一轮失败/停掉了、她补了一句再发（新的 turn）：前�
   assert.deepEqual(episodes().filter(e => e.actor === 'erica').map(e => e.content), ['看图', '[图片]\n（图片）', '补一句', '补一句'])
 })
 
-test('工具调用：tool_call 和下一轮的 tool_result 都进经历', async () => {
+test('工具调用：tool_call 和下一轮的 tool_result 都进经历；工具前后说的话合成一条回复', async () => {
   stationReply = streamReply([
     sseChunk({ content: '我放首歌' }),
     sseChunk({ tool_calls: [{ index: 0, id: 'call_x', function: { name: 'play_song', arguments: '{"q":"晴天"}' } }] }),
@@ -203,13 +205,65 @@ test('工具调用：tool_call 和下一轮的 tool_result 都进经历', async 
     { role: 'tool', tool_call_id: 'call_x', content: '正在播放：晴天' }
   ] }, h)).text()
   await settle()
+  // 一轮里调工具 = 两次请求。两段话要合成一条回复：不然 versions.ts 会把它们当成同一轮的两个版本
+  // （她那边出现 1/2 切换、只显示后半段；他那边前半段被当成被盖掉的版本剪掉）
   assert.deepEqual(episodes().map(e => [e.actor, e.kind, e.content]), [
     ['erica', 'message', '放歌'],
-    ['ai', 'message', '我放首歌'],
     ['ai', 'tool_call', 'play_song({"q":"晴天"})'],
     ['tool', 'tool_result', '正在播放：晴天'],
-    ['ai', 'message', '放好了']
+    ['ai', 'message', '我放首歌\n\n放好了']
   ])
+  // 前半段那条软删掉了（证据还在库里）
+  assert.deepEqual(allEpisodes().filter(e => e.retract_reason).map(e => [e.content, e.retract_reason]),
+    [['我放首歌', 'tool_round']])
+  // 她那边：一条回复、一个版本（没有 1/2 切换），工具还挂在这条上
+  const items = chatHistory(db, {}).items.filter(i => i.role === 'assistant')
+  assert.equal(items.length, 1)
+  assert.equal(items[0]!.versions!.length, 1)
+  assert.equal(items[0]!.content, '我放首歌\n\n放好了')
+  assert.deepEqual(items[0]!.versions![0]!.tools.map(t => [t.name, t.result]), [['play_song', '正在播放：晴天']])
+  assert.equal(items[0]!.active, undefined)
+})
+
+test('工具调用：中间她又说了话就是两轮，不合并', async () => {
+  stationReply = streamReply([sseChunk({ content: '我放首歌' }), sseChunk({ tool_calls: [{ index: 0, id: 'c9', function: { name: 'play_song', arguments: '{}' } }] }), sseChunk({}, 'tool_calls')])
+  const h = { 'x-eclipsis-turn': 'a3b', 'x-eclipsis-version': '0' }
+  await (await chat({ model: 'm', stream: true, messages: [{ role: 'user', content: '放歌' }] }, h)).text()
+  await settle()
+  stationReply = streamReply([sseChunk({ content: '好' }), sseChunk({}, 'stop')])
+  await (await chat({ model: 'm', stream: true, messages: [
+    { role: 'user', content: '放歌' },
+    { role: 'assistant', content: '我放首歌', tool_calls: [{ id: 'c9', type: 'function', function: { name: 'play_song', arguments: '{}' } }] },
+    { role: 'tool', tool_call_id: 'c9', content: 'ok' },
+    { role: 'user', content: '算了' }
+  ] }, { 'x-eclipsis-turn': 'a3c', 'x-eclipsis-version': '0' })).text()
+  await settle()
+  assert.deepEqual(episodes().filter(e => e.kind === 'message').map(e => [e.actor, e.content]), [
+    ['erica', '放歌'], ['ai', '我放首歌'], ['erica', '算了'], ['ai', '好']
+  ])
+})
+
+test('重新生成一个调了工具的轮次：两版各自合并，不混在一起', async () => {
+  const h = (v: string) => ({ 'x-eclipsis-turn': 'a3d', 'x-eclipsis-version': v })
+  for (const [v, pre, post] of [['0', '第一版前', '第一版后'], ['1', '第二版前', '第二版后']] as const) {
+    stationReply = streamReply([sseChunk({ content: pre }), sseChunk({ tool_calls: [{ index: 0, id: 'c' + v, function: { name: 'play_song', arguments: '{}' } }] }), sseChunk({}, 'tool_calls')])
+    await (await chat({ model: 'm', stream: true, messages: [{ role: 'user', content: '放歌' }] }, h(v))).text()
+    await settle()
+    stationReply = streamReply([sseChunk({ content: post }), sseChunk({}, 'stop')])
+    await (await chat({ model: 'm', stream: true, messages: [
+      { role: 'user', content: '放歌' },
+      { role: 'assistant', content: pre, tool_calls: [{ id: 'c' + v, type: 'function', function: { name: 'play_song', arguments: '{}' } }] },
+      { role: 'tool', tool_call_id: 'c' + v, content: 'ok' }
+    ] }, h(v))).text()
+    await settle()
+  }
+  assert.deepEqual(episodes().filter(e => e.actor === 'ai' && e.kind === 'message').map(e => e.content),
+    ['第一版前\n\n第一版后', '第二版前\n\n第二版后'])
+  // 这两条才是真的两个版本：她那边一条回复、能翻 1/2
+  const it = chatHistory(db, {}).items.filter(i => i.role === 'assistant')
+  assert.equal(it.length, 1)
+  assert.equal(it[0]!.versions!.length, 2)
+  assert.equal(it[0]!.content, '第二版前\n\n第二版后')
 })
 
 test('图片：拆出来存文件，经历里记哈希', async () => {

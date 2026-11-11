@@ -244,6 +244,7 @@ export class Recorder {
     else if (input.aborted && !reply?.done) status = 'aborted'
     else status = 'ok'
     const error = input.networkError || reply?.error || ((input.httpStatus ?? 0) >= 400 ? input.body.slice(0, 2000) : null)
+    let merged: string | null = null      // 调了工具的那一轮：接上前面几段之后的全文
 
     tx(this.db, () => {
       this.db.prepare(`UPDATE exchanges SET finished_at = ?, status = ?, http_status = ?, latency_ms = ?,
@@ -261,7 +262,7 @@ export class Recorder {
       const partial = status === 'aborted' || status === 'network_error'
       const usable = status === 'ok' || (partial && (reply.content.trim() || reply.toolCalls.length))
       if (!usable) return
-      if (ctx.derive) this.finishEpisodes(ctx, reply, partial, now.toISOString())
+      if (ctx.derive) merged = this.finishEpisodes(ctx, reply, partial, now.toISOString())
       else if (ctx.wake && reply.content.trim()) {
         addEpisode(this.db, {
           ts: now.toISOString(), channel: 'wake', scope: 'daily', actor: 'ai', kind: 'wake',
@@ -270,7 +271,7 @@ export class Recorder {
       }
     })
     if (status === 'ok' && ctx.derive && ctx.herText && reply && !reply.toolCalls.length && this.onTurnComplete) {
-      let his = reply.content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
+      let his = (merged ?? reply.content).replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
       his = his.replace(/<moment(\s+lock)?\s*>[\s\S]*?(?:<\/moment>|$)/gi, '').trim()
       if (his.startsWith('[NO_REPLY]')) his = '（他看了，没有回）'
       if (his) { try { this.onTurnComplete(ctx.herText, his) } catch { /* 通知失败不影响记录 */ } }
@@ -278,13 +279,53 @@ export class Recorder {
     return reply
   }
 
+  /**
+   * 他调完工具接着说的那一段（2026-11-11，Erica 报的 bug：设置状态之后回复被切成两条、还多出个版本切换）。
+   *
+   * 一轮里调工具 = 对站发了好几次请求，每次一条 exchange。以前每次都写一条 ai 经历，
+   * 于是「同一个 turn + 中间没有她的话」被 versions.ts 当成同一轮的两个版本：
+   * 她那边出现 1/2 切换、默认只显示后半段，他那边前半段还被当成"被盖掉的版本"剪掉了。
+   * 所以续写时接到同一条上（接在**这一条**前面，不是改前一条：工具记录的 seq 在中间，
+   * 要让它们还挂在后面这条回复上，见 chat-history.buildItems）。
+   *
+   * 认续写：同一个 turn、同一个版本、上一条 ai 经历的 finish_reason 是 tool_calls、中间没有她的话。
+   */
+  private continuedFrom(ctx: ExchangeCtx, channel: string): { seq: number; content: string; images?: unknown } | null {
+    if (!ctx.turn) return null
+    const prev = this.db.prepare(`SELECT seq, content, meta FROM episodes
+      WHERE channel = ? AND actor = 'ai' AND kind = 'message' AND retracted_at IS NULL
+        AND json_extract(meta, '$.turn') = ?
+        AND COALESCE(json_extract(meta, '$.version'), 0) = ?
+        AND json_extract(meta, '$.finish_reason') = 'tool_calls'
+      ORDER BY seq DESC LIMIT 1`).get(channel, ctx.turn, ctx.version ?? 0) as
+      { seq: number; content: string; meta: string | null } | undefined
+    if (!prev) return null
+    // 她在中间又说了话：那就是两轮，不是续写
+    const after = this.db.prepare(`SELECT COUNT(*) AS n FROM episodes
+      WHERE channel = ? AND actor = 'erica' AND kind = 'message' AND retracted_at IS NULL AND seq > ?`)
+      .get(channel, prev.seq) as { n: number }
+    if (after.n > 0) return null
+    let images: unknown
+    try { images = prev.meta ? JSON.parse(prev.meta).images : undefined } catch { /* 没有就算了 */ }
+    return { seq: prev.seq, content: prev.content, images }
+  }
+
   // 前端出口：他的回复文字、他发起的工具调用
-  private finishEpisodes(ctx: ExchangeCtx, reply: Reply, partial: boolean, ts: string) {
+  // 返回这条回复的全文（含工具之前说的那几段），没写就是 null
+  private finishEpisodes(ctx: ExchangeCtx, reply: Reply, partial: boolean, ts: string): string | null {
     const { channel, scope } = sceneInfo(ctx.scene)
     // 他自己摆的像素小画：块从正文里拆掉（她看到的是图），画坏了正文里留一句原因
     const pix = splitPixel(reply.content)
-    const text = (pix.arts.length || pix.errors.length ? pix.text : reply.content).trim()
+    let text = (pix.arts.length || pix.errors.length ? pix.text : reply.content).trim()
+    // 调了工具接着说的：把工具之前那段接在前面，那条软删掉（同一条回复只留一条经历）
+    const prev = this.continuedFrom(ctx, channel)
+    let prevImages: unknown
+    if (prev) {
+      text = [prev.content, text].filter(Boolean).join('\n\n')
+      prevImages = prev.images
+    }
     if (text) {
+      const images = Array.isArray(prevImages) && prevImages.length ? prevImages : undefined
       addEpisode(this.db, {
         ts, channel, scope, actor: 'ai', kind: 'message', content: text,
         meta: {
@@ -293,9 +334,14 @@ export class Recorder {
           partial: partial || undefined, finish_reason: reply.finishReason,
           via: ctx.tap === 'upstream' ? 'upstream' : undefined,
           ...(pix.arts.length ? { pixel: pix.arts.length } : {}),
+          ...(images ? { images } : {}),
+          ...(prev ? { tool_rounds: true } : {}),
         },
         sourceRef: `${ctx.tap}:reply:${ctx.rid}`
       })
+      if (prev) {
+        this.db.prepare(`UPDATE episodes SET retracted_at = ?, retract_reason = 'tool_round' WHERE seq = ?`).run(ts, prev.seq)
+      }
       if (pix.arts.length && this.onPixelArt) {
         const row = this.db.prepare('SELECT seq FROM episodes WHERE source_ref = ?').get(`${ctx.tap}:reply:${ctx.rid}`) as { seq: number } | undefined
         if (row) { try { this.onPixelArt(row.seq, pix.arts) } catch { /* 渲染失败不影响记录 */ } }
@@ -308,5 +354,6 @@ export class Recorder {
         sourceRef: c.id ? `${ctx.tap}:tool_call:${c.id}` : `${ctx.tap}:tool_call:${ctx.rid}:${i}`
       })
     })
+    return text || null
   }
 }
