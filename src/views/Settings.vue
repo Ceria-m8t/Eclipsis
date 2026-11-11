@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import ToolboxPanel from '../components/ToolboxPanel.vue'
 import StationsPanel from '../components/StationsPanel.vue'
+import DrawPanel from '../components/DrawPanel.vue'
 import { getSettings, saveSettings, apiUrl, apiHeaders } from '../settings'
 import { compressImage } from '../image'
 import { isViewportDebug, setViewportDebug } from '../viewport'
@@ -248,6 +249,10 @@ function pickBookFont(id: string) { bookFont.value = id; saveBookFont(id) }
         <!-- 中转站（2026-11-11 从 Leto 管理页搬过来）-->
         <div class="section-title">中转站</div>
         <StationsPanel />
+
+        <!-- 垫图和画风（2026-11-11）-->
+        <div class="section-title">垫图和画风</div>
+        <DrawPanel />
 
         <!-- MCP Servers -->
         <div class="section-title">他的工具箱</div>

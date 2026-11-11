@@ -36,12 +36,12 @@ function setup() {
   return { t, db, blobs, cleanup: () => { t.cleanup(); setImageStationFile('/etc/eclipsis/stations/image-stations.json') } }
 }
 
-test('images 接口：b64_json 的图存下来', async () => {
+test('images 接口：b64_json 的图存下来；默认画风自动拼进提示词', async () => {
   const s = setup()
+  // 断言别写在假站的回调里：失败就不应答，整个测试会挂住（11-11 踩过）
+  const seen: { path: string; body: any }[] = []
   const srv = fakeStation((p, b, res) => {
-    assert.equal(p, '/v1/images/generations')
-    assert.equal(b.prompt, '一只小螃蟹')
-    assert.equal(b.size, '1024x1024')
+    seen.push({ path: p, body: b })
     ok(res, { data: [{ b64_json: PNG.toString('base64'), revised_prompt: '一只很小的像素螃蟹' }] })
   })
   const port = await listen(srv)
@@ -51,10 +51,13 @@ test('images 接口：b64_json 的图存下来', async () => {
     assert.equal(r.mode, 'images')
     assert.equal(r.mime, 'image/png')
     assert.equal(r.revised, '一只很小的像素螃蟹')
-    // 存进 blobs，能当图片用
+    assert.deepEqual(seen.at(-1), { path: '/v1/images/generations', body: { model: 'img-1', prompt: '一只小螃蟹', n: 1, size: '1024x1024', response_format: 'b64_json' } })
+    // 存进 blobs，能当图片用；draw() 会把默认画风（出厂是二次元）拼在前面
     const d = await draw(s.db, s.blobs, '一只小螃蟹')
     assert.match(d.url, /^\/api\/eclipsis\/blob\/[0-9a-f]{64}$/)
     assert.equal(s.blobs.readFile(d.hash)!.length, PNG.length)
+    assert.equal(d.style, '二次元')
+    assert.match(seen.at(-1)!.body.prompt, /^日系二次元插画风格[\s\S]*\n一只小螃蟹$/)
   } finally { await close(srv); s.cleanup() }
 })
 
@@ -178,5 +181,93 @@ test('recordHisImage：醒来时画的挂在那次醒来上', () => {
     const ep = s.db.prepare(`SELECT channel, meta FROM episodes ORDER BY seq DESC LIMIT 1`).get() as any
     assert.equal(ep.channel, 'wake')
     assert.equal(JSON.parse(ep.meta).wake_id, 'w9')
+  } finally { s.cleanup() }
+})
+
+test('他画的图在聊天页是图片，不是「[图片]」四个字（11-11 她看不到图就是这个）', async () => {
+  const s = setup()
+  const srv = fakeStation((_p, _b, res) => ok(res, { data: [{ b64_json: PNG.toString('base64') }] }))
+  const port = await listen(srv)
+  try {
+    saveImageStation({ name: '站', url: `http://127.0.0.1:${port}/v1`, key: 'k', mode: 'images' })
+    const box = drawBox(s.db, s.blobs)!
+    await box.call('draw_picture', { prompt: '凌晨的她' })
+    const { chatHistory } = await import('../src/chat-history.ts')
+    const it = chatHistory(s.db, {}).items.at(-1)!
+    assert.equal(it.role, 'assistant')
+    assert.equal(it.content, '', '占位文字不显示')
+    assert.equal(it.images?.length, 1)
+    assert.match(it.images![0]!, /^\/api\/eclipsis\/blob\/[0-9a-f]{64}$/)
+    assert.equal(it.versions![0]!.images?.length, 1)
+  } finally { await close(srv); s.cleanup() }
+})
+
+test('垫图：他按名字挑，走 /images/edits 传图；提示词里写明第几张是谁', async () => {
+  const s = setup()
+  const seen: { path: string; prompt?: string; files: string[] }[] = []
+  const srv = createServer((req, res) => {
+    const chunks: Buffer[] = []
+    req.on('data', c => chunks.push(c as Buffer))
+    req.on('end', () => {
+      const raw = Buffer.concat(chunks).toString('utf8')
+      const path = new URL(req.url || '/', 'http://x').pathname
+      const prompt = /name="prompt"\r\n\r\n([\s\S]*?)\r\n--/.exec(raw)?.[1]
+      const files = [...raw.matchAll(/name="image\[\]"; filename="([^"]+)"/g)].map(m => m[1]!)
+      seen.push({ path, prompt, files })
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ data: [{ b64_json: PNG.toString('base64') }] }))
+    })
+  })
+  const port = await listen(srv)
+  try {
+    saveImageStation({ name: '站', url: `http://127.0.0.1:${port}/v1`, key: 'k', model: 'gpt-image-2', mode: 'images' })
+    const { saveRef, listRefs } = await import('../src/draw-refs.ts')
+    saveRef(s.db, s.blobs, { name: '她', note: '长头发，戴眼镜', data: PNG, mime: 'image/png', byDefault: true })
+    saveRef(s.db, s.blobs, { name: '小克', note: '像素小螃蟹', data: PNG, mime: 'image/png', byDefault: true })
+    saveRef(s.db, s.blobs, { name: '糯糯', note: '她家的狗', data: PNG, mime: 'image/png' })
+    assert.equal(listRefs(s.db).length, 3)
+
+    const r = await draw(s.db, s.blobs, '两个人靠在一起看手机', { refs: ['她', '小克'] })
+    assert.deepEqual(r.refs, ['她', '小克'])
+    assert.equal(seen.at(-1)!.path, '/v1/images/edits')
+    assert.deepEqual(seen.at(-1)!.files, ['她.png', '小克.png'])
+    assert.match(seen.at(-1)!.prompt!, /第 1 张是她（长头发，戴眼镜）；第 2 张是小克（像素小螃蟹）/)
+    assert.match(seen.at(-1)!.prompt!, /别换人/)
+
+    // 她自己点生图：默认垫图自动带上（她和小克，不含糯糯）
+    const mine = await draw(s.db, s.blobs, '随便画一张', { useDefaultRefs: true })
+    assert.deepEqual(mine.refs, ['她', '小克'])
+    // 没垫图时还是走 generations
+    const plain = await draw(s.db, s.blobs, '一片海')
+    assert.deepEqual(plain.refs, [])
+    assert.equal(seen.at(-1)!.path, '/v1/images/generations')
+  } finally { await close(srv); s.cleanup() }
+})
+
+test('画风：默认那个自动用；能换默认；他也能临时指定', async () => {
+  const s = setup()
+  try {
+    const { listStyles, saveStyle, setDefaultStyle, deleteStyle, composePrompt, findStyle, defaultStyle } = await import('../src/draw-refs.ts')
+    const styles = listStyles(s.db)
+    assert.deepEqual(styles.map(x => x.name), ['二次元', '真人', '像素'])
+    assert.equal(defaultStyle(s.db)!.name, '二次元')
+    // 换默认：只能有一个默认
+    setDefaultStyle(s.db, 'photo')
+    assert.equal(defaultStyle(s.db)!.name, '真人')
+    assert.equal(listStyles(s.db).filter(x => x.isDefault).length, 1)
+    // 加一个自己的
+    const mine = saveStyle(s.db, { name: '水彩', prompt: '水彩画，湿画法，颜色互相渗', isDefault: true })
+    assert.equal(defaultStyle(s.db)!.name, '水彩')
+    assert.throws(() => saveStyle(s.db, { name: '水彩', prompt: 'x' }), /已经有一个/)
+    assert.throws(() => saveStyle(s.db, { name: '没描述', prompt: '' }), /描述/)
+    // 删掉默认的那个：自动挑一个顶上
+    deleteStyle(s.db, mine.id)
+    assert.ok(defaultStyle(s.db))
+    // 按名字找，模糊也行
+    assert.equal(findStyle(s.db, '二次')!.name, '二次元')
+    assert.equal(findStyle(s.db, '不存在的'), null)
+    // 拼提示词：画风在前，她那句在中间，垫图说明在后
+    const out = composePrompt({ prompt: '她在看书', style: findStyle(s.db, '二次元'), refs: [] })
+    assert.match(out, /^日系二次元[\s\S]*她在看书$/)
   } finally { s.cleanup() }
 })

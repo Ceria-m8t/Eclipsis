@@ -28,6 +28,8 @@ export interface MessageVersion {
   srvSeqs?: number[]    // 后端来的：这个版本对应的经历（删版本时用）
   /** 他在这条回复最后写的「这一刻」（后端已经拆出来；锁着的没有原文） */
   moment?: { locked: boolean; text: string }
+  /** 他用画笔画的图 */
+  images?: string[]
 }
 
 export interface ChatMessage {

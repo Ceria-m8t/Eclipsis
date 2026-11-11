@@ -40,15 +40,3 @@ export const deleteImageStation = (id: string) => post('/delete?kind=image', { i
 export const imageStationModels = (id: string): Promise<{ models: string[]; error?: string }> => post('/models?kind=image', { id })
 export const testImageStation = (id: string): Promise<{ ok: boolean; mode?: DrawMode; ms?: number; bytes?: number; error?: string }> =>
   post('/test?kind=image', { id })
-
-// ── 她自己生图 ──
-export interface DrawReady { ready: boolean; station: string | null; model: string | null; size: string | null }
-export const drawReady = (): Promise<DrawReady> => fetch('/api/eclipsis/draw', { cache: 'no-store' }).then(r => r.json())
-export async function drawImage(prompt: string, size?: string): Promise<{ hash: string; url: string; mode: string; station: string }> {
-  const r = await fetch('/api/eclipsis/draw', {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt, size }),
-  })
-  const d = await r.json().catch(() => ({}))
-  if (!r.ok) throw new Error((d as any).error || `画不出来（HTTP ${r.status}）`)
-  return d
-}

@@ -10,6 +10,7 @@ import type { DB } from './db.ts'
 import type { BlobStore } from './blobs.ts'
 import { addEpisode } from './db.ts'
 import { currentImageStation, type DrawMode, type ImageStation } from './image-station.ts'
+import { composePrompt, defaultRefs, defaultStyle, findRefsByName, findStyle, listRefs, listStyles, type DrawRef } from './draw-refs.ts'
 
 export interface DrawResult { data: Buffer; mime: string; mode: DrawMode; revised?: string }
 
@@ -101,11 +102,36 @@ async function post(url: string, key: string, body: unknown): Promise<any> {
   try { return JSON.parse(text) } catch { throw new Error('站回的不是 JSON：' + text.slice(0, 160)) }
 }
 
-/** 用某个站画一张 */
-export async function drawWith(st: ImageStation, prompt: string, opts: { size?: string } = {}): Promise<DrawResult> {
+export interface RefImage { name: string; mime: string; data: Buffer }
+
+/** 用某个站画一张。带垫图时：images 走 /images/edits，chat 把垫图当图片消息一起发 */
+export async function drawWith(st: ImageStation, prompt: string, opts: { size?: string; refs?: RefImage[] } = {}): Promise<DrawResult> {
   const base = st.url.replace(/\/+$/, '')
   const size = (opts.size || st.size || '').trim()
+  const refs = opts.refs ?? []
   const tryImages = async (): Promise<DrawResult> => {
+    if (refs.length) {
+      // 垫图：multipart 传给 /images/edits（gpt-image 那套就是这样改图/合成）
+      const form = new FormData()
+      if (st.model) form.append('model', st.model)
+      form.append('prompt', prompt)
+      form.append('n', '1')
+      if (size) form.append('size', size)
+      for (const r of refs) form.append('image[]', new Blob([new Uint8Array(r.data)], { type: r.mime }), `${r.name || 'ref'}.png`)
+      const rr = await fetch(`${base}/images/edits`, {
+        method: 'POST',
+        headers: { accept: 'application/json', ...(st.key ? { authorization: `Bearer ${st.key}` } : {}) },
+        body: form,
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      })
+      const text = await rr.text()
+      if (!rr.ok) throw new Error(`/images/edits 回了 HTTP ${rr.status}${text ? '：' + text.slice(0, 200) : ''}`)
+      let j: any
+      try { j = JSON.parse(text) } catch { throw new Error('/images/edits 回的不是 JSON：' + text.slice(0, 160)) }
+      const got = await digImage(j)
+      if (!got) throw new Error('/images/edits 回了结果但里面没有图')
+      return { ...got, mode: 'images', revised: j?.data?.[0]?.revised_prompt }
+    }
     const j = await post(`${base}/images/generations`, st.key, {
       model: st.model || undefined, prompt, n: 1,
       ...(size ? { size } : {}), response_format: 'b64_json',
@@ -116,9 +142,16 @@ export async function drawWith(st: ImageStation, prompt: string, opts: { size?: 
   }
   const tryChat = async (): Promise<DrawResult> => {
     if (!st.model) throw new Error('走聊天接口画图要填模型名')
+    const text = size ? `${prompt}\n（画成 ${size}）` : prompt
+    const content: any[] = refs.length
+      ? [
+        ...refs.map(r => ({ type: 'image_url', image_url: { url: `data:${r.mime};base64,${r.data.toString('base64')}` } })),
+        { type: 'text', text },
+      ]
+      : [{ type: 'text', text }]
     const j = await post(`${base}/chat/completions`, st.key, {
       model: st.model, stream: false,
-      messages: [{ role: 'user', content: size ? `${prompt}\n（画成 ${size}）` : prompt }],
+      messages: [{ role: 'user', content: refs.length ? content : text }],
     })
     const got = await digImage(j)
     if (!got) throw new Error('这个模型没返图（回复里只有文字）')
@@ -133,26 +166,61 @@ export async function drawWith(st: ImageStation, prompt: string, opts: { size?: 
   }
 }
 
-export interface DrawnImage { hash: string; url: string; mime: string; bytes: number; mode: DrawMode; station: string }
+export interface DrawnImage {
+  hash: string; url: string; mime: string; bytes: number; mode: DrawMode; station: string
+  style: string | null; refs: string[]; prompt: string
+}
 
-/** 画一张并存下来。没配画图的站就抛 */
-export async function draw(_db: DB, blobs: BlobStore, prompt: string, opts: { size?: string } = {}): Promise<DrawnImage> {
+/**
+ * 画一张并存下来。
+ * refs 不给 = 她自己点生图时带「默认垫图」，他画图时不带（他自己挑）；给了就按名字找。
+ * style 不给 = 用默认画风（她设一次，以后谁都不用写风格）。
+ */
+export async function draw(db: DB, blobs: BlobStore, prompt: string, opts: {
+  size?: string; refs?: string[]; style?: string; useDefaultRefs?: boolean
+} = {}): Promise<DrawnImage> {
   const st = currentImageStation()
   if (!st) throw new Error('还没配画图的站（设置页 → 画图的站）')
   const text = prompt.trim()
   if (!text) throw new Error('要写画什么')
-  const r = await drawWith(st, text, opts)
+  const style = opts.style ? (findStyle(db, opts.style) ?? defaultStyle(db)) : defaultStyle(db)
+  const picked: DrawRef[] = opts.refs?.length
+    ? findRefsByName(db, opts.refs)
+    : (opts.useDefaultRefs ? defaultRefs(db) : [])
+  const full = composePrompt({ prompt: text, style, refs: picked })
+  const refImages: RefImage[] = []
+  for (const r of picked) {
+    const data = blobs.readFile(r.hash)
+    if (data) refImages.push({ name: r.name, mime: r.mime, data })
+  }
+  const r = await drawWith(st, full, { size: opts.size, refs: refImages })
   const hash = blobs.putFile(r.mime, r.data)
-  return { hash, url: `/api/eclipsis/blob/${hash}`, mime: r.mime, bytes: r.data.length, mode: r.mode, station: st.name }
+  return {
+    hash, url: `/api/eclipsis/blob/${hash}`, mime: r.mime, bytes: r.data.length, mode: r.mode, station: st.name,
+    style: style?.name ?? null, refs: picked.map(x => x.name), prompt: full,
+  }
+}
+
+/** 他的画笔说明里要写清楚现在有哪些垫图和画风 */
+export function drawMenu(db: DB): { refs: { name: string; note: string }[]; styles: string[]; defaultStyle: string | null } {
+  return {
+    refs: listRefs(db).filter(r => r.enabled).map(r => ({ name: r.name, note: r.note })),
+    styles: listStyles(db).map(s => s.name),
+    defaultStyle: defaultStyle(db)?.name ?? null,
+  }
 }
 
 /** 他画完直接发给她：记一条他的消息（聊天页按图片显示） */
-export function recordHisImage(db: DB, hash: string, opts: { prompt: string; wakeId?: string } = { prompt: '' }): void {
+export function recordHisImage(db: DB, hash: string, opts: { prompt: string; wakeId?: string; refs?: string[]; style?: string | null } = { prompt: '' }): void {
   addEpisode(db, {
     ts: new Date().toISOString(),
     channel: opts.wakeId ? 'wake' : 'chat', scope: 'daily', actor: 'ai', kind: 'message',
     content: '[图片]',
-    meta: { images: [hash], drawn: true, prompt: opts.prompt.slice(0, 500), ...(opts.wakeId ? { wake_id: opts.wakeId } : {}) },
+    meta: {
+      images: [hash], drawn: true, prompt: opts.prompt.slice(0, 500),
+      ...(opts.refs?.length ? { refs: opts.refs } : {}), ...(opts.style ? { style: opts.style } : {}),
+      ...(opts.wakeId ? { wake_id: opts.wakeId } : {}),
+    },
     sourceRef: `draw:${hash}:${Date.now().toString(36)}`,
   })
 }

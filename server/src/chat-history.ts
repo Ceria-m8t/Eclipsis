@@ -15,7 +15,11 @@ import { activeChoices, setActiveVersion } from './versions.ts'
 import { FILE_MARK, findFiles } from './files.ts'
 
 export interface ChatTool { id: string; name: string; args: string; result?: string }
-export interface ChatVersion { moment?: Moment; seq: number; seqs: number[]; ts: string; content: string; thinking: string; tools: ChatTool[]; partial?: boolean }
+export interface ChatVersion {
+  moment?: Moment; seq: number; seqs: number[]; ts: string; content: string; thinking: string; tools: ChatTool[]; partial?: boolean
+  /** 他画的图（画笔画完直接发给她） */
+  images?: string[]
+}
 export interface ChatItem {
   id: string            // e<第一条的 seq>
   seq: number           // 这一项最后一条经历的 seq（翻页、轮询用）
@@ -185,9 +189,13 @@ export function buildItems(db: DB, rows: Row[]): ChatItem[] {
     const mo = splitMoment(split.body.replace(HEART_RE, '').trim())
     const body = mo.text
     const moment: Moment | undefined = mo.moment ? (mo.moment.locked ? { locked: true, text: '' } : mo.moment) : undefined
+    // 他画的图（画笔）也在 meta.images 里
+    const hisImgs: string[] = Array.isArray(meta.images) ? meta.images.filter((h: unknown) => typeof h === 'string' && /^[0-9a-f]{64}$/.test(h)) : []
     const seqs = [...toolSeqs, r.seq]
     const v: ChatVersion = {
-      seq: r.seq, seqs, ts: r.ts, content: body, thinking: think || thinkOf.get(meta.rid) || '', tools, moment,
+      seq: r.seq, seqs, ts: r.ts, content: hisImgs.length ? body.replace(/^\[图片\]$/, '') : body,
+      thinking: think || thinkOf.get(meta.rid) || '', tools, moment,
+      images: hisImgs.length ? hisImgs.map(h => `/api/eclipsis/blob/${h}`) : undefined,
       partial: meta.partial || undefined
     }
     tools = []; toolSeqs = []
@@ -204,7 +212,7 @@ export function buildItems(db: DB, rows: Row[]): ChatItem[] {
     }
     const it: ChatItem = {
       id: 'e' + r.seq, seq: r.seq, seqs, role: 'assistant', ts: r.ts, turn,
-      content: body, versions: [v], source: sourceOf(r.source_ref)
+      content: v.content, versions: [v], images: v.images, source: sourceOf(r.source_ref)
     }
     if (isNoReply(body)) it.noReply = true
     items.push(it)

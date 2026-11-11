@@ -23,7 +23,7 @@ import {
 } from '../chat-store'
 import { splitMoment, parseMoment, type MomentView } from '../moment'
 import { uploadFile, splitFiles, loadFileText, FILE_ACCEPT, humanSize, fileUrl, fileBadge, type UploadedFile, type FileText } from '../files'
-import { drawImage } from '../stations'
+import { drawImage } from '../draw'
 
 const settings = ref(getSettings())
 
@@ -416,7 +416,8 @@ async function doDraw() {
       const fr = new FileReader(); fr.onload = () => res(String(fr.result)); fr.onerror = () => rej(new Error('读不出来')); fr.readAsDataURL(b)
     }))
     pendingImages.value.push(data)
-    toast(`画好了（${r.station}），在输入栏上面`)
+    const how = [r.style ? `画风${r.style}` : '', r.refs.length ? `照着${r.refs.join('、')}` : ''].filter(Boolean).join('，')
+    toast(`画好了（${r.station}${how ? '，' + how : ''}），在输入栏上面`)
   } catch (e: any) {
     toast(e?.message || '画不出来')
   } finally { drawing.value = false }

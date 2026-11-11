@@ -21,6 +21,7 @@ import { handleModelsApi } from './models.ts'
 import { attachFiles, handleFileApi, ensureFileSchema } from './files.ts'
 import { handleStationsApi } from './stations-api.ts'
 import { handleDrawApi } from './draw-api.ts'
+import { ensureDrawSchema } from './draw-refs.ts'
 import { dropSupersededVersions } from './versions.ts'
 import { handleLlmRelay } from './llm-relay.ts'
 import { initStations, bindStationToConfig } from './station.ts'
@@ -67,6 +68,7 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
   ensurePromptSchema(db)
   const blobs = new BlobStore(db, cfg.blobDir)
   ensureFileSchema(db)
+  ensureDrawSchema(db)        // 垫图和画风（出厂带三个画风）
   setToolboxBlobs(blobs)      // 他的画笔要用它存图
   const recorder = new Recorder(db, blobs, { onEricaMessage: opts.onEricaMessage, onTurnComplete: opts.onTurnComplete })
 
