@@ -53,7 +53,7 @@ export function drawBox(db: DB, blobs: BlobStore, opts: { wakeId?: () => string 
           size: a.size ? String(a.size) : undefined,
           refs, style: a.style ? String(a.style) : undefined,
         })
-        recordHisImage(db, r.hash, { prompt, wakeId: opts.wakeId?.(), refs: r.refs, style: r.style })
+        recordHisImage(db, r.hash, { prompt, wakeId: opts.wakeId?.(), refs: r.refs, style: r.style, small: r.small })
         const used = [r.style ? `画风「${r.style}」` : '', r.refs.length ? `照着${r.refs.join('、')}` : ''].filter(Boolean).join('，')
         return ok(`画好了，已经发给她了（${Math.round(r.bytes / 1024)}KB${used ? '，' + used : ''}）。她现在就能在聊天里看到这张图。`)
       } catch (e: any) {

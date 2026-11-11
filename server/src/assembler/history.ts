@@ -56,7 +56,7 @@ function nextHer(rows: HistRow[], from: number): number {
 
 export function loadRecent(db: DB, limit = MAX_TODAY + TARGET, beforeSeq?: number): HistRow[] {
   const rows = db.prepare(`SELECT seq, ts, actor, content, json_extract(meta, '$.partial') AS partial,
-      json_extract(meta, '$.images') AS images FROM episodes
+      COALESCE(json_extract(meta, '$.images_small'), json_extract(meta, '$.images')) AS images FROM episodes
     WHERE channel = 'chat' AND scope = 'daily' AND kind = 'message' AND actor IN ('erica', 'ai') AND retracted_at IS NULL
       AND (? IS NULL OR seq < ?)
     ORDER BY seq DESC LIMIT ?`).all(beforeSeq ?? null, beforeSeq ?? null, limit) as unknown as HistRow[]
@@ -114,19 +114,27 @@ export function toMessages(a: Assembled, now = Date.now(), opts: { images?: Imag
       if (a.rows[i]!.images?.length) withImages.add(i)
     }
   }
-  let imgBytes = 0
-  const maxBytes = opts.maxBytes ?? IMAGES_MAX_BYTES
-  const loadParts = (hashes: string[]) => {
-    const parts: any[] = []
-    for (const h of hashes) {
-      const got = opts.images?.(h)
-      if (!got) continue
-      if (imgBytes + got.data.length > maxBytes) break
-      imgBytes += got.data.length
-      parts.push({ type: 'image_url', image_url: { url: `data:${got.mime};base64,${got.data.toString('base64')}` } })
+  // 预算从新到旧分配：最新那张一定要进去（11-11 反过来了，画她那张被旧图挤掉，他说「第二张没看到」）
+  const fit = new Map<string, { mime: string; data: Buffer }>()
+  if (opts.images) {
+    const maxBytes = opts.maxBytes ?? IMAGES_MAX_BYTES
+    let used = 0
+    const idx = [...withImages].sort((a, b) => b - a)       // 新的先挑
+    for (const i of idx) {
+      for (const h of a.rows[i]!.images!) {
+        if (fit.has(h)) continue
+        const got = opts.images(h)
+        if (!got) continue
+        if (used + got.data.length > maxBytes) continue
+        used += got.data.length
+        fit.set(h, got)
+      }
     }
-    return parts
   }
+  const loadParts = (hashes: string[]) => hashes.flatMap(h => {
+    const got = fit.get(h)
+    return got ? [{ type: 'image_url', image_url: { url: `data:${got.mime};base64,${got.data.toString('base64')}` } }] : []
+  })
   for (const d of a.days) {
     const k = dayKey(Date.parse(a.rows[d.at]!.ts))
     const rel = k === todayKey ? '（今天）' : k === yKey ? '（昨天）' : ''

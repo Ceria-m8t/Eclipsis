@@ -10,6 +10,7 @@ import type { DB } from './db.ts'
 import type { BlobStore } from './blobs.ts'
 import { addEpisode } from './db.ts'
 import { currentImageStation, type DrawMode, type ImageStation } from './image-station.ts'
+import { shrinkForModel } from './image-shrink.ts'
 import {
   composePrompt, defaultRefs, defaultStyle, findRefsByName, findStyle, listRefs, listStyles,
   MAX_PHOTOS_PER_REF, MAX_PHOTOS_TOTAL, type DrawRef,
@@ -170,7 +171,10 @@ export async function drawWith(st: ImageStation, prompt: string, opts: { size?: 
 }
 
 export interface DrawnImage {
-  hash: string; url: string; mime: string; bytes: number; mode: DrawMode; station: string
+  hash: string
+  /** 给模型看的小图（没缩成功就没有） */
+  small?: string
+  url: string; mime: string; bytes: number; mode: DrawMode; station: string
   style: string | null; refs: string[]; prompt: string
   /** 这次真传了几张垫图 */
   photos: number
@@ -209,8 +213,12 @@ export async function draw(db: DB, blobs: BlobStore, prompt: string, opts: {
   const full = composePrompt({ prompt: text, style, refs: used })
   const r = await drawWith(st, full, { size: opts.size, refs: refImages })
   const hash = blobs.putFile(r.mime, r.data)
+  // 另存一份小图给模型看（他画的 PNG 两三 MB，历史里每轮重传太重）
+  let small: string | undefined
+  const shrunk = await shrinkForModel(r.data)
+  if (shrunk) small = blobs.putFile(shrunk.mime, shrunk.data)
   return {
-    hash, url: `/api/eclipsis/blob/${hash}`, mime: r.mime, bytes: r.data.length, mode: r.mode, station: st.name,
+    hash, small, url: `/api/eclipsis/blob/${hash}`, mime: r.mime, bytes: r.data.length, mode: r.mode, station: st.name,
     style: style?.name ?? null, refs: used.map(x => x.name), prompt: full,
     photos: refImages.length,
   }
@@ -226,13 +234,13 @@ export function drawMenu(db: DB): { refs: { name: string; note: string; photos: 
 }
 
 /** 他画完直接发给她：记一条他的消息（聊天页按图片显示） */
-export function recordHisImage(db: DB, hash: string, opts: { prompt: string; wakeId?: string; refs?: string[]; style?: string | null } = { prompt: '' }): void {
+export function recordHisImage(db: DB, hash: string, opts: { prompt: string; wakeId?: string; refs?: string[]; style?: string | null; small?: string } = { prompt: '' }): void {
   addEpisode(db, {
     ts: new Date().toISOString(),
     channel: opts.wakeId ? 'wake' : 'chat', scope: 'daily', actor: 'ai', kind: 'message',
     content: '[图片]',
     meta: {
-      images: [hash], drawn: true, prompt: opts.prompt.slice(0, 500),
+      images: [hash], ...(opts.small ? { images_small: [opts.small] } : {}), drawn: true, prompt: opts.prompt.slice(0, 500),
       ...(opts.refs?.length ? { refs: opts.refs } : {}), ...(opts.style ? { style: opts.style } : {}),
       ...(opts.wakeId ? { wake_id: opts.wakeId } : {}),
     },

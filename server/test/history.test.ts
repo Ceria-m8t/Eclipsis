@@ -227,3 +227,38 @@ test('历史里最近几条带图的还原成真图：她的照片挂在她那�
   // 不给 resolver 就全是文字（老行为）
   assert.ok(toMessages(selectHistory(loadRecent(db), now), now).every(m => typeof m.content === 'string'))
 })
+
+test('图的预算从新到旧分配：装不下时丢旧的，最新那张一定进去', () => {
+  const db = openDb(':memory:')
+  const now = Date.parse('2026-11-11T06:00:00Z')
+  const h = (n: number) => String(n).repeat(64).slice(0, 64)
+  const put = (min: number, images: string[]) =>
+    addEpisode(db, {
+      ts: new Date(now - min * 60_000).toISOString(), channel: 'chat', scope: 'daily', actor: 'ai', kind: 'message',
+      content: '[图片]', meta: { images, drawn: true }, sourceRef: 'd' + min,
+    })
+  put(30, [h(1)])      // 旧的那张（大）
+  put(10, [h(2)])      // 新的那张（大）
+  const big = (n: number) => ({ mime: 'image/png', data: Buffer.alloc(3 * 1024 * 1024, n) })
+  const store = new Map([[h(1), big(1)], [h(2), big(2)]])
+  const msgs = toMessages(selectHistory(loadRecent(db), now), now, { images: x => store.get(x) ?? null, maxBytes: 4 * 1024 * 1024 })
+  const imgs = msgs.filter(m => Array.isArray(m.content) && m.content.some((p: any) => p.type === 'image_url'))
+  assert.equal(imgs.length, 1, '只装得下一张')
+  // 装进去的是新那张（内容是 2 填充的）
+  const b64 = imgs[0]!.content.find((p: any) => p.type === 'image_url').image_url.url.split(',')[1]
+  assert.equal(Buffer.from(b64, 'base64')[0], 2)
+})
+
+test('他画的图：历史里给模型看小图（meta.images_small），她在聊天页看的还是原图', () => {
+  const db = openDb(':memory:')
+  const now = Date.parse('2026-11-11T06:00:00Z')
+  const full = 'a'.repeat(64), small = 'b'.repeat(64)
+  addEpisode(db, {
+    ts: new Date(now - 60_000).toISOString(), channel: 'chat', scope: 'daily', actor: 'ai', kind: 'message',
+    content: '[图片]', meta: { images: [full], images_small: [small], drawn: true }, sourceRef: 'd1',
+  })
+  assert.deepEqual(loadRecent(db)[0]!.images, [small])
+  const msgs = toMessages(selectHistory(loadRecent(db), now), now, { images: x => (x === small ? { mime: 'image/jpeg', data: Buffer.from('SMALL') } : null) })
+  const note = msgs.find(m => Array.isArray(m.content) && m.content.some((p: any) => p.type === 'image_url'))!
+  assert.match(note.content[1].image_url.url, /^data:image\/jpeg;base64,/)
+})
