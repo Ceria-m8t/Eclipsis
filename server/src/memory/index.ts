@@ -4,7 +4,7 @@ export { classify, guessSubject, dupGroups, overlap, synthCard, PEOPLE_SEEDS } f
 export { readObCards, emptyDirs, parseCard, OB_BUCKETS } from './ob-cards.ts'
 export { migrateOb, formatReport, planMigration, type MigrateReport } from './migrate-ob.ts'
 export {
-  writeMemory, findSimilar, normalizeSubject, listInbox, decideCandidate, inboxCount,
+  writeMemory, findSimilar, findSimilarTitle, normalizeSubject, listInbox, decideCandidate, inboxCount,
   labelOf, labelWithPeople, AMEND_AT, UNSURE_AT,
   type MemoryDraft, type WriteOutcome, type Candidate,
 } from './write.ts'

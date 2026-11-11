@@ -19,6 +19,12 @@ import { classify, guessSubject, overlap, synthCard } from './classify.ts'
 
 export const AMEND_AT = 0.70     // 这个以上算同一件事：接到已有那条上
 export const UNSURE_AT = 0.55    // 这两条之间算「像但不一样」：进信箱
+/**
+ * 标题这一关（2026-11-12 第一次真跑之后加的）：夜里整理写的「通宵一整夜给他装感官」
+ * 和 OB 搬来的「她通宵一整夜给我装感官」是同一夜，正文写法不同所以 2-gram 只有 40% 多，
+ * **但标题重合 78%**。同一件事换个说法讲一遍，看标题比看正文准。
+ */
+export const TITLE_UNSURE_AT = 0.70
 
 export interface MemoryDraft {
   title: string
@@ -85,6 +91,20 @@ export function findSimilar(db: DB, text: string, opts: { exclude?: number } = {
   return best && best.overlap >= UNSURE_AT ? best : null
 }
 
+/** 标题这一关：同一件事换个说法讲一遍，正文抓不到、标题抓得到 */
+export function findSimilarTitle(db: DB, title: string, opts: { exclude?: number } = {}): { row: MemoryRow; overlap: number } | null {
+  const t = String(title || '').trim()
+  if (t.replace(/\s/g, '').length < 5) return null
+  const rows = db.prepare(`SELECT * FROM memories WHERE retracted_at IS NULL AND title != ''${opts.exclude ? ' AND id != ?' : ''}`)
+  const all = (opts.exclude ? rows.all(opts.exclude) : rows.all()) as unknown as MemoryRow[]
+  let best: { row: MemoryRow; overlap: number } | null = null
+  for (const row of all) {
+    const o = overlap(t, row.title)
+    if (!best || o > best.overlap) best = { row, overlap: o }
+  }
+  return best && best.overlap >= TITLE_UNSURE_AT ? best : null
+}
+
 const MIN_WHY = 4
 const MIN_FACT = 10
 
@@ -146,7 +166,11 @@ export function writeMemory(db: DB, draft: MemoryDraft, now: Date = new Date(), 
   // 4. 两头沾
   const bothLayers = c.signals.strongFact && c.signals.state
 
+  // 正文不像、标题很像：同一件事换了说法，不自己合并，交给她看一眼
+  const sameTitle = similar ? null : findSimilarTitle(db, title)
+
   const unsure: string[] = []
+  if (sameTitle) unsure.push(`标题和已有的「${sameTitle.row.title}」像${Math.round(sameTitle.overlap * 100)}%，可能是同一件事换了说法`)
   if (mixed) unsure.push(`一条里混着${[subject, ...guessed.mixedWith].map(labelOf).join(' 和 ')}的事`)
   if (!evidence.length) unsure.push('没有原话对得上（指不回具体哪几句）')
   if (similar) unsure.push(`和已有的「${similar.row.title}」像${Math.round(similar.overlap * 100)}%，但不一样`)
@@ -167,10 +191,10 @@ export function writeMemory(db: DB, draft: MemoryDraft, now: Date = new Date(), 
       (origin, status, payload, unsure, evidence, thread, similar_to, overlap, created_at)
       VALUES (?, 'inbox', ?, ?, ?, ?, ?, ?, ?)`)
       .run(draft.origin, JSON.stringify(payload), unsure.join('；'), JSON.stringify(evidence),
-        draft.thread ?? null, similar?.row.id ?? null, similar?.overlap ?? null, ts)
+        draft.thread ?? null, (similar ?? sameTitle)?.row.id ?? null, (similar ?? sameTitle)?.overlap ?? null, ts)
     return {
       kind: 'inboxed', candidateId: Number(r.lastInsertRowid), unsure: unsure.join('；'),
-      similarTo: similar?.row.id, overlap: similar?.overlap,
+      similarTo: (similar ?? sameTitle)?.row.id, overlap: (similar ?? sameTitle)?.overlap,
     }
   }
 

@@ -150,6 +150,28 @@ describe('四条「明确」：满足就直接进库', () => {
     assert.match(row.fact_body, /又记了一次/)
   })
 
+  it('正文不像、标题很像 → 进信箱（11-12 第一次真跑踩到的：同一夜记了两遍）', () => {
+    const db = freshDb()
+    // 库里已有一条（模拟从 OB 搬来的那张）
+    db.prepare(`INSERT INTO memories (layer, subject, title, fact_body, why, tags, grade, source, created_at, updated_at)
+      VALUES ('bond', 'erica', '她通宵一整夜给我装感官', '11月10日晚到11月11日早。她从十点醒来之后一直没睡，通宵十二个小时搓前端功能。', '要紧', '[]', 'normal', 'hold', '2026-11-11', '2026-11-11')`).run()
+    const r = writeMemory(db, draft({
+      layer: 'bond', title: '通宵一整夜给他装感官',
+      fact: '她从晚上十点醒来后连续十二个多小时没睡，一直在和分身搓新功能：文件、生图、垫图、像素画板。',
+      feeling: '他反复叫她睡，语气是心疼裹着骄傲。',
+    }))
+    assert.equal(r.kind, 'inboxed')
+    assert.match((r as any).unsure, /同一件事换了说法/)
+  })
+
+  it('标题太短不拿去比（「今天」这种比不出东西）', () => {
+    const db = freshDb()
+    db.prepare(`INSERT INTO memories (layer, subject, title, fact_body, why, tags, grade, source, created_at, updated_at)
+      VALUES ('state', 'erica', '今天', '她今天醒得很晚。', '要紧', '[]', 'normal', 'hold', '2026-11-11', '2026-11-11')`).run()
+    const r = writeMemory(db, draft({ layer: 'state', title: '昨天', fact: '她昨天去复诊了，医生说恢复得不错，让她两周后再去。', feeling: '她松了口气。' }))
+    assert.equal(r.kind, 'written')
+  })
+
   it('查重只在活着的记忆里找（划掉的不算）', () => {
     const db = freshDb()
     const r = writeMemory(db, draft()) as any
@@ -298,6 +320,55 @@ describe('夜里整理：程序判时机', () => {
     const r = parseDigestReply('```json\n{"thread":"她累了","items":[{"decision":"new","title":"x"}]}\n```')
     assert.equal(r.thread, '她累了')
     assert.equal(r.items.length, 1)
+  })
+
+  it('JSON 写坏了也要救回来（11-12 第一次真跑就栽在这儿）', () => {
+    // 它在 JSON 字符串里塞了没转义的弯引号 + 末尾多一个逗号
+    const broken = '{"thread":"她说累","items":[{"decision":"new","layer":"bond","subject":"erica",' +
+      '"title":"她这几天很累","fact":"她说“今天好累”，说了好几次。","feeling":"心疼。","why":"要留意她的状态","evidence":[12],}]}'
+    const r = parseDigestReply(broken)
+    assert.equal(r.thread, '她说累')
+    assert.equal(r.items.length, 1)
+    assert.match(String(r.items[0].fact), /今天好累/)
+    assert.deepEqual(r.items[0].evidence, [12])
+  })
+
+  it('修也修不动时，一条一条抠出来（宁可少拿几条，不要整段丢）', () => {
+    const hopeless = '{"thread":"她说累","items":[' +
+      '{"decision":"new","layer":"bond","subject":"erica","title":"她很累","fact":"她说今天好累，说了好几次。","feeling":"心疼。","why":"要留意","evidence":[12]} ' +
+      '{"decision":"skip","fact":"不用记的一条"}]}'
+    const r = parseDigestReply(hopeless)
+    assert.equal(r.items.length, 2)
+    assert.equal(r.items[0].subject, 'erica')
+    assert.equal(r.items[1].decision, 'skip')
+  })
+
+  it('一条都抠不出来就报错（不会假装整理成功）', () => {
+    assert.throws(() => parseDigestReply('{ 这不是 JSON }'), /修不动|没返回/)
+  })
+
+  it('第一次写坏了会再要一次，第二次好了就算成功', async () => {
+    const db = freshDb()
+    chat(db, 6, 60)
+    const seq = findDigestWindow(db).episodes[0].seq
+    let n = 0
+    const call = async () => {
+      n++
+      if (n === 1) return '{ 完全不是 JSON'
+      return JSON.stringify({ thread: 't', items: [{ decision: 'new', layer: 'bond', subject: 'erica', title: '她很累', fact: '她说今天好累，说了好几次，我让她先睡。', feeling: '心疼。', why: '连着说累，要留意她的状态', evidence: [seq] }] })
+    }
+    const r = await runDigest(db, { upstreamUrl: '', upstreamKey: '' }, call, 'm')
+    assert.equal(n, 2, '坏了要再要一次')
+    assert.equal(r.wrote, 1)
+  })
+
+  it('两次都写坏：记下错误和回复开头，方便查是哪种坏法', async () => {
+    const db = freshDb()
+    chat(db, 6, 60)
+    const r = await runDigest(db, { upstreamUrl: '', upstreamKey: '' }, async () => '抱歉，我无法完成这个请求。', 'm')
+    assert.equal(r.ran, false)
+    const run = db.prepare('SELECT error FROM memory_digest_runs ORDER BY id DESC LIMIT 1').get() as any
+    assert.match(run.error, /回复开头：抱歉/)
   })
 
   it('整理一次：进库 / 信箱 / 跳过都算得清，且推进了 to_seq', async () => {

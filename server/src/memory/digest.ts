@@ -134,7 +134,7 @@ export const DIGEST_SYSTEM = [
   '1. 归线：给这一段起一个话题线的名字（一句话，不超过 12 个字）。',
   '2. 决定：对每一件值得留下的事判 new（新建）/ append（接到已有的那条上）/ skip（不用记）/ hold（拿不准，先给她过目）。',
   '   **skip 是正常结果，不是失败。** 整段都不值得记就返回空的 items。',
-  '3. 写：只写现场和原话，不写结论。写「她说"…"」，不写「用户表示…」。',
+  '3. 写：只写现场和原话，不写结论。写「她说……」，不写「用户表示……」。',
   '',
   '硬规矩：',
   '- 不许编。只有这段对话里真的出现过的事才能写；没出现的一个字都不要加。',
@@ -146,7 +146,7 @@ export const DIGEST_SYSTEM = [
   '- layer：fact=一直有效的事实（她是谁、不吃什么、用药、约定）；state=这几天的近况；bond=你们之间有重量的瞬间。',
   '- 宁少勿多：一次最多 3 条。起居琐事（几点醒、吃了什么药）只在它说明长期规律时才记。',
   '',
-  '只输出 JSON，不要任何别的字：',
+  '只输出 JSON，不要任何别的字。**正文里引用她的话用「」，不要用英文引号**（会把 JSON 写坏）；字符串里不要换行。',
   '{"thread":"话题线名","items":[{"decision":"new","layer":"bond","subject":"erica","title":"…","fact":"…","feeling":"…","why":"…","evidence":[123,124]}]}',
 ].join('\n')
 
@@ -161,14 +161,59 @@ export interface DigestItem {
   evidence?: number[]
 }
 
+/**
+ * 常见的几种写坏：中文引号当成了 JSON 引号、字符串里直接换行、对象末尾多一个逗号。
+ * **不改语义，只补格式。** 修不动就按坏的处理。
+ */
+export function repairJson(src: string): string {
+  return src
+    .replace(/[\u201c\u201d]/g, '「')          // 正文里的弯引号不该当 JSON 引号
+    .replace(/,\s*([}\]])/g, '$1')             // 末尾多的逗号
+    .replace(/:(\s*)'([^'\n]*)'/g, ': "$2"')   // 单引号包的值
+}
+
+/** 实在解析不出来时，一条一条抠出来（宁可少拿几条，也不要整段丢掉） */
+function salvageItems(raw: string): DigestItem[] {
+  const out: DigestItem[] = []
+  const field = (block: string, key: string) => {
+    const m = new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`).exec(block)
+    return m ? m[1].replace(/\\n/g, '\n').replace(/\\"/g, '"') : undefined
+  }
+  for (const block of raw.split(/\}\s*,?\s*\{/)) {
+    const decision = field(block, 'decision')
+    const fact = field(block, 'fact')
+    if (!decision || !fact) continue
+    const ev = /"evidence"\s*:\s*\[([^\]]*)\]/.exec(block)
+    out.push({
+      decision: decision as DigestItem['decision'],
+      layer: field(block, 'layer') as DigestItem['layer'],
+      subject: field(block, 'subject'),
+      title: field(block, 'title'),
+      fact,
+      feeling: field(block, 'feeling'),
+      why: field(block, 'why'),
+      evidence: ev ? ev[1].split(',').map(x => Number(x.trim())).filter(Number.isFinite) : [],
+    })
+  }
+  return out
+}
+
 export function parseDigestReply(text: string): { thread: string; items: DigestItem[] } {
   const raw = String(text || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '')
   const start = raw.indexOf('{')
   const end = raw.lastIndexOf('}')
   if (start < 0 || end <= start) throw new Error('模型没返回 JSON')
-  const data = JSON.parse(raw.slice(start, end + 1))
-  const items: DigestItem[] = Array.isArray(data?.items) ? data.items.filter((x: unknown) => x && typeof x === 'object') : []
-  return { thread: String(data?.thread || '').slice(0, 40), items }
+  const body = raw.slice(start, end + 1)
+  const thread = (/"thread"\s*:\s*"([^"\n]{0,40})"/.exec(body) || [])[1] || ''
+  let data: any = null
+  try { data = JSON.parse(body) } catch { try { data = JSON.parse(repairJson(body)) } catch { data = null } }
+  if (data) {
+    const items: DigestItem[] = Array.isArray(data?.items) ? data.items.filter((x: unknown) => x && typeof x === 'object') : []
+    return { thread: String(data?.thread || thread).slice(0, 40), items }
+  }
+  const salvaged = salvageItems(body)
+  if (!salvaged.length) throw new Error('模型返回的 JSON 修不动，一条也抠不出来')
+  return { thread: thread.slice(0, 40), items: salvaged }
 }
 
 export type CallDigestModel = (system: string, user: string, model: string) => Promise<string>
@@ -234,13 +279,24 @@ export async function runDigest(
     return { ran: false, why: win.why, wrote: 0, inboxed: 0, amended: 0, skipped: 0, rejected: 0, error: msg }
   }
 
-  let parsed: { thread: string; items: DigestItem[] }
-  try {
-    const reply = await call(DIGEST_SYSTEM, `这一段对话（行号是经历表里的 seq）：\n\n${material}`, model)
-    parsed = parseDigestReply(reply)
-  } catch (e: any) {
-    return fail(String(e?.message || e))
+  const user = `这一段对话（行号是经历表里的 seq）：\n\n${material}`
+  let parsed: { thread: string; items: DigestItem[] } | null = null
+  let lastErr = ''
+  let lastReply = ''
+  // 第一次写坏了（模型很爱在 JSON 字符串里塞英文引号）就再要一次，说清楚哪儿错了
+  for (let attempt = 0; attempt < 2 && !parsed; attempt++) {
+    try {
+      lastReply = await call(
+        DIGEST_SYSTEM + (attempt ? '\n\n上一次你返回的 JSON 解析失败了。这次：只输出 JSON，正文里的引号用「」，字符串里不要换行。' : ''),
+        user, model
+      )
+      parsed = parseDigestReply(lastReply)
+    } catch (e: any) {
+      lastErr = String(e?.message || e)
+      log(`[memory:digest] 第 ${attempt + 1} 次解析失败：${lastErr}`)
+    }
   }
+  if (!parsed) return fail(`${lastErr}｜回复开头：${lastReply.slice(0, 120).replace(/\s+/g, ' ')}`)
 
   const out: DigestResult = { ran: true, why: win.why, thread: parsed.thread, wrote: 0, inboxed: 0, amended: 0, skipped: 0, rejected: 0 }
   const seqs = new Set(win.episodes.map(e => e.seq))
