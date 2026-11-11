@@ -7,7 +7,7 @@
 // 画风：几段提示词，起个名字（二次元 / 真人 / 像素），其中一个设成默认。
 //   他和她都不用每次写风格，后端自动拼默认那段；他想换就写 style。
 //   她以后加真人照片，就再加一个「真人」画风，切一下默认即可（不用改代码）。
-import type { DB } from './db.ts'
+import { tx, type DB } from './db.ts'
 import type { BlobStore } from './blobs.ts'
 
 export interface RefPhoto { id: string; hash: string; mime: string; size: number }
@@ -66,6 +66,7 @@ export function ensureDrawSchema(db: DB): void {
       created_at TEXT NOT NULL
     );
   `)
+  migrateRefs(db)
   // 出厂两个画风：她现在画二次元，以后加真人照片时改默认就行
   const n = (db.prepare('SELECT COUNT(*) AS n FROM draw_styles').get() as { n: number }).n
   if (n === 0) {
@@ -175,6 +176,37 @@ export function deleteRefPhoto(db: DB, photoId: string): void {
 }
 
 // ── 画风 ──
+
+/**
+ * 老表（2026-11-11 早些时候建的）里 hash 是 NOT NULL、一个垫图只能有一张图。
+ * 改成「一个名字下面好几张」之后，新记录不带 hash，老表会报 NOT NULL constraint failed。
+ * 这里把老表重建成可空的，并把那一张图挪进 draw_ref_photos。
+ */
+function migrateRefs(db: DB): void {
+  const cols = db.prepare('PRAGMA table_info(draw_refs)').all() as { name: string; notnull: number }[]
+  const hash = cols.find(c => c.name === 'hash')
+  if (!hash || !hash.notnull) return
+  tx(db, () => {
+    db.exec('ALTER TABLE draw_refs RENAME TO draw_refs_old')
+    db.exec(`CREATE TABLE draw_refs (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      note TEXT NOT NULL DEFAULT '',
+      hash TEXT,
+      mime TEXT,
+      size INTEGER,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      by_default INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL
+    )`)
+    db.exec(`INSERT INTO draw_refs(id, name, note, enabled, by_default, created_at)
+      SELECT id, name, note, enabled, by_default, created_at FROM draw_refs_old`)
+    db.exec(`INSERT INTO draw_ref_photos(id, ref_id, hash, mime, size, ord, created_at)
+      SELECT 'p' || id, id, hash, COALESCE(mime, 'image/png'), COALESCE(size, 0), 0, created_at
+      FROM draw_refs_old WHERE hash IS NOT NULL`)
+    db.exec('DROP TABLE draw_refs_old')
+  })
+}
 
 const rowToStyle = (r: any): DrawStyle => ({ id: r.id, name: r.name, prompt: r.prompt, isDefault: !!r.is_default })
 

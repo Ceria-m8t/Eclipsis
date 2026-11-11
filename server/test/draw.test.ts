@@ -318,3 +318,29 @@ test('一个名字下面放好几张：同名再传就接着放，画图时一�
     assert.ok(listRefs(s.db).some(r5 => r5.name === '她'))
   } finally { await close(srv); s.cleanup() }
 })
+
+test('老库迁移：一个垫图一张图的老表（hash NOT NULL）自动改成能放多张', async () => {
+  const s = setup()
+  try {
+    // 照 11-11 早些时候那版建表
+    s.db.exec(`CREATE TABLE draw_refs (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, note TEXT NOT NULL DEFAULT '',
+      hash TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1, by_default INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL)`)
+    const hash = s.blobs.putFile('image/png', PNG)
+    s.db.prepare(`INSERT INTO draw_refs(id,name,note,hash,mime,size,enabled,by_default,created_at)
+      VALUES ('r1','她','长头发',?,'image/png',?,1,1,'2026-11-11T00:00:00Z')`).run(hash, PNG.length)
+
+    const { listRefs, saveRef } = await import('../src/draw-refs.ts')
+    const refs = listRefs(s.db)        // ensureDrawSchema 里跑迁移
+    assert.equal(refs.length, 1)
+    assert.equal(refs[0]!.photos.length, 1, '老那张图还在')
+    assert.equal(refs[0]!.byDefault, true, '开关保留')
+    // 现在能往同一个名字下面再加（以前这里会 NOT NULL constraint failed）
+    saveRef(s.db, s.blobs, { name: '她', data: Buffer.concat([PNG, Buffer.from([1])]), mime: 'image/png' })
+    assert.equal(listRefs(s.db)[0]!.photos.length, 2)
+    // 只改说明、不带图也不报错
+    saveRef(s.db, s.blobs, { id: 'r1', name: '她', note: '长头发，戴眼镜' })
+    assert.equal(listRefs(s.db)[0]!.note, '长头发，戴眼镜')
+  } finally { s.cleanup() }
+})
