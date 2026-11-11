@@ -23,6 +23,8 @@ const tabs = [
 
 function go(t: (typeof tabs)[number]) {
   if (tab.value !== t.key) router.push(t.to)
+  // 已经在设置的某一项里：再点「设置」回到目录
+  else if (t.key === 'settings' && route.path !== '/settings') router.push('/settings')
 }
 </script>
 

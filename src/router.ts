@@ -18,9 +18,10 @@ const router = createRouter({
         { path: 'greenhouse', component: () => import('./views/rooms/Greenhouse.vue') },
         { path: 'rooftop', component: () => import('./views/rooms/Rooftop.vue') },
         { path: 'basement', component: () => import('./views/rooms/Basement.vue') },
-        { path: 'settings', component: () => import('./views/Settings.vue') },
-        { path: 'chat', component: () => import('./views/Chat.vue') },
         { path: 'settings/prompt', component: () => import('./views/PromptEditor.vue') },
+        // 设置是两层：/settings 目录，/settings/<哪一项>（同一个组件，切换时不重建，没保存的改动还在）
+        { path: 'settings/:section?', component: () => import('./views/Settings.vue') },
+        { path: 'chat', component: () => import('./views/Chat.vue') },
       ]
     }
   ]
