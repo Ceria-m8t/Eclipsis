@@ -434,6 +434,7 @@ function main() {
           model: wakeModel,
           barkUrl,
           maxTokens: Number(process.env.WAKE_MAX_TOKENS) || 2000,
+          blobs: new BlobStore(db, cfg.blobDir),   // 他醒着摆的像素小画也渲染成图
           log
         })
       })

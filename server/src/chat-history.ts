@@ -129,13 +129,22 @@ export function buildItems(db: DB, rows: Row[]): ChatItem[] {
     const meta = parseMeta(r.meta)
     if (typeof meta.wake_id === 'string' && (r.kind === 'note' || (r.actor === 'ai' && r.kind === 'message'))) {
       const it = wakeItem(r, meta.wake_id)
+      const v0 = it.versions![0]!
+      // 他醒着画的（像素小画）：挂到这一项上，她在聊天里看得到图，不是一屏字符
+      const imgs: string[] = Array.isArray(meta.images)
+        ? meta.images.filter((h: unknown) => typeof h === 'string' && /^[0-9a-f]{64}$/.test(h)) : []
+      if (imgs.length) v0.images = [...(v0.images || []), ...imgs.map(h => `/api/eclipsis/blob/${h}`)]
       // 醒来时他把「这一刻」写在了念头里或消息里：拆出来挂在这一项上（锁着的不给原文），念头里不再露出标签
       const mo = splitMoment(r.content.replace(HEART_RE, '').trim())
-      if (mo.moment) it.versions![0]!.moment = mo.moment.locked ? { locked: true, text: '' } : mo.moment
-      if (r.kind === 'note') { if (mo.text) it.wake!.trace = (it.wake!.trace ? it.wake!.trace + '\n\n' : '') + mo.text; continue }
-      const body = mo.text
-      it.content = it.content ? it.content + '\n\n' + body : body
-      it.versions![0]!.content = it.content
+      if (mo.moment) v0.moment = mo.moment.locked ? { locked: true, text: '' } : mo.moment
+      // 整条就是一幅画时正文是占位符，显示时去掉（她看到的是图）
+      const body = imgs.length ? mo.text.replace(/^\[图片\]$/, '').trim() : mo.text
+      if (r.kind === 'note') {
+        if (body) it.wake!.trace = (it.wake!.trace ? it.wake!.trace + '\n\n' : '') + body
+        continue
+      }
+      it.content = it.content ? (body ? it.content + '\n\n' + body : it.content) : body
+      v0.content = it.content
       it.wake!.silent = false
       continue
     }

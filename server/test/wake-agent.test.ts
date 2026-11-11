@@ -10,7 +10,10 @@ import { dispatchWake, buildWakePrompt } from '../src/wake/dispatch.ts'
 import { renderRecentWakeBlock } from '../src/wake/chat-block.ts'
 import type { ModelResponse, ToolCall } from '../src/leto/responder.ts'
 import type { WakeOpportunity } from '../src/wake/types.ts'
-import { fakeUpstream, listen, close } from './helpers.ts'
+import { fakeUpstream, listen, close, tempDir } from './helpers.ts'
+import { BlobStore } from '../src/blobs.ts'
+import { chatHistory } from '../src/chat-history.ts'
+import { join } from 'node:path'
 
 let seq = 0
 const call = (name: string, args: Record<string, unknown> = {}): ToolCall =>
@@ -135,6 +138,8 @@ describe('dispatchWake 带工具', () => {
   type R = { content?: string; tools?: { name: string; args: Record<string, unknown> }[]; status?: number }
   function setup(replies: R[], o: { barkStatus?: number; onModelCall?: (n: number) => void } = {}) {
     const db = openDb(':memory:'); ensureWakeSchema(db); ensurePromptSchema(db)
+    const tmp = tempDir()
+    const blobs = new BlobStore(db, join(tmp.dir, 'blobs'))
     let i = 0
     const up = fakeUpstream((req, res) => {
       if (req.url.startsWith('/bark')) { res.writeHead(o.barkStatus ?? 200); res.end('{}'); return }
@@ -149,13 +154,14 @@ describe('dispatchWake 带工具', () => {
     const run = async () => {
       const port = await listen(up.server)
       try {
-        await dispatchWake(opp, db, { upstreamUrl: `http://127.0.0.1:${port}/v1`, upstreamKey: 'k', model: 'm', barkUrl: `http://127.0.0.1:${port}/bark/k`, maxTokens: 2000, retryDelayMs: 0, log: () => {} })
+        await dispatchWake(opp, db, { upstreamUrl: `http://127.0.0.1:${port}/v1`, upstreamKey: 'k', model: 'm', barkUrl: `http://127.0.0.1:${port}/bark/k`, maxTokens: 2000, retryDelayMs: 0, blobs, log: () => {} })
       } finally { await close(up.server) }
+      await new Promise(r => setTimeout(r, 60))   // 像素图是异步渲染挂上去的
     }
     const row = () => db.prepare('SELECT outcome, content, sent_messages, trace, tools_used FROM wake_opportunities WHERE id = ?').get(opp.id) as any
     const barks = () => up.seen.filter(s => s.url.startsWith('/bark')).map(s => JSON.parse(s.body).body)
     const modelReqs = () => up.seen.filter(s => !s.url.startsWith('/bark')).map(s => JSON.parse(s.body))
-    return { db, run, row, barks, modelReqs, opp }
+    return { db, run, row, barks, modelReqs, opp, blobs, cleanup: tmp.cleanup }
   }
 
   it('发两条 + 留念头：两条都推送、都进聊天线，念头单独存', async () => {
@@ -261,6 +267,76 @@ describe('dispatchWake 带工具', () => {
       assert.doesNotMatch(t.modelReqs()[0].messages.at(-1).content, /send_to_erica/)
       assert.equal(t.row().outcome, 'message')
     } finally { delete process.env.WAKE_TOOLS }
+  })
+
+  // ── 他醒着摆的像素小画（2026-11-11 Erica：苏醒和平时要一致）──
+  const PIX = '[[PIXEL]]\npalette: .=#0000 1=#C8909A\n.11.\n1111\n.11.\n[[/PIXEL]]'
+
+  it('画在发给她的消息里：块拆出去渲染成图，正文不留字符，推送里也没有', async () => {
+    const t = setup([
+      { tools: [{ name: 'send_to_erica', args: { text: `给你画了个蛋。\n\n${PIX}\n\n等你醒。` } }] },
+      { content: '[SILENT]' }
+    ])
+    try {
+      await t.run()
+      const ep = t.db.prepare("SELECT content, meta FROM episodes WHERE kind = 'message'").get() as any
+      assert.doesNotMatch(ep.content, /PIXEL|palette/)
+      assert.equal(ep.content, '给你画了个蛋。\n\n等你醒。')
+      const meta = JSON.parse(ep.meta)
+      assert.equal(meta.pixel, 1)
+      assert.equal(meta.images.length, 1)
+      const png = t.blobs.readImage(meta.images[0])!
+      assert.ok(png && png.data.length > 50, '应该真的渲染出 PNG')
+      assert.equal(png.mime, 'image/png')
+      assert.deepEqual(t.barks(), ['给你画了个蛋。\n\n等你醒。'])
+      const it = chatHistory(t.db, {}).items.find(i => i.wake)!
+      assert.deepEqual(it.versions![0]!.images, [`/api/eclipsis/blob/${meta.images[0]}`])
+      assert.equal(it.content, '给你画了个蛋。\n\n等你醒。')
+    } finally { t.cleanup() }
+  })
+
+  it('只画了一张、没写字：经历不会被当成空的丢掉，她看到的是图', async () => {
+    const t = setup([
+      { tools: [{ name: 'send_to_erica', args: { text: PIX } }] },
+      { content: '[SILENT]' }
+    ])
+    try {
+      await t.run()
+      const ep = t.db.prepare("SELECT content, meta FROM episodes WHERE kind = 'message'").get() as any
+      assert.equal(ep.content, '[图片]')
+      assert.equal(JSON.parse(ep.meta).images.length, 1)
+      assert.deepEqual(t.barks(), ['（我画了一张小图给你）'])
+      const it = chatHistory(t.db, {}).items.find(i => i.wake)!
+      assert.equal(it.content, '')
+      assert.equal(it.versions![0]!.images!.length, 1)
+    } finally { t.cleanup() }
+  })
+
+  it('画在念头里（没发给她）：也渲染，念头里不留字符', async () => {
+    const t = setup([{ content: `[TRACE] 画了个蛋等她醒。\n\n${PIX}` }])
+    try {
+      await t.run()
+      const ep = t.db.prepare("SELECT content, meta FROM episodes WHERE kind = 'note'").get() as any
+      assert.equal(ep.content, '画了个蛋等她醒。')
+      assert.equal(JSON.parse(ep.meta).images.length, 1)
+      const it = chatHistory(t.db, {}).items.find(i => i.wake)!
+      assert.equal(it.wake!.trace, '画了个蛋等她醒。')
+      assert.equal(it.versions![0]!.images!.length, 1)
+      assert.equal(it.wake!.silent, true)
+    } finally { t.cleanup() }
+  })
+
+  it('画坏了：正文里留一句原因，没有图', async () => {
+    const t = setup([
+      { tools: [{ name: 'send_to_erica', args: { text: '看：\n[[PIXEL]]\npalette: 坏的\n[[/PIXEL]]' } }] },
+      { content: '[SILENT]' }
+    ])
+    try {
+      await t.run()
+      const ep = t.db.prepare("SELECT content, meta FROM episodes WHERE kind = 'message'").get() as any
+      assert.match(ep.content, /像素小画没画成/)
+      assert.equal(JSON.parse(ep.meta).images, undefined)
+    } finally { t.cleanup() }
   })
 })
 

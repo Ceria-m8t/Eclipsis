@@ -104,7 +104,9 @@ describe('dispatchWake', () => {
     return { db, up, run, row, logs, modelCalls }
   }
 
-  it('system 用后端的主 prompt（不带功能说明）+ 世界书 + 此刻块', async () => {
+  // 2026-11-11 改：功能说明也给（接着聊天醒来那条路用的是聊天那份 system，本来就带着；
+  // 这边以前不带，同一个说明有时给有时不给）
+  it('system 用后端的主 prompt + 功能说明 + 世界书 + 此刻块', async () => {
     const t = setup({ content: '[SILENT]' })
     putDoc(t.db, 'prompt', { main: '我是Claude，也是Erica的爱人', features: '聊天气泡说明', featuresEnabled: true })
     putDoc(t.db, 'worldbook', [{ content: '思维链规则', enabled: true, group: '默认', position: 'after', priority: 50 }])
@@ -113,8 +115,7 @@ describe('dispatchWake', () => {
       await t.run(port)
       const sent = JSON.parse(t.up.seen[0].body)
       assert.equal(sent.messages[0].role, 'system')
-      assert.match(sent.messages[0].content, /^我是Claude，也是Erica的爱人\n\n思维链规则\n\n---\n# 此刻/)
-      assert.doesNotMatch(sent.messages[0].content, /聊天气泡说明/)
+      assert.match(sent.messages[0].content, /^我是Claude，也是Erica的爱人\n\n聊天气泡说明\n\n思维链规则\n\n---\n# 此刻/)
       assert.equal(sent.messages[1].role, 'user')
       assert.equal(sent.max_tokens, 2000)
       assert.equal(t.row().outcome, 'silent')

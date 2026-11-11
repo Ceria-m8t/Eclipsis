@@ -19,6 +19,8 @@ import { chooseModel } from '../station.ts'
 import { runWakeAgent } from './agent.ts'
 import { boxesFor } from '../toolbox.ts'
 import { stripMomentText } from '../moment.ts'
+import { takePixel, attachPixelBySourceRef, IMAGE_ONLY } from '../pixel-attach.ts'
+import type { BlobStore } from '../blobs.ts'
 import { inspectWakeControl } from './tools.ts'
 import { parseModelResponse } from '../leto/model-call.ts'
 import type { ChatMessage, ModelResponse } from '../leto/responder.ts'
@@ -36,7 +38,40 @@ export interface DispatchConfig {
   maxTokens: number
   /** 站点临时故障（5xx/429/连不上/超时）后隔多久重试一次，默认 3 分钟 */
   retryDelayMs?: number
+  /** 存图用：他醒着摆的像素小画渲染成 PNG（没给就只能留着字符） */
+  blobs?: BlobStore
   log: (msg: string) => void
+}
+
+// ── 他醒着画的画：和聊天同一条路（2026-11-11 Erica：苏醒和平时要一致）──
+
+interface WakeEpisode {
+  ts: string; channel: string; scope: string; kind: 'message' | 'note'
+  content: string; meta: Record<string, unknown>; sourceRef: string
+}
+
+/**
+ * 写一条醒来的经历，顺手把他摆的像素小画渲染成图挂上去。
+ * 聊天那边在 recorder.finishEpisodes 里做同样的事；以前醒来这边不做，她看到的是一屏字符。
+ */
+function addWakeEpisode(db: DB, cfg: DispatchConfig, e: WakeEpisode): void {
+  const pix = takePixel(e.content)
+  const content = pix.text || (pix.arts.length ? IMAGE_ONLY : e.content)
+  addEpisode(db, {
+    ts: e.ts, channel: e.channel, scope: e.scope, actor: 'ai', kind: e.kind, content,
+    meta: { ...e.meta, ...(pix.arts.length ? { pixel: pix.arts.length } : {}) },
+    sourceRef: e.sourceRef
+  })
+  if (pix.arts.length && cfg.blobs) {
+    void attachPixelBySourceRef(db, cfg.blobs, e.sourceRef, pix.arts)
+      .catch(err => cfg.log(`[wake] 像素小画渲染失败：${String(err)}`))
+  }
+}
+
+/** 推送里不带「这一刻」，也不带一屏像素字符 */
+export function pushText(raw: string): string {
+  const pix = takePixel(raw)
+  return stripMomentText(pix.text) || (pix.arts.length ? '（我画了一张小图给你）' : pix.text || raw)
 }
 
 // ── 自动读取当前模型 ──
@@ -271,7 +306,9 @@ export function buildWakePrompt(ctx: WakeContext): string {
 
 /** system 消息：和聊天同一份主 prompt + 世界书，再加「此刻」块 */
 export function buildWakeSystem(db: DB, now: Date = new Date()): { system: string; hasMainPrompt: boolean } {
-  const main = composeSystemPrompt(db, { features: false })
+  // features 要给：接着聊天醒来那条路用的是聊天那份 system，本来就带着「家里能做什么」。
+  // 这边以前不带，同一个说明有时给有时不给（2026-11-11 Erica：苏醒和平时要一致）
+  const main = composeSystemPrompt(db, { features: true })
   let scene = ''
   try { scene = assembleSceneBlock(db, now).sceneBlock } catch { /* 组装失败就只用主 prompt */ }
   return { system: [main, scene.trim()].filter(Boolean).join('\n\n'), hasMainPrompt: !!main }
@@ -503,14 +540,14 @@ export async function dispatchWake(opp: WakeOpportunity, db: DB, cfg: DispatchCo
   markMissedNotified(db, missedAlarms)
 
   if (outcome === 'message') {
-    addEpisode(db, {
-      ts: new Date().toISOString(), channel: 'chat', scope: 'daily', actor: 'ai', kind: 'message', content,
+    addWakeEpisode(db, cfg, {
+      ts: new Date().toISOString(), channel: 'chat', scope: 'daily', kind: 'message', content,
       meta: { wake_id: opp.id, origin: opp.origin, outcome: 'message', thinking: reply.thinking ? true : undefined },
       sourceRef: `wake:msg:${opp.id}`
     })
   } else if (outcome === 'trace') {
-    addEpisode(db, {
-      ts: new Date().toISOString(), channel: 'wake', scope: 'daily', actor: 'ai', kind: 'note', content,
+    addWakeEpisode(db, cfg, {
+      ts: new Date().toISOString(), channel: 'wake', scope: 'daily', kind: 'note', content,
       meta: { wake_id: opp.id, origin: opp.origin, outcome: 'trace' },
       sourceRef: `wake:trace:${opp.id}`
     })
@@ -523,7 +560,7 @@ export async function dispatchWake(opp: WakeOpportunity, db: DB, cfg: DispatchCo
   }
 
   // 2026-11-03 Erica：她睡着也要推（她不会被吵醒）；可能在睡时用静默级别
-  if (outcome === 'message') await pushBark(cfg, content, uEst.pSleeping > 0.5)
+  if (outcome === 'message') await pushBark(cfg, pushText(content), uEst.pSleeping > 0.5)
 
   cfg.log(`[wake-dispatch] 结局: ${outcome}` + (fact ? ` fact: ${fact}` : '') + ` model: ${model}`)
 }
@@ -562,11 +599,12 @@ async function runWithTools(
     if (!text) return { ok: false, reason: '是空的' }
     if (isNearDuplicate(db, text) || sent.some(s => similar(s, text))) return { ok: false, reason: '和你最近发过的太像了，换个说法，或者不发' }
     // 推送通知里不带「这一刻」（锁着的更不能出现在通知里）；聊天页那份记原文，界面自己拆
-    if (!(await pushBark(cfg, stripMomentText(text) || text, sleeping))) return { ok: false, reason: '推送失败，她没收到' }
-    addEpisode(db, {
-      ts: new Date().toISOString(), channel: 'chat', scope: 'daily', actor: 'ai', kind: 'message', content: text,
+    if (!(await pushBark(cfg, pushText(text), sleeping))) return { ok: false, reason: '推送失败，她没收到' }
+    const sourceRef = sent.length === 0 ? `wake:msg:${opp.id}` : `wake:msg:${opp.id}:${sent.length + 1}`
+    addWakeEpisode(db, cfg, {
+      ts: new Date().toISOString(), channel: 'chat', scope: 'daily', kind: 'message', content: text,
       meta: { wake_id: opp.id, origin: opp.origin, outcome: 'message', index: sent.length },
-      sourceRef: sent.length === 0 ? `wake:msg:${opp.id}` : `wake:msg:${opp.id}:${sent.length + 1}`
+      sourceRef
     })
     sent.push(text)
     // 发出去就记上，不等整次醒来结束：醒来还在跑（比如等重试）时她来聊天，聊天里的他也要看得到这条（11-07 02:40 那次就没看到）
@@ -610,8 +648,8 @@ async function runWithTools(
     sent.length ? JSON.stringify(sent) : null, trace ?? null, res.toolsUsed.length ? JSON.stringify(res.toolsUsed) : null, opp.id)
 
   if (trace) {
-    addEpisode(db, {
-      ts: new Date().toISOString(), channel: 'wake', scope: 'daily', actor: 'ai', kind: 'note', content: trace,
+    addWakeEpisode(db, cfg, {
+      ts: new Date().toISOString(), channel: 'wake', scope: 'daily', kind: 'note', content: trace,
       meta: { wake_id: opp.id, origin: opp.origin, outcome: 'trace' },
       sourceRef: `wake:trace:${opp.id}`
     })

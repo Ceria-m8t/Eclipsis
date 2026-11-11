@@ -4,6 +4,7 @@ import { type DB, tx, addEpisode } from './db.ts'
 import { type BlobStore, sha256 } from './blobs.ts'
 import { type Reply, parseReply } from './reply.ts'
 import { splitPixel, type PixelArt } from './pixel.ts'
+import { IMAGE_ONLY } from './pixel-attach.ts'
 
 // Dylan wake_up.js 发出的唤醒请求里固定有这句
 export const WAKE_MARKER = '你现在处于后台自主唤醒状态'
@@ -317,6 +318,8 @@ export class Recorder {
     // 他自己摆的像素小画：块从正文里拆掉（她看到的是图），画坏了正文里留一句原因
     const pix = splitPixel(reply.content)
     let text = (pix.arts.length || pix.errors.length ? pix.text : reply.content).trim()
+    // 整条回复就是一幅画：正文空的话这条经历会被丢掉、图也挂不上去，补个占位（显示时换成图）
+    if (!text && pix.arts.length) text = IMAGE_ONLY
     // 调了工具接着说的：把工具之前那段接在前面，那条软删掉（同一条回复只留一条经历）
     const prev = this.continuedFrom(ctx, channel)
     let prevImages: unknown
