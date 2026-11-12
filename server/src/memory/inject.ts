@@ -45,6 +45,8 @@ export function mentionedPeople(query: string): string[] {
 }
 
 const TIME_WORDS = /(今天|今晚|刚刚|刚才|这几天|最近)/
+/** 她在问过去的事（这时候翻原话才有意义） */
+const ASKING_PAST = /(还记得|记不记得|记得吗|上次|那次|之前|以前|当时|那天|那年|那会儿|上个月|上周|去年|几月|几号|什么时候|是不是说过|说过)/
 
 /**
  * 判官。只负责「递不递」，不改内容。
@@ -81,6 +83,15 @@ export function judge(cand: Scored, query: string, now: Date = new Date()): Verd
   const solid = cand.hits.join('').replace(/\s/g, '')
   const sem = cand.sem ?? 0
   if (solid.length < 2 && sem < 0.5) return { ok: false, why: '只是零星几个字像，说不清为什么相关' }
+
+  // 5. 单个两字片段、意思也不接近 → 说不出为什么该想起它。
+  //    2026-11-12 回放看出来的：这一档全是「来再」「又来」「何东」「图片」这种，
+  //    真正的好命中要么意思也接近、要么命中好几处、要么那个词够长够特别。
+  const longest = cand.hits.reduce((n, h) => Math.max(n, h.length), 0)
+  const rare = cand.rareDf
+  if (sem < 0.15 && cand.hits.length < 2 && longest < 3 && !(typeof rare === 'number' && rare <= 2)) {
+    return { ok: false, why: `只命中「${cand.hits[0] ?? ''}」两个字，意思也不接近` }
+  }
 
   const why = cand.hits.length
     ? `命中「${cand.hits.join('」「')}」${sem >= 0.5 ? '，意思也接近' : ''}`
@@ -214,11 +225,33 @@ export function runRecall(db: DB, query: string, o: RecallOpts = {}): RecallResu
   }
   out.suppressed = { ...lastSuppressed, ...out.suppressed }
   out.suppressed.判官挡了 = out.rejected.length
-  // 原话那一层（第二条腿）：卡片不完备，原话完备。MEMORY_RECALL_QUOTES=0 关
+  // 原话那一层。**定位是卡片的证据，不是独立的一条腿**
+  // （她发的「时间长河」：召回事件块，指针指向当时的原文）。
+  // 2026-11-12 她看完 40 轮回放说「东西有点太杂了」：那时原话每轮都给 2–3 条，
+  // 而且捞的是正在进行的这场对话。现在两种情况才给：
+  //   有卡片 → 只给和卡片对得上的原话（给那几张卡作证）
+  //   没卡片 → 只认特别罕见的词（0.2%），不然一万条对话里什么都能命中
+  // MEMORY_RECALL_QUOTES=0 整个关掉。
   if (process.env.MEMORY_RECALL_QUOTES !== '0') {
     try {
-      out.quotes = searchQuotes(db, q, { scene: o.scene, limit: Number(process.env.MEMORY_RECALL_QUOTES_MAX) || 3 })
-      if (out.quotes.length) out.quoteSpan = quoteSpan(db, q, { scene: o.scene })
+      // 锚也要顺着说法展开：卡片命中的是「妈妈」，她原话里写的是「我妈」，
+      // 不展开的话这两个对不上，原话就一条都递不出来
+      const hitWords = out.picked.flatMap(p => p.hits)
+      const anchors = hitWords.length
+        ? [...new Set([...hitWords, ...expandQuery(db, hitWords.join(' ')).added])]
+        : []
+      // 没有卡片作锚时，只有她**明确在问过去**才给原话。
+      // 不加这条的话，一万条对话的库里随便一句闲聊都能捞出两条「你以前也说过类似的话」——
+      // 2026-11-12 回放 40 轮，40 轮都带原话，她说「东西有点太杂了」。
+      if (anchors.length || ASKING_PAST.test(q)) {
+        out.quotes = searchQuotes(db, q, {
+          scene: o.scene,
+          limit: Number(process.env.MEMORY_RECALL_QUOTES_MAX) || 2,
+          anchors: anchors.length ? anchors : undefined,
+          maxDfRatio: anchors.length ? 0.008 : 0.002,
+        })
+        if (out.quotes.length) out.quoteSpan = quoteSpan(db, q, { scene: o.scene })
+      }
     } catch { /* 搜不了就只给卡片 */ }
   }
   const body = [renderRecallNote(db, out.picked), renderQuotes(out.quotes, out.quoteSpan)].filter(Boolean).join('\n\n')

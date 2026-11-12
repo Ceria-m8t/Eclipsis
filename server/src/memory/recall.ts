@@ -29,6 +29,8 @@ export interface Scored {
   lexRaw?: number
   /** 反回声扣了多少分（刚给过他的） */
   echoPenalty?: number
+  /** 命中的实词片段里最罕见的那个出现在几张卡里（判官要用） */
+  rareDf?: number
 }
 
 export interface Scorer {
@@ -121,11 +123,26 @@ function buildIdf(docs: string[]): Idf {
  *   - 查询长一些：要么命中 ≥2 个片段，要么有一个 ≥3 字的连续片段，要么标题里命中
  * 「凑数」正好被这条挡住：长问句里偶然撞上一个两字片段，不算数。
  */
-export function lexAdmitted(r: Bm25Result, queryTokens: number, titleHit: boolean): boolean {
+export function lexAdmitted(r: Bm25Result, queryTokens: number, titleHit: boolean, total = 200): boolean {
   if (!r.hitCount) return false
+  // 短问句：命中一个就算（她就问「海鲜」的时候，那两个字就是全部）
   if (queryTokens <= 2) return true
-  return r.hitCount >= 2 || r.longest >= 3 || titleHit
+  // 长问句：**要命中四成**（抄 WrenWen §3.2 的 max(2, ceil(40%))）。
+  // 2026-11-12 她看完回放说「太杂」：之前只要命中 2 个片段就算数，于是
+  // 「我说我妈不在家，她问我成年了没…」这种长句靠「她问我」「回来」也能把卡捞上来。
+  // 四成这条一上，长句必须真的对上话题才给。
+  const need = Math.max(2, Math.ceil(queryTokens * 0.4))
+  if (r.hitCount >= need) return true
+  // 例外一：命中的那个词特别罕见（整库只有一两张卡提过）。
+  //   「晚饭点个海鲜大餐好不好」里只有「海鲜」对得上，但「海鲜」在 177 张卡里只出现过一两次，
+  //   那一个词就是全部意义所在；而「我想」「回来」这种到处都有的词永远过不了这一关。
+  if (r.rarestContentDf <= rareEnough(total)) return true
+  // 例外二：标题/标签命中 + 正文里还命中两个（他们那条「锚命中 + 正文 2 词」）
+  return titleHit && r.hitCount >= 2
 }
+
+/** 「特别罕见」= 整库里最多这么多张卡提过（1% 封底 2 张） */
+export const rareEnough = (n: number) => Math.max(2, Math.floor(n * 0.01))
 export const SEM_ADMIT = 0.55
 export const SEM_CEIL = 0.66
 
@@ -159,9 +176,40 @@ const STOP_TERMS = new Set([
   '我们', '你们', '这个', '那个', '就是', '还是', '已经', '现在', '继续', '好的', '可以',
   '为什么', '怎么办', '什么', '没有', '一个', '不是', '知道', '感觉', '然后', '但是', '因为', '所以',
   '才能', '一段', '不清', '起来', '出来', '过来', '时候', '事情', '东西', '地方', '问题', '觉得',
+  // 2026-11-12 她看完回放说「东西有点太杂了，我说不清楚这个清楚都能命中」——
+  // 下面这批就是回放里真的在乱命中的：它们在她的库里到处都是，命中了什么也说明不了
+  '清楚', '明白', '其实', '这样', '那样', '一样', '需要', '开始', '真的', '有点', '比较',
+  '一直', '还有', '自己', '很多', '所有', '之类', '大概', '差不', '好像', '应该', '可是',
+  // 称呼和口头语：按出现频率掐不掉（「老公」在 177 张卡里只占 4.5%，不算常见），
+  // 但它们是称呼不是话题 —— 她说「老公。」时捞出三张提到老公的卡，纯噪声。
+  '老公', '老婆', '宝宝', '亲爱', '个人', '世界', '任何', '家庭', '一点', '一些', '一下',
+  '这边', '那边', '这种', '那种', '怎样', '那些', '这些',
 ])
 /** 助词：带助词的两字片段基本是跨词碎片（「的记」「了的」），不算特征 */
 const PARTICLES = '的了着过地得'
+
+/** 这个词是不是「弱召回词」（命中了也不算数）。原话层也用它 */
+export function isWeakTerm(t: string): boolean {
+  const w = String(t || '')
+  if (w.length < 2) return true
+  if (STOP_TERMS.has(w)) return true
+  const soft = [...w].filter(c => FUNCTION_CHARS.includes(c) || PARTICLES.includes(c)).length
+  // 整串都是虚词，或者虚词占了大半 —— 「我说不清」四个字里三个是虚词、「才能睡」三个字里两个，
+  // 它们在原话层捞回来的是「她以前也说过类似的话」，不是记忆（2026-11-12 她指出来的）
+  if (soft === w.length) return true
+  if (w.length === 3 && soft >= 2) return true
+  if (w.length >= 4 && soft / w.length >= 0.7) return true
+  return false
+}
+
+/**
+ * 「实词片段」：一个虚词、代词、助词都不带。
+ * 2026-11-12 回放看明白的：垃圾命中全是「我现」「每一」「我停」「我再」「我冷」这类
+ * 带人称代词的碎片，而且它们的语义分一律是 0；真正的好命中靠的是「分身」「工作」「冷落」
+ * 「没睡」「记忆系统」这种实词。所以「单个罕见词也算达标」那条例外只对实词开。
+ */
+const isContentGram = (g: string) =>
+  g.length >= 2 && ![...g].some(c => FUNCTION_CHARS.includes(c) || PARTICLES.includes(c))
 
 const isFunctionGram = (g: string) =>
   g.length === 2 && (
@@ -178,11 +226,15 @@ export interface Bm25Result {
   /** 命中了几个片段、最长的那个多少字（准入规则要用） */
   hitCount: number
   longest: number
+  /** 命中的片段里最罕见的那个出现在几张卡里（越小越特别） */
+  rarestDf: number
+  /** 同上，但只算**实词片段**（不含代词虚词的那种）。单词命中的例外挂在这上面 */
+  rarestContentDf: number
 }
 
 export function bm25(query: string, doc: string, idf: Idf, opts: { allowCommon?: boolean } = {}): Bm25Result {
   const q = [...new Set(bigrams(query))]
-  if (!q.length) return { score: 0, raw: 0, hits: [], hitCount: 0, longest: 0 }
+  if (!q.length) return { score: 0, raw: 0, hits: [], hitCount: 0, longest: 0, rarestDf: Infinity, rarestContentDf: Infinity }
   const docGrams = bigrams(doc)
   const len = docGrams.length || 1
   const tf = new Map<string, number>()
@@ -202,7 +254,7 @@ export function bm25(query: string, doc: string, idf: Idf, opts: { allowCommon?:
     hitGrams.push(g)
     sum += w * ((f * (K1 + 1)) / (f + K1 * (1 - B + B * (len / idf.avgLen))))
   }
-  if (!sum) return { score: 0, raw: 0, hits: [], hitCount: 0, longest: 0 }
+  if (!sum) return { score: 0, raw: 0, hits: [], hitCount: 0, longest: 0, rarestDf: Infinity, rarestContentDf: Infinity }
   // 把连着命中的二元组拼成人能读的片段。**按段分别拼**，不跨段 ——
   // 别名展开之后查询是「我妈 妈妈 她妈」，跨段拼会拼出「妈妈妈」这种没人说过的词
   const hits: string[] = []
@@ -221,6 +273,10 @@ export function bm25(query: string, doc: string, idf: Idf, opts: { allowCommon?:
   return {
     score: sum / (sum + SAT), raw: sum, hits: uniq.slice(0, 5),
     hitCount: uniq.length, longest: uniq.reduce((n, h) => Math.max(n, h.length), 0),
+    rarestDf: hitGrams.reduce((n, g) => Math.min(n, idf.df.get(g) ?? Infinity), Infinity),
+    rarestContentDf: hitGrams
+      .filter(isContentGram)
+      .reduce((n, g) => Math.min(n, idf.df.get(g) ?? Infinity), Infinity),
   }
 }
 
@@ -319,7 +375,7 @@ export function recallCandidates(db: DB, query: string, o: RecallOptions = {}): 
     //   字面要过标定出来的原始分门槛；语义要过准入线。两条都没过就不是候选，
     //   宁可这一轮零条——「错的不如空着」。
     const titleHit = hits.some(h => row.title.includes(h))
-    const lexOk = o.skipAdmission ? res.hitCount > 0 : lexAdmitted(res, queryTokens, titleHit)
+    const lexOk = o.skipAdmission ? res.hitCount > 0 : lexAdmitted(res, queryTokens, titleHit, idf.n)
     const semOk = sem > 0
     if (!lexOk && !semOk) { suppressed.没过门槛++; return }
 
@@ -330,7 +386,12 @@ export function recallCandidates(db: DB, query: string, o: RecallOptions = {}): 
     const penalty = echo.get(row.id) ?? 0
     if (penalty) suppressed.刚给过++
     const score = Math.max(0, base - penalty)
-    if (score >= floor) scored.push({ row, score, hits, lex, sem, lexRaw, echoPenalty: penalty || undefined })
+    if (score >= floor) {
+      scored.push({
+        row, score, hits, lex, sem, lexRaw, echoPenalty: penalty || undefined,
+        rareDf: Number.isFinite(res.rarestContentDf) ? res.rarestContentDf : undefined,
+      })
+    }
   })
   scored.sort((a, b) => b.score - a.score || b.row.created_at.localeCompare(a.row.created_at))
   // 相对门槛：比最高分差太远的不算候选（一句话里总有几张卡沾到一两个字）

@@ -8,7 +8,7 @@ import {
   runRecall, judge, buildAxis, renderRecallNote, recordDeliveries, judgeDeliveries,
   recallMode, recallStats, mentionedPeople, distinctWords,
 } from '../src/memory/inject.ts'
-import { recallCandidates } from '../src/memory/recall.ts'
+import { recallCandidates, lexAdmitted } from '../src/memory/recall.ts'
 
 function lib(): DB {
   const db = openDb(':memory:')
@@ -277,12 +277,25 @@ describe('WrenWen 那份文档换来的几条（2026-11-12）', () => {
     assert.ok(typeof r.suppressed.判官挡了 === 'number')
   })
 
-  it('长问句里偶然撞上一个两字片段：不算数（凑数的分数长这样）', () => {
+  it('达标规则：长问句要命中四成，除非那个词特别罕见（拿规则本身测，不靠小库里的巧合）', () => {
+    const hit = (hitCount: number, longest: number, rarestContentDf: number) =>
+      ({ score: 0.5, raw: 5, hits: [], hitCount, longest, rarestDf: rarestContentDf, rarestContentDf })
+    // 一句话里有 10 个实词片段 → 要命中 4 个
+    assert.equal(lexAdmitted(hit(2, 2, 40), 10, false, 200), false, '只命中两个到处都有的词 → 不算')
+    assert.equal(lexAdmitted(hit(4, 2, 40), 10, false, 200), true, '命中四成 → 算')
+    assert.equal(lexAdmitted(hit(1, 2, 1), 10, false, 200), true, '只命中一个实词，而且整库只有一张卡提过 → 算')
+    // 「我现」「每一」这种带代词的碎片不算实词：rarestContentDf 是 Infinity
+    assert.equal(lexAdmitted({ score: 0.5, raw: 5, hits: [], hitCount: 1, longest: 2, rarestDf: 1, rarestContentDf: Infinity }, 10, false, 200), false,
+      '只命中一个「我现」这种碎片 → 不算，哪怕它很罕见')
+    assert.equal(lexAdmitted(hit(2, 2, 40), 10, true, 200), true, '标题命中 + 正文两个 → 算')
+    // 短问句（她就问两个字）命中一个就算
+    assert.equal(lexAdmitted(hit(1, 2, 40), 2, false, 200), true)
+    assert.equal(lexAdmitted(hit(0, 0, Infinity), 2, false, 200), false, '一个都没命中当然不算')
+  })
+
+  it('长问句里撞上一个**很罕见**的词：算数（那一个词就是全部意义）', () => {
     const db = lib()
-    const ins = db.prepare(`INSERT INTO memories (layer, subject, title, fact_body, why, tags, grade, source, voice, created_at, updated_at)
-      VALUES ('bond', 'erica', '完全无关的一张', '她说起小时候在外婆家种的那棵枇杷树，说树还在。', '要紧', '[]', 'normal', 'hold', 'him', '2026-09-01', '2026-09-01')`)
-    ins.run()
-    const r = runRecall(db, '今天晚饭想吃点什么比较好呢你说枇杷算水果吗')
-    assert.ok(!r.picked.some(p => p.row.title === '完全无关的一张') || r.picked[0].hits.join('').length >= 3)
+    const r = runRecall(db, '晚饭点个海鲜大餐好不好啊我有点饿了你说呢')
+    assert.ok(r.picked.some(p => p.row.title === '她不吃海鲜'), '「海鲜」整库只有一张卡提过，这一个词就够')
   })
 })
