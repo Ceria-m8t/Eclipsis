@@ -145,7 +145,7 @@ export function writeMemory(db: DB, draft: MemoryDraft, now: Date = new Date(), 
   const mixed = guessed.mixedWith.length > 0
 
   // 2. 有原话对得上
-  const evidence = (draft.evidence ?? []).filter(n => Number.isFinite(n) && n > 0)
+  const evidence = (draft.evidence ?? []).filter(n => Number.isInteger(n) && n !== 0)  // 负数 seq = 从 Kelivo 补回的最早几天
 
   // 3. 查重
   const similar = findSimilar(db, body)

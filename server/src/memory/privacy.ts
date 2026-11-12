@@ -38,7 +38,7 @@ export interface MarkResult { marked: number; skipped: number }
 
 /** 把几条经历标成私密（或取消）。她在聊天里选几句，或者他自己标 */
 export function markEpisodesPrivate(db: DB, seqs: number[], priv = true): MarkResult {
-  const ids = seqs.map(Number).filter(n => Number.isFinite(n) && n > 0)
+  const ids = seqs.map(Number).filter(n => Number.isInteger(n) && n !== 0)  // 负数 seq = 从 Kelivo 补回的最早几天
   if (!ids.length) return { marked: 0, skipped: 0 }
   const r = db.prepare(`UPDATE episodes SET privacy = ? WHERE seq IN (${ids.map(() => '?').join(',')})`)
     .run(priv ? PRIVATE : NORMAL, ...ids)

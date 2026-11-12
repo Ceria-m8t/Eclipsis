@@ -357,7 +357,8 @@ function readJson(req: IncomingMessage, max = 64 * 1024): Promise<any> {
   })
 }
 
-const intParam = (v: string | null) => (v !== null && /^\d{1,12}$/.test(v) ? Number(v) : undefined)
+// seq 可以是负数：2026-11-13 从 Kelivo 补回的 9/25–9/29 排在第 1 条前面（-1203..-1）
+const intParam = (v: string | null) => (v !== null && /^-?\d{1,12}$/.test(v) ? Number(v) : undefined)
 
 export async function handleChatApi(db: DB, ctx: { blobDir: string; xiaoke: XiaokeApi | null; xiaokeHasNewMessages?: boolean }, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
   const url = new URL(req.url || '/', 'http://local')
@@ -383,7 +384,7 @@ export async function handleChatApi(db: DB, ctx: { blobDir: string; xiaoke: Xiao
     }
     if (p === '/v1/eclipsis/chat/delete' && req.method === 'POST') {
       const body = await readJson(req)
-      const seqs = Array.isArray(body?.seqs) ? body.seqs.filter((x: unknown) => Number.isInteger(x) && (x as number) > 0).slice(0, 200) : []
+      const seqs = Array.isArray(body?.seqs) ? body.seqs.filter((x: unknown) => Number.isInteger(x) && x !== 0).slice(0, 200) : []
       if (!seqs.length) { json(res, 400, { error: 'seqs 不能为空' }); return true }
       json(res, 200, await deleteChat(db, ctx.xiaoke, seqs, { xiaokeHasNewMessages: ctx.xiaokeHasNewMessages }))
       return true
