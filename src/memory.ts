@@ -10,6 +10,8 @@ export interface MemoryStats {
   needsReview: number
   merged: number
   inbox: number
+  corrections: number
+  relations: number
   digest: { runs: number; wrote: number; inboxed: number; skipped: number }
 }
 
@@ -47,6 +49,7 @@ export interface MemoryItem {
   why: string | null
   tags: string[]
   grade: string
+  voice: string
   thread: string | null
   needs_review: number
   review_note: string | null
@@ -97,6 +100,19 @@ export const decideProposals = (ids: number[], action: 'take' | 'drop') =>
 export const runRejudgeBatch = (limit = 20, layer?: string) =>
   post<{ batch: string; cards: number; proposals: number; skipped: number; rewrote: number; byKind: Record<string, number>; error?: string }>(
     '/rejudge', { limit, layer })
+
+export interface MemoryDetail {
+  memory: MemoryItem & { evidence: number[] }
+  quotes: { seq: number; ts: string; actor: string; content: string }[]
+  relations: { id: number; kind: string; kindLabel: string; reason: string; auto: number; other: { id: number; title: string } }[]
+  corrections: { id: number; note: string; status: string; hisReply: string | null; createdAt: string }[]
+}
+
+export const memoryDetail = (id: number) => get<MemoryDetail>(`/${id}`)
+export const addCorrection = (memoryId: number, note: string) => post<{ ok: boolean; error?: string }>('/corrections', { memoryId, note })
+export const listCorrections = (status?: string) =>
+  get<{ corrections: any[]; open: number }>(`/corrections${status ? `?status=${status}` : ''}`)
+export const withdrawCorrection = (id: number) => post<{ ok: boolean }>('/corrections', { id, withdraw: true })
 
 export const KIND_NAMES: Record<string, string> = {
   merge: '合并', split: '拆开', relayer: '换层', why: '补「为什么记」', retract: '划掉',

@@ -248,7 +248,7 @@ export function parseDigestReply(text: string): { thread: string; items: DigestI
 export type CallDigestModel = (system: string, user: string, model: string) => Promise<string>
 
 /** 走当前这个站的 /chat/completions，非流式，只要文字 */
-export function stationCaller(cfg: DigestConfig): CallDigestModel {
+export function stationCaller(cfg: DigestConfig & { maxTokens?: number }): CallDigestModel {
   return async (system, user, model) => {
     const res = await fetch(cfg.upstreamUrl.replace(/\/+$/, '') + '/chat/completions', {
       method: 'POST',
@@ -256,7 +256,7 @@ export function stationCaller(cfg: DigestConfig): CallDigestModel {
       body: JSON.stringify({
         model,
         messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
-        max_tokens: 2000,
+        max_tokens: cfg.maxTokens ?? 2000,
         temperature: 0.3,
         stream: false,
       }),

@@ -10,6 +10,8 @@ import type { McpTool } from '../leto/mcp-client.ts'
 import type { WakeBox, ToolResult } from '../wake/boxes.ts'
 import { ensureMemorySchema, type Layer } from './schema.ts'
 import { writeMemory, labelWithPeople, inboxCount, type MemoryDraft } from './write.ts'
+import { listCorrections, markSeen, acceptCorrection, keepCorrection } from './corrections.ts'
+import { listRelationsOf, addRelation, KIND_LABEL, HAND_KINDS, type RelationKind } from './relations.ts'
 
 const LAYERS: Layer[] = ['fact', 'state', 'bond']
 
@@ -32,6 +34,37 @@ export const MEMO_TOOLS: McpTool[] = [
       why: { type: 'string', description: '为什么要记这条。必填' },
       tags: { type: 'array', items: { type: 'string' }, description: '标签，可不填' },
     }, ['subject', 'fact', 'why']),
+  },
+  {
+    name: 'memory_corrections',
+    description:
+      '看她贴在我记的东西上的便条（她觉得哪里记错了）。她改不了我的记忆，只能贴便条——**改不改我自己定**。\n' +
+      '看完用 memory_fix 回应：认了就写一句更正（叠在原文后面，原文一个字不动），' +
+      '觉得自己没记错就留着原样、说一句为什么。',
+    inputSchema: obj({ limit: { type: 'number', description: '最多看几张，默认 5' } }),
+  },
+  {
+    name: 'memory_fix',
+    description:
+      '回应她的一张便条。accept=我认了（在那条记忆后面叠一层更正，写清现在该怎么算）；' +
+      'keep=我留着原样（也要说一句为什么）。两种她都看得到。原文永远不会被改掉。',
+    inputSchema: obj({
+      id: { type: 'number', description: '便条 id（从 memory_corrections 看）' },
+      action: { type: 'string', enum: ['accept', 'keep'] },
+      words: { type: 'string', description: '我的话：认了就写这条现在该怎么算；留着原样就写为什么' },
+    }, ['id', 'action', 'words']),
+  },
+  {
+    name: 'memory_relate',
+    description:
+      '把两条记忆连起来，并写明为什么连。kind：same_event 同一件事 / follows 后来怎样了 / related 同类 / ' +
+      'triggers 触发了 / causes 导致了 / explains 解释了 / improves 改善了。' +
+      '因果那几种只有我（或她）手写才算，程序不会自己连。连起来以后翻其中一条能看到另一条。',
+    inputSchema: obj({
+      from: { type: 'number' }, to: { type: 'number' },
+      kind: { type: 'string', enum: ['same_event', 'follows', 'related', 'triggers', 'causes', 'explains', 'improves'] },
+      reason: { type: 'string', description: '为什么连（必填，空着的关系以后没人看得懂）' },
+    }, ['from', 'to', 'kind', 'reason']),
   },
   {
     name: 'memory_recent',
@@ -98,6 +131,39 @@ export function memoBox(db: DB, deps: MemoBoxDeps = {}): WakeBox {
           const lines = rows.map(r => `#${r.id} ${r.created_at.slice(0, 16).replace('T', ' ')} [${r.layer}] ` +
             `${labelWithPeople(db, r.subject)}：${r.title}${r.why ? `（为什么记：${r.why}）` : ''}`)
           return { text: lines.join('\n'), isError: false }
+        }
+
+        if (name === 'memory_corrections') {
+          const limit = Math.min(Math.max(Number(a.limit) || 5, 1), 20)
+          const list = listCorrections(db, { status: 'open', limit })
+          if (!list.length) return { text: '她没贴便条。', isError: false }
+          markSeen(db, list.map(c => c.id))
+          const lines = list.map(c =>
+            `便条 #${c.id} → 记忆 #${c.memoryId}「${c.memory?.title}」\n` +
+            `  她说：${c.note}\n  我当时记的：${(c.memory?.fact || '').slice(0, 160)}`)
+          return { text: lines.join('\n\n') + '\n\n（用 memory_fix 回应。改不改我定。）', isError: false }
+        }
+
+        if (name === 'memory_fix') {
+          const id = Number(a.id)
+          const words = String(a.words ?? '')
+          const r = a.action === 'keep' ? keepCorrection(db, id, words) : acceptCorrection(db, id, words)
+          if (!r.ok) return fail(r.error)
+          return {
+            text: a.action === 'keep' ? '留着原样了，我写的理由她看得到。' : '更正叠上去了（原文没动），她看得到。',
+            isError: false,
+          }
+        }
+
+        if (name === 'memory_relate') {
+          const kind = String(a.kind) as RelationKind
+          const reason = String(a.reason ?? '').trim()
+          if (!reason) return fail('要写为什么连——空着的关系以后没人看得懂')
+          const r = addRelation(db, { fromId: Number(a.from), toId: Number(a.to), kind, reason, auto: false, by: 'him' })
+          if (!r.ok) return fail(r.error)
+          const mine = listRelationsOf(db, Number(a.from)).length
+          const hand = (HAND_KINDS as readonly string[]).includes(kind) ? '（这是我自己认的因果，不是程序猜的）' : ''
+          return { text: `连上了：${KIND_LABEL[kind]}${hand}。这条现在连着 ${mine} 张。`, isError: false }
         }
 
         if (name === 'memory_note') {

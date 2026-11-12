@@ -7,6 +7,7 @@ import { ref, computed, onMounted } from 'vue'
 import {
   memoryStats, memoryInbox, memoryList, decideCandidates, retractMemory,
   memoryProposals, decideProposals, runRejudgeBatch,
+  memoryDetail, addCorrection, type MemoryDetail,
   LAYER_NAMES, KIND_NAMES, type MemoryStats, type Candidate, type MemoryItem, type Proposal,
 } from '../memory'
 
@@ -74,6 +75,34 @@ async function rejudge() {
 
 const kindName = (k: string) => KIND_NAMES[k] || k
 
+// 展开一条记忆时顺手把关系和便条读回来
+const details = ref<Record<number, MemoryDetail>>({})
+async function loadDetail(id: number) {
+  if (details.value[id]) return
+  try { details.value = { ...details.value, [id]: await memoryDetail(id) } } catch (e: any) { err.value = e.message }
+}
+function toggleMemory(id: number) {
+  toggleBody(id)
+  if (expanded.value.has(id)) void loadDetail(id)
+}
+
+/** 贴便条：她只写「哪里记错了」，改不改他定 */
+async function stickNote(m: MemoryItem) {
+  const note = window.prompt(`在「${m.title}」上贴一张便条。写哪里记错了——他下次会看到，改不改由他定（原文不会被改掉）。`)
+  if (!note || !note.trim()) return
+  busy.value = true
+  try {
+    const r = await addCorrection(m.id, note.trim())
+    if (!r.ok) err.value = r.error || '没贴上'
+    else {
+      delete details.value[m.id]
+      await loadDetail(m.id)
+      await reload()
+    }
+  } catch (e: any) { err.value = e.message }
+  busy.value = false
+}
+
 function toggle(id: number) {
   const s = new Set(picked.value)
   s.has(id) ? s.delete(id) : s.add(id)
@@ -112,7 +141,7 @@ async function strike(m: MemoryItem) {
     <p class="mem-hint">
       他记的东西分三层：<b>事实</b>（一直有效）、<b>近况</b>（几天就沉下去）、<b>我们之间</b>。
       拿不准的先停在<b>沉淀信箱</b>里等你看一眼——你只用点「选入」或「跳过」。
-      记忆只有他能写，你能划掉。
+      记忆只有他能写：你能<b>划掉</b>，也能<b>贴便条</b>说哪里记错了——他下次会看到，改不改由他定，原文不会被盖掉。
     </p>
 
     <div v-if="stats" class="mem-stats">
@@ -120,6 +149,8 @@ async function strike(m: MemoryItem) {
       <span>事实 {{ stats.byLayer.fact || 0 }}</span>
       <span>近况 {{ stats.byLayer.state || 0 }}</span>
       <span>我们之间 {{ stats.byLayer.bond || 0 }}</span>
+      <span v-if="stats.relations">关系 {{ stats.relations }} 条</span>
+      <span v-if="stats.corrections">便条 {{ stats.corrections }} 张等他看</span>
       <span v-if="stats.digest.runs">夜里整理过 {{ stats.digest.runs }} 次</span>
     </div>
 
@@ -225,7 +256,7 @@ async function strike(m: MemoryItem) {
       <p v-if="!list.length" class="mem-empty">{{ tab === 'review' ? '没有等着看的。' : '库里还没有东西。' }}</p>
       <div v-for="m in list" :key="m.id" class="mem-item">
         <div class="mem-head">
-          <span class="mem-title" @click="toggleBody(m.id)">{{ m.title || '（没写标题）' }}</span>
+          <span class="mem-title" @click="toggleMemory(m.id)">{{ m.title || '（没写标题）' }}</span>
           <span class="mem-tag">{{ layerName(m.layer) }}</span>
           <span class="mem-tag">{{ m.subjectLabel }}</span>
           <span v-if="m.grade === 'resident'" class="mem-tag">常驻</span>
@@ -236,11 +267,27 @@ async function strike(m: MemoryItem) {
         <template v-if="expanded.has(m.id)">
           <p class="mem-body">{{ m.fact_body }}</p>
           <p v-if="m.feeling" class="mem-feeling">{{ m.feeling }}</p>
-          <p class="mem-meta">{{ m.created_at.slice(0, 16).replace('T', ' ') }}{{ m.tags.length ? ' · ' + m.tags.slice(0, 8).join('、') : '' }}</p>
+          <p class="mem-meta">
+            {{ m.created_at.slice(0, 16).replace('T', ' ') }}
+            · {{ m.voice === 'machine' ? '程序整理的' : '他自己写的' }}
+            {{ m.tags.length ? ' · ' + m.tags.slice(0, 8).join('、') : '' }}
+          </p>
+          <template v-if="details[m.id]">
+            <p v-for="r in details[m.id].relations" :key="r.id" class="mem-meta">
+              连着「{{ r.other.title }}」· {{ r.kindLabel }}{{ r.auto ? '（自动连的）' : '' }}{{ r.reason ? ' · ' + r.reason : '' }}
+            </p>
+            <p v-for="c in details[m.id].corrections" :key="'c' + c.id" class="mem-unsure">
+              便条：{{ c.note }}
+              <template v-if="c.status === 'open'">（他还没看到）</template>
+              <template v-else-if="c.status === 'accepted'">（他认了：{{ c.hisReply }}）</template>
+              <template v-else-if="c.status === 'kept'">（他留着原样：{{ c.hisReply }}）</template>
+            </p>
+          </template>
         </template>
         <div class="mem-row">
-          <button class="mem-link" @click="toggleBody(m.id)">{{ expanded.has(m.id) ? '收起' : '看全文' }}</button>
+          <button class="mem-link" @click="toggleMemory(m.id)">{{ expanded.has(m.id) ? '收起' : '看全文' }}</button>
           <span class="mem-spacer"></span>
+          <button class="mem-btn" :disabled="busy" @click="stickNote(m)">贴便条</button>
           <button class="mem-btn danger" :disabled="busy" @click="strike(m)">划掉</button>
         </div>
       </div>

@@ -10,12 +10,18 @@
 //   GET  /v1/eclipsis/memory/proposals    旧卡重整的建议（她点头才动库）
 //   POST /v1/eclipsis/memory/proposals/decide { id|ids, action: 'take'|'drop' }
 //   POST /v1/eclipsis/memory/rejudge      { limit, layer, maxChars } 跑一批重整（只提建议）
+//   GET  /v1/eclipsis/memory/corrections  她贴的便条（?status=open|accepted|kept）
+//   POST /v1/eclipsis/memory/corrections  { memoryId, note } 贴一张；{ id, withdraw:true } 撤回
+//   POST /v1/eclipsis/memory/relations    { from, to, kind, reason } 连两条；{ id, remove:true } 去掉
+//   POST /v1/eclipsis/memory/relations/extract   把 OB 的 relation_links 抽出来（可反复跑）
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { DB } from '../db.ts'
 import { ensureMemorySchema } from './schema.ts'
 import { listInbox, decideCandidate, inboxCount, labelWithPeople } from './write.ts'
 import { findDigestWindow, stationCaller } from './digest.ts'
 import { listProposals, takeProposal, dropProposal, runRejudge } from './rejudge.ts'
+import { listRelationsOf, addRelation, removeRelation, extractObRelations, KIND_LABEL, type RelationKind } from './relations.ts'
+import { addCorrection, withdrawCorrection, listCorrections, openCount } from './corrections.ts'
 import { chooseModel, currentStation } from '../station.ts'
 
 function json(res: ServerResponse, status: number, body: unknown) {
@@ -52,7 +58,7 @@ export async function handleMemoryApi(db: DB, req: IncomingMessage, res: ServerR
       if (url.searchParams.get('review') === '1') where.push('needs_review = 1')
       const q = (url.searchParams.get('q') || '').trim()
       if (q) { where.push('(title LIKE ? OR fact_body LIKE ?)'); args.push(`%${q}%`, `%${q}%`) }
-      const rows = db.prepare(`SELECT id, bucket_id, layer, subject, title, fact_body, feeling, why, tags, grade,
+      const rows = db.prepare(`SELECT id, bucket_id, layer, subject, title, fact_body, feeling, why, tags, grade, voice,
           valence, arousal, valid_from, valid_until, source, thread, needs_review, review_note, created_at, updated_at
         FROM memories WHERE ${where.join(' AND ')} ORDER BY created_at DESC LIMIT ?`)
         .all(...args, limit) as unknown as any[]
@@ -78,6 +84,8 @@ export async function handleMemoryApi(db: DB, req: IncomingMessage, res: ServerR
         needsReview: Number(review.n),
         merged: Number(merged.n),
         inbox: inboxCount(db),
+        corrections: openCount(db),
+        relations: Number((db.prepare('SELECT count(*) n FROM memory_relations WHERE removed_at IS NULL').get() as { n: number }).n),
         digest: { runs: Number(runs?.n || 0), wrote: Number(runs?.w || 0), inboxed: Number(runs?.i || 0), skipped: Number(runs?.s || 0) },
       })
       return true
@@ -134,7 +142,8 @@ export async function handleMemoryApi(db: DB, req: IncomingMessage, res: ServerR
       const b = await readJson(req)
       // 跟着换站面板上现在那个站走（和聊天、Wake、心潮同一个）
       const st = currentStation()
-      const cfg = { upstreamUrl: st.url, upstreamKey: st.key }
+      // 20 张卡的判断容易写不完被截断，这条路给大一点
+      const cfg = { upstreamUrl: st.url, upstreamKey: st.key, maxTokens: Number(b?.maxTokens) || 6000 }
       const model = String(b?.model || '').trim() || chooseModel(db) || st.defaultModel
       if (!cfg.upstreamUrl || !model) { json(res, 503, { error: '还不知道用哪个站/哪个模型' }); return true }
       const r = await runRejudge(db, stationCaller(cfg), model, {
@@ -143,6 +152,46 @@ export async function handleMemoryApi(db: DB, req: IncomingMessage, res: ServerR
         maxChars: Number(b?.maxChars) || undefined,
       })
       json(res, 200, r)
+      return true
+    }
+
+    if (p === '/v1/eclipsis/memory/corrections') {
+      if (req.method === 'GET') {
+        json(res, 200, {
+          corrections: listCorrections(db, { status: url.searchParams.get('status') || undefined, limit: Number(url.searchParams.get('limit')) || 50 }),
+          open: openCount(db),
+        })
+        return true
+      }
+      if (req.method === 'POST') {
+        const b = await readJson(req)
+        if (b?.withdraw === true) {
+          const ok = withdrawCorrection(db, Number(b?.id))
+          json(res, ok ? 200 : 404, ok ? { ok: true } : { error: '没有这张便条（或者已经处理过了）' })
+          return true
+        }
+        const r = addCorrection(db, Number(b?.memoryId), String(b?.note ?? ''), 'her')
+        json(res, r.ok ? 200 : 400, r)
+        return true
+      }
+    }
+
+    if (p === '/v1/eclipsis/memory/relations' && req.method === 'POST') {
+      const b = await readJson(req)
+      if (b?.remove === true) {
+        json(res, removeRelation(db, Number(b?.id)) ? 200 : 404, { ok: true })
+        return true
+      }
+      const r = addRelation(db, {
+        fromId: Number(b?.from), toId: Number(b?.to), kind: String(b?.kind) as RelationKind,
+        reason: String(b?.reason ?? ''), auto: false, by: 'her',
+      })
+      json(res, r.ok ? 200 : 400, r)
+      return true
+    }
+
+    if (p === '/v1/eclipsis/memory/relations/extract' && req.method === 'POST') {
+      json(res, 200, extractObRelations(db))
       return true
     }
 
@@ -161,6 +210,8 @@ export async function handleMemoryApi(db: DB, req: IncomingMessage, res: ServerR
         json(res, 200, {
           memory: { ...row, tags: tags(row.tags), subjectLabel: labelWithPeople(db, row.subject), evidence },
           quotes,
+          relations: listRelationsOf(db, id).map(r => ({ ...r, kindLabel: KIND_LABEL[r.kind] || r.kind })),
+          corrections: listCorrections(db, { memoryId: id }),
           raw: row.raw ? JSON.parse(row.raw) : null,
         })
         return true

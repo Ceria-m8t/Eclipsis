@@ -265,9 +265,9 @@ describe('他那条线：随手记箱子', () => {
     assert.equal(ev.length, 2, '只要最近这一段，几年前那条不算')
   })
 
-  it('箱子里只有这两个工具，名字不和 OB 的撞', async () => {
+  it('箱子里的工具名不和 OB 的撞', async () => {
     const names = (await box(freshDb()).listTools()).map(t => t.name)
-    assert.deepEqual(names, ['memory_note', 'memory_recent'])
+    assert.deepEqual(names, ['memory_note', 'memory_corrections', 'memory_fix', 'memory_relate', 'memory_recent'])
   })
 })
 

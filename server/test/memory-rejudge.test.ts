@@ -111,6 +111,31 @@ describe('模型只能提建议', () => {
   })
 })
 
+describe('回复被截断也不白跑', () => {
+  it('JSON 断在一半：已经判完的那几张照样收下', async () => {
+    const db = dbWithCards()
+    const rows = pickBatch(db, { limit: 5 })
+    // 模型写到第二条就被 max_tokens 截断了（第二批真的这样挂掉过）
+    const truncated = `{"items":[{"id":${rows[0].id},"decision":"why","why":"这是我们最早一起玩的游戏","reason":"缺为什么记"},` +
+      `{"id":${rows[1].id},"decision":"relayer","layer":"fact","reason":"这是关于她本人的事实"},` +
+      `{"id":${rows[2].id},"decision":"why","wh`
+    const r = await runRejudge(db, async () => truncated, 'm', { limit: 5 })
+    assert.equal(r.proposals, 2, '截断前判完的两张要留下')
+    assert.equal(r.byKind.why, 1)
+    assert.equal(r.byKind.relayer, 1)
+  })
+
+  it('抠出来的拆分片段同样要过「一字不差」那一关', async () => {
+    const db = dbWithCards()
+    const a = pickBatch(db, { limit: 5 }).find(r => r.bucket_id === 'b1')!
+    const truncated = `{"items":[{"id":${a.id},"decision":"split","parts":[` +
+      `{"subject":"erica","quote":"她说三句话猜真假的规则（我改了字）"},{"subject":"糯糯","quote":"糯糯在旁边睡着了。"}]}`
+    const r = await runRejudge(db, async () => truncated, 'm', { limit: 5 })
+    assert.equal(r.proposals, 0)
+    assert.equal(r.rewrote, 1)
+  })
+})
+
 describe('她点头之后才动库', () => {
   it('采纳合并：被合的软删 + 指向留下的那张 + 留合并证据', async () => {
     const db = dbWithCards()

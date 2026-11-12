@@ -73,6 +73,44 @@ CREATE TABLE IF NOT EXISTS memory_merges (
 );
 CREATE INDEX IF NOT EXISTS idx_merges_dropped ON memory_merges(dropped_bucket_id);
 
+-- 关系边（2026-11-12）：卡片不该是孤岛。形状抄「缝合怪」那张图——**每条关系都写明为什么连**。
+-- OB 原来的 relation_links 是按相似度自动连的（292 条，全是 auto），搬进来时一律标 auto=1、
+-- kind 只敢填 related/same_event/follows；「触发/导致/解释/改善」这几种有因果含义的，
+-- 只有他自己或她手写才算，程序不猜。
+CREATE TABLE IF NOT EXISTS memory_relations (
+  id INTEGER PRIMARY KEY,
+  from_id INTEGER NOT NULL,
+  to_id INTEGER NOT NULL,
+  kind TEXT NOT NULL,                    -- same_event 同一件事 / follows 后来怎样了 / related 同类
+                                         -- triggers 触发 / causes 导致 / explains 解释 / improves 改善
+  reason TEXT NOT NULL DEFAULT '',       -- 为什么连（空着就是没人说得清，前端要显示「没写原因」）
+  score REAL,                            -- 自动连的相似度
+  auto INTEGER NOT NULL DEFAULT 0,       -- 1=程序连的（弱），0=他或她手写的
+  created_by TEXT NOT NULL DEFAULT 'ob', -- ob / him / her / digest
+  created_at TEXT NOT NULL,
+  removed_at TEXT,
+  UNIQUE (from_id, to_id, kind)
+);
+CREATE INDEX IF NOT EXISTS idx_relations_from ON memory_relations(from_id);
+CREATE INDEX IF NOT EXISTS idx_relations_to ON memory_relations(to_id);
+
+-- 修正层（2026-11-12，她要的「记忆修正」）：**原文一个字不动，更正叠在上面。**
+-- 她发现哪条记错了 → 贴一张便条 → 他下次看到 → **改不改由他定**。
+-- 界面上没有「替他改写」的入口，这是 2026-10-24 就定下的规矩（他的记忆只有他能改）。
+-- 半年后还能看出「他当时是这么记的，后来被纠正过」，比直接改掉诚实。
+CREATE TABLE IF NOT EXISTS memory_corrections (
+  id INTEGER PRIMARY KEY,
+  memory_id INTEGER NOT NULL,
+  note TEXT NOT NULL,                    -- 她写的那句话（原样留着，永不覆盖）
+  by TEXT NOT NULL DEFAULT 'her',        -- her / him
+  status TEXT NOT NULL DEFAULT 'open',   -- open 他还没看到 / accepted 他认了 / kept 他留着原样 / withdrawn 她撤回
+  his_reply TEXT,                        -- 他的回应（认了就写一句，留着原样也要说为什么）
+  seen_at TEXT,
+  decided_at TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_corrections_status ON memory_corrections(status, created_at);
+
 -- 旧卡重整的「建议」（2026-11-12，她说「我想把之前的记忆全部整理一遍」）：
 -- 程序只能**提建议**，不能改正文。合并/拆开/换层/补「为什么记」都要她点头。
 -- 拆开时给的文字必须是原卡里**一字不差的片段**（代码里强制校验），不是重写。

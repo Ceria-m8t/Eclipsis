@@ -11,6 +11,7 @@ import { loadPulseState, renderVitalsLine } from '../pulse/index.ts'
 import { getXinchaoBridgeCache } from '../pulse/xinchao-bridge.ts'
 import { renderTodayLine } from './history.ts'
 import { renderStatusLine } from '../status.ts'
+import { renderCorrectionLine } from '../memory/corrections.ts'
 
 export interface AssembleResult {
   sceneBlock: string
@@ -22,6 +23,7 @@ export interface AssembleResult {
     xinchaoLines: number
     todayLine: string | null
     statusLine: string | null
+    fixLine: string | null
   }
 }
 
@@ -89,6 +91,11 @@ export function assembleSceneBlock(db: DB, now: Date = new Date()): AssembleResu
   let statusLine = ''
   try { statusLine = renderStatusLine(db, now) } catch { /* 读不到就不写这一行 */ }
   if (statusLine) parts.push(statusLine)
+  // 她贴的便条（说哪里记错了）：只报几张，不报内容 ——
+  // 把她的原话塞到他嘴边，他会顺着那句话改；要他自己去 memory_corrections 读（2026-11-12）
+  let fixLine = ''
+  try { fixLine = renderCorrectionLine(db) } catch { /* 读不到就不写这一行 */ }
+  if (fixLine) parts.push(fixLine)
   if (vitalsLine) parts.push(`身体：${vitalsLine}`)
   if (weatherDesc) parts.push(`上海天气：${weatherDesc}`)
   if (xinchaoLines.length) {
@@ -106,7 +113,7 @@ export function assembleSceneBlock(db: DB, now: Date = new Date()): AssembleResu
 
   return {
     sceneBlock: parts.join('\n'),
-    meta: { vitalsLine, timeBeijing: timeStr, weather: weatherDesc, xinchaoEmotion, xinchaoLines: xinchaoLines.length, todayLine: todayLine || null, statusLine: statusLine || null }
+    meta: { vitalsLine, timeBeijing: timeStr, weather: weatherDesc, xinchaoEmotion, xinchaoLines: xinchaoLines.length, todayLine: todayLine || null, statusLine: statusLine || null, fixLine: fixLine || null }
   }
 }
 

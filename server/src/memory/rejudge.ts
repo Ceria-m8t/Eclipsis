@@ -105,18 +105,55 @@ export function buildRejudgeMaterial(db: DB, rows: MemoryRow[]): string {
   }).join('\n\n')
 }
 
+/**
+ * 一条一条抠出来。20 张卡的回复常常被 max_tokens 截断，整段 JSON 就读不了了——
+ * 截断前已经判完的那十几张不该一起丢掉（2026-11-12 第二批就是这么失败的）。
+ */
+export function salvageRejudge(body: string): RejudgeItem[] {
+  const out: RejudgeItem[] = []
+  for (const block of body.split(/\}\s*,?\s*\{/)) {
+    const id = /"id"\s*:\s*(\d+)/.exec(block)
+    const decision = /"decision"\s*:\s*"(\w+)"/.exec(block)
+    if (!id || !decision) continue
+    const str = (k: string) => (new RegExp(`"${k}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`).exec(block) || [])[1]
+    const target = /"target_id"\s*:\s*(\d+)/.exec(block)
+    const parts: { subject?: string; quote?: string }[] = []
+    const partsRaw = /"parts"\s*:\s*\[([\s\S]*?)\]/.exec(block)
+    if (partsRaw) {
+      for (const pm of partsRaw[1].matchAll(/\{[^{}]*\}/g)) {
+        const one = pm[0]
+        const sub = /"subject"\s*:\s*"([^"]*)"/.exec(one)
+        const q = /"quote"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(one)
+        if (q) parts.push({ subject: sub?.[1], quote: q[1].replace(/\\"/g, '"') })
+      }
+    }
+    out.push({
+      id: Number(id[1]),
+      decision: decision[1] as RejudgeItem['decision'],
+      target_id: target ? Number(target[1]) : undefined,
+      layer: str('layer') as Layer | undefined,
+      why: str('why'),
+      reason: str('reason'),
+      parts: parts.length ? parts : undefined,
+    })
+  }
+  return out
+}
+
 function parseItems(text: string): RejudgeItem[] {
   const raw = String(text || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '')
   const start = raw.indexOf('{')
+  if (start < 0) throw new Error('模型没返回 JSON')
   const end = raw.lastIndexOf('}')
-  if (start < 0 || end <= start) throw new Error('模型没返回 JSON')
-  const body = raw.slice(start, end + 1)
+  const body = raw.slice(start, end > start ? end + 1 : undefined)
   let data: any = null
   try { data = JSON.parse(body) } catch {
     try { data = JSON.parse(body.replace(/[\u201c\u201d]/g, '「').replace(/,\s*([}\]])/g, '$1')) } catch { data = null }
   }
-  if (!data || !Array.isArray(data.items)) throw new Error('模型返回的 JSON 里没有 items')
-  return data.items.filter((x: unknown) => x && typeof x === 'object')
+  if (data && Array.isArray(data.items)) return data.items.filter((x: unknown) => x && typeof x === 'object')
+  const salvaged = salvageRejudge(body)
+  if (!salvaged.length) throw new Error('模型返回的 JSON 读不了，一条也抠不出来')
+  return salvaged
 }
 
 /** 去掉标点空白再比，防止它「顺手」改了个标点就被当成改写 */
