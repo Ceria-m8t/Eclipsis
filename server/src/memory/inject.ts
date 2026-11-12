@@ -88,15 +88,16 @@ export function judge(cand: Scored, query: string, now: Date = new Date()): Verd
   // 我们量过了，所以给它放行权，但线要压在 p999 上面。
   if (solid.length < 2 && sem < 0.64) return { ok: false, why: '只是零星几个字像，意思也没到能单独算数的程度' }
 
-  // 5. 单个两字片段、意思也不接近 → 说不出为什么该想起它。
-  //    2026-11-12 回放看出来的：这一档全是「来再」「又来」「何东」「图片」这种，
-  //    真正的好命中要么意思也接近、要么命中好几处、要么那个词够长够特别。
+  // 5. **意思完全不接近时，必须命中两处以上。**
+  //    2026-11-12 第三轮回放她说「还有一点点杂」，剩下的全是这一档：
+  //    「生物」「段落」「何东」「努力」「质检」—— 单个两字片段撞上，语义分一律是 0。
+  //    代价她认了：像「质检」「努力」这种单个实词命中也会一起没掉。
+  //    例外两种：她只问两三个字的时候（那两个字就是她要找的全部）；
+  //    命中的片段本身就够长（≥3 字，像「午十二」「忆系统」「我想死」）。
   const longest = cand.hits.reduce((n, h) => Math.max(n, h.length), 0)
-  const rare = cand.rareDf
-  // 她就问两三个字的时候不算在内（「枇杷」「海鲜」那两个字就是她要找的全部）
   const shortAsk = query.replace(/[\s\p{P}\p{S}]+/gu, '').length <= 5
-  if (!shortAsk && sem < 0.15 && cand.hits.length < 2 && longest < 3 && !(typeof rare === 'number' && rare <= 1)) {
-    return { ok: false, why: `只命中「${cand.hits[0] ?? ''}」两个字，意思也不接近` }
+  if (!shortAsk && sem < 0.15 && cand.hits.length < 2 && longest < 3) {
+    return { ok: false, why: `只命中「${cand.hits[0] ?? ''}」一处两个字，意思也不接近` }
   }
 
   const why = cand.hits.length

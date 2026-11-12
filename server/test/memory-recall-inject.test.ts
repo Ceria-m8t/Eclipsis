@@ -100,7 +100,7 @@ describe('判官：只管递不递', () => {
 describe('纸条', () => {
   it('开头写明「只作证据不作处方、以此刻为准」', () => {
     const db = lib()
-    const r = runRecall(db, '晚饭点海鲜行不行')
+    const r = runRecall(db, '海鲜')
     assert.ok(r.picked.length >= 1)
     assert.match(r.note, /只作\*\*证据\*\*/)
     assert.match(r.note, /以此刻为准/)
@@ -228,8 +228,8 @@ describe('私密的不进召回（和第 2 步那条规矩串上）', () => {
   it('群聊场景拿不到私密的记忆', () => {
     const db = lib()
     db.prepare("UPDATE memories SET privacy = 'private' WHERE title = '她不吃海鲜'").run()
-    assert.equal(runRecall(db, '晚饭点海鲜行不行', { scene: 'group' }).picked.length, 0)
-    assert.ok(runRecall(db, '晚饭点海鲜行不行', { scene: 'chat' }).picked.length >= 1)
+    assert.equal(runRecall(db, '海鲜', { scene: 'group' }).picked.length, 0)
+    assert.ok(runRecall(db, '海鲜', { scene: 'chat' }).picked.length >= 1)
   })
 })
 
@@ -294,9 +294,22 @@ describe('WrenWen 那份文档换来的几条（2026-11-12）', () => {
     assert.equal(lexAdmitted(hit(0, 0, Infinity), 2, false, 200), false, '一个都没命中当然不算')
   })
 
-  it('长问句里撞上一个**很罕见**的词：算数（那一个词就是全部意义）', () => {
+  it('长问句 + 单个两字命中 + 意思不接近 → 不给（纯字面模式的已知代价）', () => {
     const db = lib()
+    // 2026-11-12 标定发现：她库里「生物」「段落」「何东」「努力」「质检」的 df **全是 1**，
+    // 和「冷落」「没睡」「星盘」一模一样 —— 靠罕见度分不开好坏，只有语义分得开。
+    // 所以这一档一律不给；代价是没有向量时（纯字面）会漏掉一些单词命中。
     const r = runRecall(db, '晚饭点个海鲜大餐好不好啊我有点饿了你说呢')
-    assert.ok(r.picked.some(p => p.row.title === '她不吃海鲜'), '「海鲜」整库只有一张卡提过，这一个词就够')
+    assert.equal(r.picked.length, 0)
+  })
+
+  it('她直接问那两个字的时候照样给（「海鲜」就是她要找的全部）', () => {
+    const r = runRecall(lib(), '海鲜')
+    assert.ok(r.picked.some(p => p.row.title === '她不吃海鲜'))
+  })
+
+  it('命中的片段够长（≥3 字）也照样给', () => {
+    const r = runRecall(lib(), '你还记得她说过不吃海鲜这件事吗')
+    assert.ok(r.picked.some(p => p.row.title === '她不吃海鲜'), '「不吃海鲜」四个字连着命中')
   })
 })
