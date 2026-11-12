@@ -18,6 +18,11 @@ interface Panel {
 }
 
 const router = useRouter()
+/** 回上一页；直接打开这个地址（没有上一页）时回 /basement */
+function goBack() {
+  if (window.history.state?.back) router.back()
+  else router.push('/basement')
+}
 const data = ref<Panel | null>(null)
 const error = ref('')
 const sub = ref<'' | 'inbox' | 'review' | 'cards'>('')
@@ -48,7 +53,7 @@ const subTitle = computed(() => sub.value === 'inbox' ? '沉淀信箱' : sub.val
 
     <div class="scroll">
       <header class="head">
-        <button class="back press" @click="router.push('/basement')" aria-label="回地下室">‹</button>
+        <button class="back press" @click="goBack()" aria-label="返回">‹</button>
         <h1>记忆</h1>
         <p class="en">Remember</p>
       </header>

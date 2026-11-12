@@ -10,6 +10,11 @@ import { loadGalaxy, loadGraph, loadTree, loadVersion, loadSource, loadDays, sea
 import { mountRidge, hasWebGL2, type Mounted, type Pick, type View } from '../galaxy/bridge'
 
 const router = useRouter()
+/** 回上一页；直接打开这个地址（没有上一页）时回 /rooftop */
+function goBack() {
+  if (window.history.state?.back) router.back()
+  else router.push('/rooftop')
+}
 const route = useRoute()
 const stage = ref<HTMLElement | null>(null)
 const snap = shallowRef<GSnapshot | null>(null)
@@ -203,7 +208,7 @@ async function sendNote() {
   <div class="galaxy-page shell-page">
     <div ref="stage" class="stage"></div>
 
-    <button class="back press" @click="router.push('/rooftop')" aria-label="回天台">‹</button>
+    <button class="back press" @click="goBack()" aria-label="返回">‹</button>
 
     <div class="dock">
       <div class="seg">
