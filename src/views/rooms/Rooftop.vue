@@ -56,6 +56,9 @@ onMounted(() => {
           <button class="hotspot door-greenhouse" @click.stop="onHotspot('/greenhouse')">
             <span class="hotspot-label glass">🌿 温室</span>
           </button>
+          <button class="hotspot telescope" @click.stop="onHotspot('/galaxy')">
+            <span class="hotspot-label glass">🔭 星空</span>
+          </button>
         </div>
       </div>
     </div>
@@ -136,4 +139,5 @@ onMounted(() => {
 
 /* ---- 热区位置 ---- */
 .hotspot.door-greenhouse { bottom: 18%; left: 6%; }
+.hotspot.telescope { top: 22%; left: 50%; transform: translateX(-50%); }
 </style>

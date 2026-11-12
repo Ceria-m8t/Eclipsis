@@ -1,0 +1,41 @@
+--- /tmp/NF3D.orig.tsx	2026-11-13 05:50:19.528471963 +0800
++++ src/near-focus-3d/NearFocus3D.tsx	2026-11-13 05:50:19.568472159 +0800
+@@ -1487,7 +1487,7 @@
+       }}
+     >
+       <Canvas
+-        dpr={[1.5, 3]}
++        dpr={[1, 2]}
+         camera={{ position: [0.5, 10.6, 30.5], fov: 42, near: 0.1, far: 220 }}
+         gl={{ antialias: true, alpha: false, powerPreference: "high-performance" }}
+         onCreated={({ gl }) => {
+@@ -1524,15 +1524,15 @@
+       >
+         <div style={{ color: "rgba(239,237,230,0.92)", fontSize: 11 }}>{snapshot.star.name}</div>
+         <div>
+-          {layout.planets.length} planets · {memoryTotal} memories in orbit
+-          {snapshot.asteroids.length ? ` · ${snapshot.asteroids.length} drifting stones` : ""}
++          {layout.planets.length} 颗行星 · {memoryTotal} 条记忆在轨道上
++          {snapshot.asteroids.length ? ` · ${snapshot.asteroids.length} 颗还在漂` : ""}
+         </div>
+         <div style={{ opacity: 0.55 }}>
+           {selection?.kind === "planet"
+-            ? "Tap empty space to return to the overview"
++            ? "点空白处回到全景"
+             : selection?.kind === "star"
+-              ? snapshot.star.definition || "The center of this collection"
+-              : "Tap a planet · one finger orbits · pinch zooms"}
++              ? snapshot.star.definition || "一切的中心"
++              : "点一颗行星 · 单指转动 · 双指缩放"}
+         </div>
+       </div>
+       {/* Search, upstream design: a magnifier square that silkily expands. */}
+@@ -1560,7 +1560,7 @@
+                 setSearchOpen(false);
+               }
+             }}
+-            placeholder="Search planets"
++            placeholder="找一颗行星"
+             aria-label="Search planets"
+             tabIndex={searchOpen ? 0 : -1}
+             style={{

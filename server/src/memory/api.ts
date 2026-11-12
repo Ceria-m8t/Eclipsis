@@ -43,6 +43,7 @@ import { addAlias, removeAlias, listAliases, expandQuery } from './aliases.ts'
 import { searchQuotes, quoteSpan } from './quotes.ts'
 import { replayRecall, graduation, addSpotcheck, listSpotchecks, ensureSpotcheckSchema } from './replay.ts'
 import { chooseModel, currentStation } from '../station.ts'
+import { handleGalaxyApi } from './galaxy.ts'
 
 function json(res: ServerResponse, status: number, body: unknown) {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
@@ -67,6 +68,7 @@ export async function handleMemoryApi(db: DB, req: IncomingMessage, res: ServerR
   if (!p.startsWith('/v1/eclipsis/memory')) return false
   ensureMemorySchema(db)
   try {
+    if (await handleGalaxyApi(db, req, res)) return true
     if (p === '/v1/eclipsis/memory' && req.method === 'GET') {
       const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 50, 1), 200)
       const where: string[] = ['retracted_at IS NULL']
