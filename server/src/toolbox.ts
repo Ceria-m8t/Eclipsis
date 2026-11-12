@@ -59,7 +59,7 @@ function writeFile(f: BoxFile) {
   cache.clear()
 }
 
-const BUILTIN_TITLES: Record<string, string> = { memory: '记忆库', memo: '随手记', xinchao: '心潮', leto: 'Leto', town: '迎风小镇', settings: '醒来设置', moments: '这一刻', draw: '画笔' }
+const BUILTIN_TITLES: Record<string, string> = { tree: '时间树', memory: '记忆库', memo: '随手记', xinchao: '心潮', leto: 'Leto', town: '迎风小镇', settings: '醒来设置', moments: '这一刻', draw: '画笔' }
 
 // 画笔要用 blobs 存图：main.ts 启动时塞进来
 let blobStore: BlobStore | undefined

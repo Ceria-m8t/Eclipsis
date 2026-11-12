@@ -53,7 +53,7 @@ test('她加一个箱子：聊天和醒来都能用；令牌和地址不回给�
     assert.equal(mine.chat, true); assert.equal(mine.wake, true)
     assert.ok(boxesFor(db, 'wake', {}).some(b => b.entryName === 'open_music'), '醒来也自动有')
     const entries = await api(db, 'GET', '/v1/eclipsis/tools')
-    assert.deepEqual(entries.body.boxes.map((b: any) => b.entryName), ['open_wake_settings', 'open_memo', 'open_music'])
+    assert.deepEqual(entries.body.boxes.map((b: any) => b.entryName), ['open_wake_settings', 'open_memo', 'open_tree', 'open_music'])
     const opened = await openBox(db, 'open_music', {})
     assert.deepEqual(opened.tools.map((x: any) => x.function.name), ['play_song', 'search_song'])
     const r = await callBoxTool(db, 'open_music', 'play_song', { id: 1 }, {})
@@ -105,17 +105,17 @@ test('箱子能排顺序：入口按顺序给，同名工具排前面的算数�
     const ida = (await api(db, 'POST', '/v1/eclipsis/toolbox', { title: 'A', entryName: 'open_aaa', description: '箱子 A 的说明', url: `http://127.0.0.1:${pa}/mcp` })).body.id
     const idb = (await api(db, 'POST', '/v1/eclipsis/toolbox', { title: 'B', entryName: 'open_bbb', description: '箱子 B 的说明', url: `http://127.0.0.1:${pb}/mcp` })).body.id
     const names = async () => (await api(db, 'GET', '/v1/eclipsis/tools')).body.boxes.map((x: any) => x.entryName)
-    assert.deepEqual(await names(), ['open_wake_settings', 'open_memo', 'open_aaa', 'open_bbb'])
+    assert.deepEqual(await names(), ['open_wake_settings', 'open_memo', 'open_tree', 'open_aaa', 'open_bbb'])
     const r = await api(db, 'POST', '/v1/eclipsis/toolbox/order', { ids: [idb, 'settings', 'nope', ida] })
     assert.deepEqual(r.body.order, [idb, 'settings', ida], '不认识的 id 丢掉')
-    assert.deepEqual(await names(), ['open_bbb', 'open_wake_settings', 'open_aaa', 'open_memo'], '没排进顺序里的（随手记）在后面')
-    assert.deepEqual(boxesFor(db, 'wake', {}).map(x => x.entryName), ['open_bbb', 'open_wake_settings', 'open_aaa', 'open_memo', 'open_moments'], '醒来也按这个顺序，没排的在后面')
+    assert.deepEqual(await names(), ['open_bbb', 'open_wake_settings', 'open_aaa', 'open_memo', 'open_tree'], '没排进顺序里的（随手记）在后面')
+    assert.deepEqual(boxesFor(db, 'wake', {}).map(x => x.entryName), ['open_bbb', 'open_wake_settings', 'open_aaa', 'open_memo', 'open_tree', 'open_moments'], '醒来也按这个顺序，没排的在后面')
     // B 排前面：先开 B，再开 A，A 里同名的 play 不给
     await openBox(db, 'open_bbb', {})
     assert.deepEqual((await openBox(db, 'open_aaa', {})).tools.map((x: any) => x.function.name), ['a_only'])
     // 改别的设置不会把顺序弄丢
     await api(db, 'POST', '/v1/eclipsis/toolbox/flags', { id: ida, wake: false })
-    assert.deepEqual(await names(), ['open_bbb', 'open_wake_settings', 'open_aaa', 'open_memo'], '没排进顺序里的（随手记）在后面')
+    assert.deepEqual(await names(), ['open_bbb', 'open_wake_settings', 'open_aaa', 'open_memo', 'open_tree'], '没排进顺序里的（随手记）在后面')
     assert.equal((await api(db, 'POST', '/v1/eclipsis/toolbox/order', { ids: 'x' })).status, 400)
   } finally { await close(a.server); await close(b.server); t.cleanup(); setToolboxFile('/etc/eclipsis/toolbox/boxes.json') }
 })

@@ -12,6 +12,7 @@ import type { WakeOpportunity, WakeOutcome } from './types.ts'
 import { recordOutcome, isNearDuplicate } from './scheduler.ts'
 import { inferUserState, type UserState } from './sources.ts'
 import { composeSystemPrompt } from '../prompts.ts'
+import { renderTreeBlock, refreshTreeBlock } from '../memory/tree.ts'
 import { assembleSceneBlock } from '../assembler/index.ts'
 import { runStatusTool } from '../status.ts'
 import { loadChatContinuation } from './continuation.ts'
@@ -311,7 +312,10 @@ export function buildWakeSystem(db: DB, now: Date = new Date()): { system: strin
   const main = composeSystemPrompt(db, { features: true })
   let scene = ''
   try { scene = assembleSceneBlock(db, now).sceneBlock } catch { /* 组装失败就只用主 prompt */ }
-  return { system: [main, scene.trim()].filter(Boolean).join('\n\n'), hasMainPrompt: !!main }
+  // 时间树（奠基主干）放在「此刻」前面：它不常变，留在缓存前缀里
+  let tree = ''
+  try { tree = renderTreeBlock(db).trim() } catch { /* 读不出就不带 */ }
+  return { system: [main, tree, scene.trim()].filter(Boolean).join('\n\n'), hasMainPrompt: !!main }
 }
 
 // ── 调模型 ──
@@ -387,7 +391,7 @@ function controlNote(db: DB, now = new Date()): string | undefined {
   } catch { return undefined }
 }
 
-const BOX_LABEL: Record<string, string> = { memory: '记忆库', xinchao: '心潮', leto: 'Leto', town: '迎风小镇', settings: '醒来设置', moments: '这一刻' }
+const BOX_LABEL: Record<string, string> = { tree: '时间树', memory: '记忆库', xinchao: '心潮', leto: 'Leto', town: '迎风小镇', settings: '醒来设置', moments: '这一刻' }
 
 /** 这次醒来之后她来说过话没有（说了就不用再补发醒来的消息了） */
 function ericaSpokeSince(db: DB, sinceIso: string): boolean {
@@ -479,7 +483,10 @@ export async function dispatchWake(opp: WakeOpportunity, db: DB, cfg: DispatchCo
     let scene = ''
     try { scene = assembleSceneBlock(db).sceneBlock } catch { /* 组装失败就不带此刻块 */ }
     const prompt = buildWakePrompt({ ...ctxBase, recentChat: [], chatEndedAt: cont.at })
-    messages = [{ role: 'system', content: scene ? cont.system + '\n' + scene : cont.system }, ...cont.history, { role: 'user', content: prompt }]
+    // 接着的那份聊天 system 里带着当时的时间树：换成现在这份（他刚重写过的话），没有就补上
+    let sys = cont.system
+    try { sys = refreshTreeBlock(sys, db) } catch { /* 换不了就用原来的 */ }
+    messages = [{ role: 'system', content: scene ? sys + '\n' + scene : sys }, ...cont.history, { role: 'user', content: prompt }]
     how = `接着 ${shortBeijing(cont.at)} 的聊天（exchange ${cont.exchangeId}，历史 ${cont.history.length} 条）`
   } else {
     const limit = Number(process.env.WAKE_CHAT_LIMIT) || 200

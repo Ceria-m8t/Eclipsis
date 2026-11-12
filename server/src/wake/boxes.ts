@@ -17,6 +17,7 @@ import { loadAgents } from '../leto/agent.ts'
 import * as T from './tools.ts'
 import { momentsBox } from './moments-box.ts'
 import { memoBox } from '../memory/box.ts'
+import { treeBox } from '../memory/tree.ts'
 import { drawBox } from './draw-box.ts'
 import type { BlobStore } from '../blobs.ts'
 import type { FrequencyMode, SourceId } from './types.ts'
@@ -213,6 +214,7 @@ export function buildWakeBoxes(db: DB, env: NodeJS.ProcessEnv = process.env, blo
   }
   boxes.push(settingsBox(db))
   boxes.push(memoBox(db))        // 随手记（写记忆的那条路，聊天和醒来都有）
+  boxes.push(treeBox(db))        // 我们的时间树（他亲手写的奠基主干，聊天和醒来都有）
   boxes.push(momentsBox(db))
   // 画笔：配了画图的站才有
   if (blobs) { const d = drawBox(db, blobs); if (d) boxes.push(d) }

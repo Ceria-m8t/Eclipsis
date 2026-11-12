@@ -131,7 +131,7 @@ describe('dispatchWake 接着聊天醒来', () => {
     assert.doesNotMatch(msgs.at(-1).content, /最近的聊天记录：/)
     // 醒来带工具：手边只有发消息、改顶栏状态和箱子入口（测试环境没配记忆库/心潮/Leto，只有本地的醒来设置、随手记、这一刻）
     assert.deepEqual(sent.tools.map((t: any) => t.function.name),
-      ['send_to_erica', 'eclipsis_set_status', 'open_wake_settings', 'open_memo', 'open_moments'])
+      ['send_to_erica', 'eclipsis_set_status', 'open_wake_settings', 'open_memo', 'open_tree', 'open_moments'])
     assert.match(msgs.at(-1).content, /用 send_to_erica/)
   })
 

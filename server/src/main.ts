@@ -35,6 +35,7 @@ import {
   pruneHrHistory, detectFromRecentChat
 } from './pulse/index.ts'
 import { assembleSceneBlockForTurn, injectSceneBlock, renderRecentGroupBlock } from './assembler/index.ts'
+import { renderTreeBlock } from './memory/tree.ts'
 import { renderRecentWakeBlock } from './wake/chat-block.ts'
 import { notifyXinchaoPresence, notifyXinchaoExchange } from './xinchao-client.ts'
 import { ensurePromptSchema, handlePromptApi } from './prompts.ts'
@@ -305,7 +306,16 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
               }
             }
           } catch (e) { opts.log?.(`[memory:recall] 算不出来，跳过：${String(e)}`) }
+          // 我们的时间树（奠基主干，他亲手写的）。只给她和他的日常聊天：群聊、创作之类的场景不带（里面有私密的事）。FOUNDING_TREE=0 关
+          let treeBlock = ''
+          try {
+            const sv = headers?.['x-eclipsis-scene']
+            const sceneName = ((Array.isArray(sv) ? sv[0] : sv) || 'chat').trim()
+            if (sceneName === 'chat') treeBlock = renderTreeBlock(db)
+          } catch (e) { opts.log?.(`[tree] 读不出来，跳过：${String(e)}`) }
+          if (treeBlock) transforms.founding_tree = { chars: treeBlock.length }
           const injected = injectSceneBlock(out.messages,
+            (treeBlock ? treeBlock.trimStart() + '\n\n' : '') +
             (recallNote ? recallNote + '\n\n' : '') +
             scene.sceneBlock + (groupBlock ? '\n' + groupBlock : '') + (wakeBlock ? '\n\n' + wakeBlock : ''))
           if (groupBlock) transforms.group_block = { chars: groupBlock.length }
