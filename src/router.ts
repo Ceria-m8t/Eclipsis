@@ -19,6 +19,8 @@ const router = createRouter({
         { path: 'rooftop', component: () => import('./views/rooms/Rooftop.vue') },
         // 天台上的望远镜：3D 星系 + 我们的时间树（React 那一小块只在这页加载）
         { path: 'galaxy', component: () => import('./views/Galaxy.vue') },
+        // 地下室第一个柜子：记忆面板（以后心潮、脉各一个柜子）
+        { path: 'memory', component: () => import('./views/Memory.vue') },
         { path: 'basement', component: () => import('./views/rooms/Basement.vue') },
         { path: 'settings/prompt', component: () => import('./views/PromptEditor.vue') },
         // 设置是两层：/settings 目录，/settings/<哪一项>（同一个组件，切换时不重建，没保存的改动还在）

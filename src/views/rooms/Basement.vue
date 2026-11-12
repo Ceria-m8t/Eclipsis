@@ -56,6 +56,9 @@ onMounted(() => {
           <button class="hotspot door-hallway" @click.stop="onHotspot('/hallway')">
             <span class="hotspot-label glass">🚪 走廊</span>
           </button>
+          <button class="hotspot cab-memory" @click.stop="onHotspot('/memory')">
+            <span class="hotspot-label glass">🗄 记忆</span>
+          </button>
         </div>
       </div>
     </div>
@@ -136,4 +139,6 @@ onMounted(() => {
 
 /* ---- 热区位置 ---- */
 .hotspot.door-hallway { top: 12%; right: 8%; }
+/* 三个柜子：记忆 / 心潮 / 脉（后两个还没做） */
+.hotspot.cab-memory { bottom: 26%; left: 16%; }
 </style>

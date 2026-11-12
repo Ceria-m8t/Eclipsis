@@ -3,13 +3,14 @@
 // 行星 = 他写的时间树的每一节，卫星 = 那段日子的记忆卡，小行星带 = 还没认出是谁的事的卡。
 // 她在这里只能看、贴便条；时间树只有他能改（open_tree），页面上没有替他改字的按钮。
 import { ref, computed, onMounted, onBeforeUnmount, shallowRef } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { loadGalaxy, loadGraph, loadTree, loadVersion, loadSource, loadDays, searchSource, searchQuotes, quoteAround, postNote,
   type GSnapshot, type GGraph, type GMemory, type TreePage, type TreeSection, type SourcePage,
   type DayCount, type SourceLine, type QuoteHit, type QuoteSearch } from '../galaxy/api'
 import { mountRidge, hasWebGL2, type Mounted, type Pick, type View } from '../galaxy/bridge'
 
 const router = useRouter()
+const route = useRoute()
 const stage = ref<HTMLElement | null>(null)
 const snap = shallowRef<GSnapshot | null>(null)
 const graph = shallowRef<GGraph | null>(null)
@@ -29,6 +30,7 @@ async function setView(v: View) {
 }
 
 onMounted(async () => {
+  if (route.query.find !== undefined) findOpen.value = true
   try {
     const [s, t] = await Promise.all([loadGalaxy(), loadTree()])
     snap.value = s
