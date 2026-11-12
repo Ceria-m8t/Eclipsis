@@ -38,7 +38,10 @@ import { assembleSceneBlockForTurn, injectSceneBlock, renderRecentGroupBlock } f
 import { renderRecentWakeBlock } from './wake/chat-block.ts'
 import { notifyXinchaoPresence, notifyXinchaoExchange } from './xinchao-client.ts'
 import { ensurePromptSchema, handlePromptApi } from './prompts.ts'
-import { ensureMemorySchema, handleMemoryApi, DigestScheduler } from './memory/index.ts'
+import {
+  ensureMemorySchema, handleMemoryApi, DigestScheduler,
+  runRecall, recordDeliveries, recallMode, judgeDeliveries,
+} from './memory/index.ts'
 import { handleLetoApi, handleLetoAdmin, loadAgents, type LetoApiDeps } from './leto/index.ts'
 
 function bearer(req: IncomingMessage): string {
@@ -259,7 +262,34 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
           if (process.env.CHAT_WAKE_BLOCK !== '0') {
             try { wakeBlock = renderRecentWakeBlock(db, { hours: Number(process.env.CHAT_WAKE_BLOCK_HOURS) || 24, skipSentMessages: ourHistory }) } catch { /* 不影响请求 */ }
           }
-          const injected = injectSceneBlock(out.messages, scene.sceneBlock + (groupBlock ? '\n' + groupBlock : '') + (wakeBlock ? '\n\n' + wakeBlock : ''))
+          // 记忆召回（第三期）。MEMORY_RECALL=off/shadow/live，**默认 shadow：算出来只记录，不进请求**。
+          // 放在「此刻」之前拼，是为了让每轮会变的东西都留在缓存断点之后（见 16 号设计稿 §5.1）。
+          let recallNote = ''
+          try {
+            const mode = recallMode()
+            if (mode !== 'off') {
+              const lastUser = [...out.messages].reverse().find((m: any) => m?.role === 'user')
+              const query = typeof lastUser?.content === 'string'
+                ? lastUser.content
+                : Array.isArray(lastUser?.content)
+                  ? lastUser.content.filter((c: any) => c?.type === 'text').map((c: any) => c.text).join(' ')
+                  : ''
+              if (query.trim()) {
+                const r = runRecall(db, query, { scene: 'chat', limit: Number(process.env.MEMORY_RECALL_MAX) || 3 })
+                recordDeliveries(db, r.picked, { turn: turnHeader, scene: 'chat', mode, query: r.query })
+                transforms.memory_recall = {
+                  mode, candidates: r.candidates, picked: r.picked.length, rejected: r.rejected.length,
+                  titles: r.picked.map(x => x.row.title), why: r.picked.map(x => x.why),
+                  rejected_why: r.rejected.map(x => `${x.title}：${x.why}`),
+                  chars: r.note.length,
+                }
+                if (mode === 'live') recallNote = r.note
+              }
+            }
+          } catch (e) { opts.log?.(`[memory:recall] 算不出来，跳过：${String(e)}`) }
+          const injected = injectSceneBlock(out.messages,
+            (recallNote ? recallNote + '\n\n' : '') +
+            scene.sceneBlock + (groupBlock ? '\n' + groupBlock : '') + (wakeBlock ? '\n\n' + wakeBlock : ''))
           if (groupBlock) transforms.group_block = { chars: groupBlock.length }
           if (wakeBlock) transforms.wake_block = { chars: wakeBlock.length }
           if (injected.injected) {
@@ -476,9 +506,19 @@ function main() {
     }
   }
 
+  // 三态回执的第三态：注入（或影子算出）之后他有没有用上。不调模型，纯比对他的回复
+  const judgeTimer = setInterval(() => {
+    try {
+      const r = judgeDeliveries(db)
+      if (r.judged) log(`[memory:recall] 判了 ${r.judged} 条：用上 ${r.used}、没用上 ${r.judged - r.used}`)
+    } catch { /* 判不了下次再说 */ }
+  }, Number(process.env.MEMORY_JUDGE_TICK_MS) || 5 * 60_000)
+  if (typeof judgeTimer === 'object' && 'unref' in judgeTimer) judgeTimer.unref()
+
   const stop = () => {
     if (wakeScheduler) wakeScheduler.stop()
     if (digestScheduler) digestScheduler.stop()
+    clearInterval(judgeTimer)
     weatherFetcher.stop()
     if (xinchaoBridgeTimer) clearInterval(xinchaoBridgeTimer)
     clearInterval(pulseTimer)

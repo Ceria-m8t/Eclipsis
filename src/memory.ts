@@ -118,6 +118,26 @@ export const listCorrections = (status?: string) =>
   get<{ corrections: any[]; open: number }>(`/corrections${status ? `?status=${status}` : ''}`)
 export const withdrawCorrection = (id: number) => post<{ ok: boolean }>('/corrections', { id, withdraw: true })
 
+export interface RecallTry {
+  mode: string
+  query: string
+  candidates: number
+  picked: { id: number; title: string; layer: string; subject: string; score: number; hits: string[]; why: string; axis: { date: string; title: string }[] }[]
+  rejected: { id: number; title: string; why: string }[]
+  note: string
+}
+
+export interface RecallStats {
+  mode: string
+  total: number
+  byState: Record<string, number>
+  usedRate: number | null
+  recent: { title: string; state: string; score: number | null; query: string; at: string }[]
+}
+
+export const tryRecall = (q: string) => get<RecallTry>(`/recall?q=${encodeURIComponent(q)}`)
+export const recallStats = () => get<RecallStats>('/deliveries')
+
 export const KIND_NAMES: Record<string, string> = {
   merge: '合并', split: '拆开', relayer: '换层', why: '补「为什么记」', retract: '划掉',
 }

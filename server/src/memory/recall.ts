@@ -37,7 +37,12 @@ export function bigrams(text: string): string[] {
   return out
 }
 
-interface Idf { idf: Map<string, number>; avgLen: number }
+interface Idf {
+  idf: Map<string, number>
+  df: Map<string, number>
+  n: number
+  avgLen: number
+}
 
 function buildIdf(docs: string[]): Idf {
   const df = new Map<string, number>()
@@ -50,19 +55,38 @@ function buildIdf(docs: string[]): Idf {
   const N = Math.max(docs.length, 1)
   const idf = new Map<string, number>()
   for (const [g, n] of df) idf.set(g, Math.log(1 + (N - n + 0.5) / (n + 0.5)))
-  return { idf, avgLen: total / N || 1 }
+  return { idf, df, n: N, avgLen: total / N || 1 }
 }
+
+/**
+ * 「特征词」= 在整个库里出现得不算频繁的片段。
+ *
+ * 2026-11-12 第一次拿真库试跑，问「糯糯今天怎么样」捞回来的是
+ * 「48小时暂停按钮」「第21窗 Eclipsis新架构」，命中的是「今天」「怎么」「一天」——
+ * 全是出现在半个库里的套话，分数还有 0.69。所以计分**只算特征词**：
+ * 出现在超过 12% 的卡里的片段，一分都不给（也不写进 hits，不然「为什么命中」全是废话）。
+ */
+const COMMON_RATIO = 0.12
+/** 库小的时候别按比例掐（5 张卡里出现 1 次就是 20%），所以同时留一个绝对下限 */
+const isRare = (g: string, idf: Idf) => (idf.df.get(g) ?? 0) <= Math.max(2, idf.n * COMMON_RATIO)
 
 const K1 = 1.2
 const B = 0.6
 /** 饱和常数：原始分到这个量级算「挺像」。调大=更挑，调小=更宽 */
 const SAT = 2.5
 /**
- * 全是虚词的命中不算命中。
+ * 虚词片段一分不给。
+ *
+ * 2026-11-12 拿真库试跑：问「糯糯今天怎么样」，排第二第三的是
+ * 「48小时暂停按钮」「第21窗 Eclipsis新架构」，命中的是「今天」「怎么」「么样」。
+ * 它们在 177 张卡里只占 4%–7%，**按 df 掐不掉**（库小而杂），只能按「是不是虚词」掐。
+ * 判据：两个字都在虚词表里才算虚词片段 —— 「生日」「吵架」「止痛」「糯糯」都不会被误伤。
  * 实测：问「她是不是有点怕长大」，库里「她不爱过生日」那张**靠「不是」两个字**被捞上来——
  * 分数不高但确实进了候选。虚词命中是字面打分最容易出的假阳性，直接掐掉。
  */
-const FUNCTION_CHARS = '的了是不在有和就都也很啊呢吧吗我你他她们个这那什么要会能着过被把让给说'
+const FUNCTION_CHARS =
+  '的了是不在有和就都也很啊呢吧吗嘛呀哦啦我你他她们个这那什么要会能着过被把让给说' +
+  '一今天怎样点跟为次还没最近多少时候些哪里对可能应该觉得真当然于与之而且但'
 const isFunctionGram = (g: string) => g.length === 2 && [...g].every(c => FUNCTION_CHARS.includes(c))
 
 /** BM25（字符二元组版）。分数压到 0–1，好和别的打分加权 */
@@ -75,18 +99,17 @@ export function bm25(query: string, doc: string, idf: Idf): { score: number; hit
   for (const g of docGrams) tf.set(g, (tf.get(g) ?? 0) + 1)
 
   let sum = 0
-  let solid = 0          // 实词命中的分数（虚词不算）
   const hitGrams: string[] = []
   for (const g of q) {
-    const w = idf.idf.get(g) ?? Math.log(2)
     const f = tf.get(g) ?? 0
     if (!f) continue
+    // 套话和全库常见的片段：不计分、不算命中
+    if (isFunctionGram(g) || !isRare(g, idf)) continue
+    const w = idf.idf.get(g) ?? Math.log(2)
     hitGrams.push(g)
-    const add = w * ((f * (K1 + 1)) / (f + K1 * (1 - B + B * (len / idf.avgLen))))
-    sum += add
-    if (!isFunctionGram(g)) solid += add
+    sum += w * ((f * (K1 + 1)) / (f + K1 * (1 - B + B * (len / idf.avgLen))))
   }
-  if (!solid) return { score: 0, hits: [] }      // 只靠虚词命中的，不算命中
+  if (!sum) return { score: 0, hits: [] }
   // 把连着命中的二元组拼成人能读的片段
   const hits: string[] = []
   let run = ''

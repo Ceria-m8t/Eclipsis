@@ -74,6 +74,27 @@ CREATE TABLE IF NOT EXISTS memory_merges (
 );
 CREATE INDEX IF NOT EXISTS idx_merges_dropped ON memory_merges(dropped_bucket_id);
 
+-- 三态回执（2026-11-12，第三期）：抄 Loci 的 ask → delivered → used/dropped。
+-- 我们比它多一样：**第三态能自动判**——注入了某条之后，看他这一轮的回复里有没有用上
+-- （经历表里有他的原文，对得上）。这就是 OB 那边一直缺的反馈信号：
+-- 221 张卡 activation_count 全是 0，因为 OB 不知道「给过他之后他有没有用」。
+CREATE TABLE IF NOT EXISTS memory_deliveries (
+  id INTEGER PRIMARY KEY,
+  memory_id INTEGER NOT NULL,
+  turn TEXT,                             -- 哪一轮
+  scene TEXT NOT NULL DEFAULT 'chat',
+  mode TEXT NOT NULL DEFAULT 'shadow',   -- shadow 只算不给 / live 真的进了请求
+  state TEXT NOT NULL DEFAULT 'asked',   -- asked 选上了 / delivered 真的进了请求 / used 他用上了 / dropped 没用上
+  score REAL,
+  hits TEXT,                             -- JSON：命中了哪几个片段（可解释）
+  query TEXT,                            -- 这一轮她说的话（截断）
+  judged_at TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_deliveries_turn ON memory_deliveries(turn);
+CREATE INDEX IF NOT EXISTS idx_deliveries_state ON memory_deliveries(state, created_at);
+CREATE INDEX IF NOT EXISTS idx_deliveries_memory ON memory_deliveries(memory_id, created_at);
+
 -- 关系边（2026-11-12）：卡片不该是孤岛。形状抄「缝合怪」那张图——**每条关系都写明为什么连**。
 -- OB 原来的 relation_links 是按相似度自动连的（292 条，全是 auto），搬进来时一律标 auto=1、
 -- kind 只敢填 related/same_event/follows；「触发/导致/解释/改善」这几种有因果含义的，
@@ -263,6 +284,8 @@ export interface MemoryRow {
   valid_until: string | null
   source: string
   voice: string
+  thread: string | null
+  evidence: string
   created_at: string
   updated_at: string
   dont_surface: number

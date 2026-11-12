@@ -15,6 +15,9 @@
 //   POST /v1/eclipsis/memory/corrections  { memoryId, note } 贴一张；{ id, withdraw:true } 撤回
 //   POST /v1/eclipsis/memory/relations    { from, to, kind, reason } 连两条；{ id, remove:true } 去掉
 //   POST /v1/eclipsis/memory/relations/extract   把 OB 的 relation_links 抽出来（可反复跑）
+//   GET  /v1/eclipsis/memory/recall?q=…   试算一遍：这句话会想起哪几条、哪几条被判官挡了（不写库）
+//   GET  /v1/eclipsis/memory/deliveries   影子运行的记录：递过/用上/没用上
+//   POST /v1/eclipsis/memory/deliveries/judge  手动跑一次第三态判定
 //   POST /v1/eclipsis/memory/private      { seqs?|turn?|memoryId?, private?:true }
 //        标私密：夜里整理不读它、群聊和外部 AI 拿不到、面板里默认折叠
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -26,6 +29,7 @@ import { listProposals, takeProposal, dropProposal, undoProposal, runRejudge } f
 import { listRelationsOf, addRelation, removeRelation, extractObRelations, KIND_LABEL, type RelationKind } from './relations.ts'
 import { addCorrection, withdrawCorrection, listCorrections, openCount } from './corrections.ts'
 import { markEpisodesPrivate, markTurnPrivate, markMemoryPrivate, privateCounts } from './privacy.ts'
+import { runRecall, recallStats, judgeDeliveries, recallMode } from './inject.ts'
 import { chooseModel, currentStation } from '../station.ts'
 
 function json(res: ServerResponse, status: number, body: unknown) {
@@ -193,6 +197,33 @@ export async function handleMemoryApi(db: DB, req: IncomingMessage, res: ServerR
         reason: String(b?.reason ?? ''), auto: false, by: 'her',
       })
       json(res, r.ok ? 200 : 400, r)
+      return true
+    }
+
+    if (p === '/v1/eclipsis/memory/recall' && req.method === 'GET') {
+      const q = url.searchParams.get('q') || ''
+      const r = runRecall(db, q, { scene: url.searchParams.get('scene') || 'chat', limit: Number(url.searchParams.get('limit')) || 3 })
+      json(res, 200, {
+        mode: recallMode(),
+        query: r.query,
+        candidates: r.candidates,
+        picked: r.picked.map(x => ({
+          id: x.row.id, title: x.row.title, layer: x.row.layer, subject: x.row.subject,
+          score: Number(x.score.toFixed(3)), hits: x.hits, why: x.why, axis: x.axis,
+        })),
+        rejected: r.rejected,
+        note: r.note,
+      })
+      return true
+    }
+
+    if (p === '/v1/eclipsis/memory/deliveries' && req.method === 'GET') {
+      json(res, 200, recallStats(db))
+      return true
+    }
+
+    if (p === '/v1/eclipsis/memory/deliveries/judge' && req.method === 'POST') {
+      json(res, 200, judgeDeliveries(db))
       return true
     }
 

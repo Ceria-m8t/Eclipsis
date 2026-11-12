@@ -7,7 +7,8 @@ import { ref, computed, onMounted } from 'vue'
 import {
   memoryStats, memoryInbox, memoryList, decideCandidates, retractMemory,
   memoryProposals, decideProposals, runRejudgeBatch,
-  memoryDetail, addCorrection, setMemoryPrivate, type MemoryDetail,
+  memoryDetail, addCorrection, setMemoryPrivate, tryRecall, recallStats,
+  type MemoryDetail, type RecallTry, type RecallStats as RStats,
   LAYER_NAMES, KIND_NAMES, type MemoryStats, type Candidate, type MemoryItem, type Proposal,
 } from '../memory'
 
@@ -15,7 +16,10 @@ const stats = ref<MemoryStats | null>(null)
 const inbox = ref<Candidate[]>([])
 const list = ref<MemoryItem[]>([])
 const picked = ref<Set<number>>(new Set())
-const tab = ref<'inbox' | 'fix' | 'all' | 'review'>('inbox')
+const tab = ref<'inbox' | 'fix' | 'recall' | 'all' | 'review'>('inbox')
+const recall = ref<RStats | null>(null)
+const tryQ = ref('')
+const tried = ref<RecallTry | null>(null)
 const proposals = ref<Proposal[]>([])
 const rejudgeMsg = ref('')
 const err = ref('')
@@ -31,6 +35,8 @@ async function reload() {
     if (tab.value === 'inbox') {
       inbox.value = (await memoryInbox()).candidates
       picked.value = new Set()
+    } else if (tab.value === 'recall') {
+      recall.value = await recallStats()
     } else if (tab.value === 'fix') {
       proposals.value = (await memoryProposals()).proposals
       picked.value = new Set()
@@ -41,7 +47,16 @@ async function reload() {
 }
 onMounted(reload)
 
-function switchTab(t: 'inbox' | 'fix' | 'all' | 'review') { tab.value = t; void reload() }
+function switchTab(t: 'inbox' | 'fix' | 'recall' | 'all' | 'review') { tab.value = t; void reload() }
+
+/** 试一句：看这句话现在会想起哪几条、哪几条被判官挡了。不写库 */
+async function doTry() {
+  if (!tryQ.value.trim() || busy.value) return
+  busy.value = true
+  try { tried.value = await tryRecall(tryQ.value.trim()) } catch (e: any) { err.value = e.message }
+  busy.value = false
+}
+const STATE_NAMES: Record<string, string> = { asked: '算出来了（没给他）', delivered: '给过他', used: '他用上了', dropped: '他没用上' }
 
 const allFixPicked = computed(() => proposals.value.length > 0 && picked.value.size === proposals.value.length)
 function pickAllFix() { picked.value = allFixPicked.value ? new Set() : new Set(proposals.value.map(p => p.id)) }
@@ -176,6 +191,7 @@ async function strike(m: MemoryItem) {
       <button :class="['mem-tab', { on: tab === 'fix' }]" @click="switchTab('fix')">
         整理建议<span v-if="proposals.length" class="mem-dot">{{ proposals.length }}</span>
       </button>
+      <button :class="['mem-tab', { on: tab === 'recall' }]" @click="switchTab('recall')">召回</button>
       <button :class="['mem-tab', { on: tab === 'all' }]" @click="switchTab('all')">全部</button>
     </div>
 
@@ -213,6 +229,46 @@ async function strike(m: MemoryItem) {
             <button class="mem-btn" :disabled="busy" @click="decide([c.id], 'skip')">跳过</button>
             <button class="mem-btn primary" :disabled="busy" @click="decide([c.id], 'accept')">选入</button>
           </div>
+        </div>
+      </template>
+    </template>
+
+    <!-- 召回（第三期：影子运行） -->
+    <template v-else-if="tab === 'recall'">
+      <p class="mem-hint">
+        每轮算一遍「这句话该想起哪几条」。<b>现在是影子运行：算出来只记录，不进他的上下文</b>——
+        你先看它捞得准不准，再决定要不要真的接到他眼前。
+        纸条开头永远写着：旧记忆只作证据不作处方，跟你此刻说的有出入以此刻为准。
+      </p>
+      <div class="mem-bulk">
+        <input v-model="tryQ" class="wb-title-input" placeholder="试一句：比如「糯糯今天怎么样」" @keyup.enter="doTry" />
+        <button class="mem-btn primary" :disabled="busy || !tryQ.trim()" @click="doTry">试一下</button>
+      </div>
+      <div v-if="tried" class="mem-item">
+        <div class="mem-head">
+          <span class="mem-title">候选 {{ tried.candidates }} 条 → 会想起 {{ tried.picked.length }} 条</span>
+          <span class="mem-tag">{{ tried.mode === 'live' ? '已经真的在给他' : '影子' }}</span>
+        </div>
+        <p v-for="p in tried.picked" :key="p.id" class="mem-why">
+          ✓ {{ p.title }}（{{ layerName(p.layer) }}·{{ p.score.toFixed(2) }}）{{ p.why }}
+          <template v-if="p.axis.length >= 2"> · 这件事浮现过 {{ p.axis.length }} 次</template>
+        </p>
+        <p v-for="r in tried.rejected" :key="'r' + r.id" class="mem-unsure">✗ {{ r.title }}：{{ r.why }}</p>
+        <p v-if="!tried.picked.length" class="mem-meta">一条都没给——没有相关的就不给，这是设计里的规矩。</p>
+      </div>
+      <template v-if="recall">
+        <div class="mem-stats">
+          <span>一共算过 {{ recall.total }} 条</span>
+          <span v-for="(n, k) in recall.byState" :key="k">{{ STATE_NAMES[k] || k }} {{ n }}</span>
+          <span v-if="recall.usedRate !== null">用上的比例 {{ Math.round(recall.usedRate * 100) }}%</span>
+        </div>
+        <div v-for="(d, i) in recall.recent" :key="i" class="mem-item">
+          <div class="mem-head">
+            <span class="mem-title">{{ d.title }}</span>
+            <span class="mem-tag">{{ STATE_NAMES[d.state] || d.state }}</span>
+            <span v-if="d.score" class="mem-tag">{{ d.score.toFixed(2) }}</span>
+          </div>
+          <p class="mem-meta">她当时说：{{ d.query }}</p>
         </div>
       </template>
     </template>
