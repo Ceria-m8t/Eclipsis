@@ -14,7 +14,7 @@
 //      这一句是她那个「召回认错人」担心的最后一道保险：就算真捞错了，他也不会拿旧记录反驳她。
 import type { DB } from '../db.ts'
 import { ensureMemorySchema, type MemoryRow } from './schema.ts'
-import { recallCandidates, type Scored } from './recall.ts'
+import { recallCandidates, lastSuppressed, type Scored } from './recall.ts'
 import { PEOPLE_SEEDS } from './classify.ts'
 import { labelWithPeople } from './write.ts'
 import { listRelationsOf } from './relations.ts'
@@ -155,6 +155,8 @@ export interface RecallResult {
   candidates: number
   picked: Picked[]
   rejected: { id: number; title: string; why: string }[]
+  /** 筛掉了多少、为什么筛掉（「这轮为什么只有 1 条」要能一句话回答） */
+  suppressed: Record<string, number>
   /** 原话（经历表里一字不改的那几句）。卡片给判断，原话给质感 */
   quotes: Quote[]
   quoteSpan: { total: number; first: string | null; last: string | null }
@@ -178,7 +180,7 @@ export function runRecall(db: DB, query: string, o: RecallOpts = {}): RecallResu
   const exp = expandQuery(db, q)
   const out: RecallResult = {
     query: q.slice(0, 200), expanded: exp.added, semantic: { used: false, cached: false, ms: 0 },
-    candidates: 0, picked: [], rejected: [],
+    candidates: 0, picked: [], rejected: [], suppressed: {},
     quotes: [], quoteSpan: { total: 0, first: null, last: null }, note: '',
   }
   if (q.replace(/\s/g, '').length < 2) return out
@@ -186,16 +188,31 @@ export function runRecall(db: DB, query: string, o: RecallOpts = {}): RecallResu
   const cands = recallCandidates(db, q, { scene: o.scene, exclude: o.exclude, limit: 20, queryVec: o.queryVec ?? null })
   out.candidates = cands.length
   const max = Math.min(Math.max(o.limit ?? 3, 1), 5)
+  // 近 7 天位限（抄 WrenWen）：新鲜的记忆天然分高，不限位会把远期的永久挤光。
+  // **是上限不是保底**——缺口不硬凑。
+  // 3 个位子里近 7 天最多占 2（WrenWen 是「总上限个位数、近 7 天最多 3 位」，同一条思路按我们的上限缩放）
+  const freshMax = Math.max(1, Number(process.env.MEMORY_RECALL_FRESH_MAX) || Math.floor(max * 0.67))
+  const freshLine = new Date(now.getTime() - 7 * 86400_000).toISOString()
+  let fresh = 0
 
   for (const c of cands) {
-    if (out.picked.length >= max) break
+    if (out.picked.length >= max) { out.suppressed.位子满了 = (out.suppressed.位子满了 ?? 0) + 1; continue }
     const v = judge(c, q, now)
     if (!v.ok) { out.rejected.push({ id: c.row.id, title: c.row.title, why: v.why }); continue }
+    const isFresh = c.row.created_at >= freshLine
+    if (isFresh && fresh >= freshMax) {
+      out.suppressed.近七天排满了 = (out.suppressed.近七天排满了 ?? 0) + 1
+      out.rejected.push({ id: c.row.id, title: c.row.title, why: `近 7 天的已经占了 ${freshMax} 位（不让新的把远期的挤光）` })
+      continue
+    }
+    if (isFresh) fresh++
     out.picked.push({
       row: c.row, score: c.score, lex: c.lex, sem: c.sem,
       hits: c.hits, why: v.why, axis: buildAxis(db, c.row.id),
     })
   }
+  out.suppressed = { ...lastSuppressed, ...out.suppressed }
+  out.suppressed.判官挡了 = out.rejected.length
   // 原话那一层（第二条腿）：卡片不完备，原话完备。MEMORY_RECALL_QUOTES=0 关
   if (process.env.MEMORY_RECALL_QUOTES !== '0') {
     try {
@@ -203,9 +220,22 @@ export function runRecall(db: DB, query: string, o: RecallOpts = {}): RecallResu
       if (out.quotes.length) out.quoteSpan = quoteSpan(db, q, { scene: o.scene })
     } catch { /* 搜不了就只给卡片 */ }
   }
-  out.note = [renderRecallNote(db, out.picked), renderQuotes(out.quotes, out.quoteSpan)].filter(Boolean).join('\n\n')
+  const body = [renderRecallNote(db, out.picked), renderQuotes(out.quotes, out.quoteSpan)].filter(Boolean).join('\n\n')
+  // 卡片和原话都没捞到 → 明说没搜到，把缺口摆回他眼前
+  out.note = body || MISS_NOTE
   return out
 }
+
+/**
+ * 一条都没捞到时**明说**（抄 WrenWen 5.3 的第二条铁律）。
+ * 他们的取证：每轮自动注入记忆之后，模型面前永远摆着一批「已记得」，于是从不主动检索——
+ * 5000 多轮里主动翻记忆只有 47 次，库从 455 条涨到 800 多条，比例还是 0.9%。
+ * 修法是把缺口重新摆回他眼前，而且**措辞不给台阶**：
+ * 写「你可以自己去搜」对一个回避底色的模型等于不用。
+ */
+export const MISS_NOTE =
+  '〔按她这句话没搜到相关的记忆。不是「没有」，是这一轮没捞着——' +
+  '要用就自己去 open_memo / open_memory 搜，别凭感觉说记得。〕'
 
 const NOTE_HEAD = [
   '〔想起来的几件事（系统从你的记忆库里捞的，不是她说的）：',

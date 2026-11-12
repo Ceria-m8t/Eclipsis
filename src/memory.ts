@@ -130,6 +130,7 @@ export interface RecallTry {
   candidates: number
   picked: { id: number; title: string; layer: string; subject: string; score: number; lex: number | null; sem: number | null; hits: string[]; why: string; axis: { date: string; title: string }[] }[]
   rejected: { id: number; title: string; why: string }[]
+  suppressed: Record<string, number>
   note: string
 }
 

@@ -224,6 +224,7 @@ export async function handleMemoryApi(db: DB, req: IncomingMessage, res: ServerR
           hits: x.hits, why: x.why, axis: x.axis,
         })),
         rejected: r.rejected,
+        suppressed: r.suppressed,
         expanded: r.expanded,
         quotes: r.quotes,
         quoteSpan: r.quoteSpan,

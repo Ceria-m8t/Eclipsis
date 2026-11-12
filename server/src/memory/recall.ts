@@ -24,6 +24,10 @@ export interface Scored {
   /** 字面分 / 语义分（分开留着，好看出是哪条腿起的作用） */
   lex?: number
   sem?: number
+  /** 字面的原始分（未归一）。绝对门槛挂在这上面——归一之后 0.5 分到处都是，挂不住 */
+  lexRaw?: number
+  /** 反回声扣了多少分（刚给过他的） */
+  echoPenalty?: number
 }
 
 export interface Scorer {
@@ -75,6 +79,41 @@ function buildIdf(docs: string[]): Idf {
  * 全是出现在半个库里的套话，分数还有 0.69。所以计分**只算特征词**：
  * 出现在超过 12% 的卡里的片段，一分都不给（也不写进 hits，不然「为什么命中」全是废话）。
  */
+/**
+ * 这几个数是**拿她的真实数据标定的**，不是拍脑袋（抄 WrenWen 的规矩：
+ * 「孤立的数没有来历，只会被下一个人顺手调掉」）。
+ * 标定脚本只读、零外呼（查询向量走缓存），随时能重跑：/tmp/cal2.mjs、/tmp/cal3.mjs。
+ *
+ * 2026-11-12，40 条她真说过的话 × 202 张卡 = 2000 个字面候选 / 8080 个向量对：
+ *   字面原始分：p25=2.54 p50=3.68 p75=5.04 p90=7.56 max=21.8
+ *   **「凑数」长什么样**（只命中两个字的那些）：p50=2.83、p90=4.41
+ *     → 字面门槛压在它上面：8（约等于凑数的两倍），放行 8.8% 的候选、4.4 条/查询
+ *   bge-m3 余弦（随机对）：p50=0.440 p90=0.509 **p99=0.563**
+ *   每条查询最像的那张：p10=0.539 p50=0.575 p90=0.643 max=0.664
+ *     → 语义准入线 0.55（随机对的 p99），放行 1.7%、3.4 张/查询；上限按 max 取 0.66
+ *   注意：原来写的 SEM_FLOOR=0.40 **比随机对的中位数还低**，等于谁都算「意思接近」。
+ */
+/**
+ * 字面「达标」不是一个分数门槛，是一条准入规则（抄 WrenWen §3.2）。
+ *
+ * 为什么不用分数：BM25 的原始分跟着 idf 走，idf 跟着库的大小走
+ * （202 张卡时最稀有的片段值约 4.9 分，5 张卡时只值 1.4 分）。标定出来的「8」
+ * 在她的库里是对的，换个库就全错——这正是 WrenWen 那句「给一条判据划射程时，
+ * 先看它的量纲在每条路上是不是同一个意思」。
+ *
+ * 规则（和库大小无关）：
+ *   - 查询很短（≤2 个实词片段）：命中 1 个就算（她就问「海鲜」的时候，那两个字就是全部）
+ *   - 查询长一些：要么命中 ≥2 个片段，要么有一个 ≥3 字的连续片段，要么标题里命中
+ * 「凑数」正好被这条挡住：长问句里偶然撞上一个两字片段，不算数。
+ */
+export function lexAdmitted(r: Bm25Result, queryTokens: number, titleHit: boolean): boolean {
+  if (!r.hitCount) return false
+  if (queryTokens <= 2) return true
+  return r.hitCount >= 2 || r.longest >= 3 || titleHit
+}
+export const SEM_ADMIT = 0.55
+export const SEM_CEIL = 0.66
+
 const COMMON_RATIO = 0.12
 /** 库小的时候别按比例掐（5 张卡里出现 1 次就是 20%），所以同时留一个绝对下限 */
 const isRare = (g: string, idf: Idf) => (idf.df.get(g) ?? 0) <= Math.max(2, idf.n * COMMON_RATIO)
@@ -100,9 +139,18 @@ const FUNCTION_CHARS =
 const isFunctionGram = (g: string) => g.length === 2 && [...g].every(c => FUNCTION_CHARS.includes(c))
 
 /** BM25（字符二元组版）。分数压到 0–1，好和别的打分加权 */
-export function bm25(query: string, doc: string, idf: Idf): { score: number; hits: string[] } {
+export interface Bm25Result {
+  score: number
+  raw: number
+  hits: string[]
+  /** 命中了几个片段、最长的那个多少字（准入规则要用） */
+  hitCount: number
+  longest: number
+}
+
+export function bm25(query: string, doc: string, idf: Idf, opts: { allowCommon?: boolean } = {}): Bm25Result {
   const q = [...new Set(bigrams(query))]
-  if (!q.length) return { score: 0, hits: [] }
+  if (!q.length) return { score: 0, raw: 0, hits: [], hitCount: 0, longest: 0 }
   const docGrams = bigrams(doc)
   const len = docGrams.length || 1
   const tf = new Map<string, number>()
@@ -113,13 +161,16 @@ export function bm25(query: string, doc: string, idf: Idf): { score: number; hit
   for (const g of q) {
     const f = tf.get(g) ?? 0
     if (!f) continue
-    // 套话和全库常见的片段：不计分、不算命中
-    if (isFunctionGram(g) || !isRare(g, idf)) continue
+    // 套话和全库常见的片段：不计分、不算命中。
+    // 例外（allowCommon）：这一句里**一个稀有片段都没有**时，常见的就是她能给的全部线索，
+    // 那就按它排——不然「她问的词正好在半个库里出现过」会变成一条都搜不到。
+    if (isFunctionGram(g)) continue
+    if (!opts.allowCommon && !isRare(g, idf)) continue
     const w = idf.idf.get(g) ?? Math.log(2)
     hitGrams.push(g)
     sum += w * ((f * (K1 + 1)) / (f + K1 * (1 - B + B * (len / idf.avgLen))))
   }
-  if (!sum) return { score: 0, hits: [] }
+  if (!sum) return { score: 0, raw: 0, hits: [], hitCount: 0, longest: 0 }
   // 把连着命中的二元组拼成人能读的片段。**按段分别拼**，不跨段 ——
   // 别名展开之后查询是「我妈 妈妈 她妈」，跨段拼会拼出「妈妈妈」这种没人说过的词
   const hits: string[] = []
@@ -134,8 +185,19 @@ export function bm25(query: string, doc: string, idf: Idf): { score: number; hit
   }
   // 饱和归一（不按问句长度分母）：一句长问话里只要有一小段真的命中，分数就不该被稀释掉。
   // 「晚饭点个海鲜大餐好不好」里有用的只有「海鲜」两个字，但那两个字就是全部意义所在。
-  return { score: sum / (sum + SAT), hits: [...new Set(hits)].slice(0, 5) }
+  const uniq = [...new Set(hits)]
+  return {
+    score: sum / (sum + SAT), raw: sum, hits: uniq.slice(0, 5),
+    hitCount: uniq.length, longest: uniq.reduce((n, h) => Math.max(n, h.length), 0),
+  }
 }
+
+/**
+ * 上一次候选池筛掉了多少、为什么筛掉。
+ * WrenWen 的那句教训：「饿死是静默的」——凡是多方抢一个预算的地方，
+ * 输家为什么输必须记下来，不然你永远不知道有一整类记忆从来没被模型看见过。
+ */
+export let lastSuppressed: Record<string, number> = {}
 
 export interface RecallOptions {
   layer?: Layer
@@ -154,8 +216,10 @@ export interface RecallOptions {
   scene?: string
   /** 这一句的向量（有就混合打分；没有就纯字面，绝不等） */
   queryVec?: Float32Array | null
-  /** 语义占多少权重，默认 0.45 */
-  semWeight?: number
+  /** 跳过字面准入规则（标定脚本用） */
+  skipAdmission?: boolean
+  /** 关掉反回声（标定脚本要关，不然分数会被历史影响） */
+  antiEcho?: boolean
 }
 
 /**
@@ -176,43 +240,74 @@ export function recallCandidates(db: DB, query: string, o: RecallOptions = {}): 
   if (!rows.length) return []
 
   const skip = new Set(o.exclude ?? [])
+  // 反回声（抄 WrenWen 的 antiEcho）：刚递过的扣分，但分够高还是能回来——
+  // 她连着追问同一件事时它应该回来，只是不许天然霸榜。
+  const echo = new Map<number, number>()
+  if (o.antiEcho !== false) {
+    try {
+      const rows2 = db.prepare(`SELECT memory_id, max(created_at) at FROM memory_deliveries
+        WHERE created_at >= ? GROUP BY memory_id`)
+        .all(new Date(Date.now() - 72 * 3600_000).toISOString()) as unknown as { memory_id: number; at: string }[]
+      const now = Date.now()
+      for (const r of rows2) {
+        const hours = (now - new Date(r.at).getTime()) / 3600_000
+        echo.set(r.memory_id, hours <= 24 ? 0.18 : 0.09)
+      }
+    } catch { /* 还没有回执表就当没有 */ }
+  }
   const docs = rows.map(r => `${r.title}\n${r.fact_body}\n${(() => { try { return JSON.parse(r.tags).join(' ') } catch { return '' } })()}`)
   const idf = buildIdf(docs)
   const floor = o.floor ?? 0.12
+  // 查询里有几个「实词片段」（虚词和全库常见的都不算）——准入规则按它分档
+  const grams = [...new Set(bigrams(expanded))].filter(g => !isFunctionGram(g))
+  const rareTokens = grams.filter(g => isRare(g, idf)).length
+  const allowCommon = rareTokens === 0 && grams.length > 0
+  const queryTokens = rareTokens || grams.length
 
   // 语义那条腿：有查询向量才算（没有就当它不存在，不等、不报错）
   const vecs = o.queryVec ? loadVectors(db, rows.map(r => r.id)) : new Map<number, Float32Array>()
   const useSem = !!o.queryVec
-  // bge-m3 中文「短问句 vs 长卡片」的余弦大多落在 0.40–0.75，低于下限算噪声
-  const SEM_FLOOR = 0.40
-  const SEM_CEIL = 0.75
 
   const scored: Scored[] = []
+  const suppressed = { 没过门槛: 0, 刚给过: 0, 排除: 0 }
   rows.forEach((row, i) => {
-    if (skip.has(row.id)) return
-    const { score: lex, hits } = bm25(expanded, docs[i], idf)
+    if (skip.has(row.id)) { suppressed.排除++; return }
+    const res = bm25(expanded, docs[i], idf, { allowCommon })
+    const { score: lex, raw: lexRaw, hits } = res
     let sem = 0
     if (useSem) {
       const v = vecs.get(row.id)
       if (v) {
         const c = cosine(o.queryVec!, v)
-        sem = c <= SEM_FLOOR ? 0 : Math.min(1, (c - SEM_FLOOR) / (SEM_CEIL - SEM_FLOOR))
+        sem = c <= SEM_ADMIT ? 0 : Math.min(1, (c - SEM_ADMIT) / (SEM_CEIL - SEM_ADMIT))
       }
     }
+    // **绝对门槛，两条通道各一条**（门槛制，不是配额制）：
+    //   字面要过标定出来的原始分门槛；语义要过准入线。两条都没过就不是候选，
+    //   宁可这一轮零条——「错的不如空着」。
+    const titleHit = hits.some(h => row.title.includes(h))
+    const lexOk = o.skipAdmission ? res.hitCount > 0 : lexAdmitted(res, queryTokens, titleHit)
+    const semOk = sem > 0
+    if (!lexOk && !semOk) { suppressed.没过门槛++; return }
+
     // **取大的那条腿**，两条都有再加一点。
     // 加权平均试过（0.6 字面 + 0.45 语义）：问「我做指甲那次」时「黑猫美甲」字面 0.75，
     // 被语义 0.29 拖到 0.55，排名反而被「我做」这种套话命中挤掉。两条腿是互补不是投票。
-    const score = useSem ? Math.max(lex, sem * 0.95) + (lex > 0.3 && sem > 0.3 ? 0.1 : 0) : lex
-    if (score >= floor) scored.push({ row, score, hits, lex, sem })
+    const base = useSem ? Math.max(lex, sem * 0.95) + (lex > 0.3 && sem > 0.3 ? 0.1 : 0) : lex
+    const penalty = echo.get(row.id) ?? 0
+    if (penalty) suppressed.刚给过++
+    const score = Math.max(0, base - penalty)
+    if (score >= floor) scored.push({ row, score, hits, lex, sem, lexRaw, echoPenalty: penalty || undefined })
   })
   scored.sort((a, b) => b.score - a.score || b.row.created_at.localeCompare(a.row.created_at))
   // 相对门槛：比最高分差太远的不算候选（一句话里总有几张卡沾到一两个字）
   const top = scored[0]?.score ?? 0
   const kept = scored.filter(x => x.score >= top * (o.relFloor ?? 0.45))
+  lastSuppressed = suppressed
   return kept.slice(0, Math.min(Math.max(o.limit ?? 20, 1), 50))
 }
 
-/** 本地字面打分器（当前默认）。以后要换 bge 就再写一个同形状的 */
+/** 本地字面打分器。以后要换别的打分方式就再写一个同形状的 */
 export const lexicalScorer: Scorer = {
   name: 'lexical-bm25-bigram',
   score(query, doc) {

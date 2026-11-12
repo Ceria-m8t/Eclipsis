@@ -119,11 +119,15 @@ describe('纸条', () => {
     assert.doesNotMatch(note, /心疼裹着骄傲/, '程序写的情绪不给他看')
   })
 
-  it('一条都没有就不出纸条（允许一条都不给）', () => {
+  it('一条都没有时**明说没搜到**，把缺口摆回他眼前（不是沉默）', () => {
     const db = lib()
     const r = runRecall(db, '明天股市会涨吗')
     assert.equal(r.picked.length, 0)
-    assert.equal(r.note, '')
+    // WrenWen 的取证：每轮都摆着几条「已记得」，模型就再也不主动翻记忆（5000 轮里只 47 次）。
+    // 所以没捞到要明说，而且措辞不给台阶。
+    assert.match(r.note, /没搜到/)
+    assert.match(r.note, /自己去/)
+    assert.doesNotMatch(r.note, /你可以/)
   })
 })
 
@@ -226,5 +230,59 @@ describe('私密的不进召回（和第 2 步那条规矩串上）', () => {
     db.prepare("UPDATE memories SET privacy = 'private' WHERE title = '她不吃海鲜'").run()
     assert.equal(runRecall(db, '晚饭点海鲜行不行', { scene: 'group' }).picked.length, 0)
     assert.ok(runRecall(db, '晚饭点海鲜行不行', { scene: 'chat' }).picked.length >= 1)
+  })
+})
+
+describe('WrenWen 那份文档换来的几条（2026-11-12）', () => {
+  it('反回声：刚递过的扣分，但分够高还是回得来', () => {
+    const db = lib()
+    const row = byTitle(db, '她不吃海鲜')
+    const before = recallCandidates(db, '晚饭点海鲜行不行')[0]
+    assert.equal(before.row.id, row.id)
+    assert.equal(before.echoPenalty, undefined)
+    // 刚递过
+    db.prepare(`INSERT INTO memory_deliveries (memory_id, turn, scene, mode, state, score, hits, query, created_at)
+      VALUES (?, 't1', 'chat', 'live', 'delivered', 0.5, '[]', 'x', ?)`).run(row.id, new Date().toISOString())
+    const after = recallCandidates(db, '晚饭点海鲜行不行')[0]
+    assert.ok(after.echoPenalty && after.echoPenalty > 0, '要扣分')
+    assert.ok(after.score < before.score)
+    assert.equal(after.row.id, row.id, '扣了分还是它——她连着问同一件事时它该回来')
+  })
+
+  it('近 7 天位限：新鲜的不许把远期的挤光，而且是上限不是保底', () => {
+    const db = lib()
+    const ins = db.prepare(`INSERT INTO memories (layer, subject, title, fact_body, why, tags, grade, source, voice, created_at, updated_at)
+      VALUES (?, 'erica', ?, ?, '要紧', '[]', 'normal', 'hold', 'him', ?, ?)`)
+    // 垫一堆不相干的卡：让「枇杷」在库里保持稀有，不然 idf 趋零、谁都不算命中
+    for (let i = 0; i < 20; i++) {
+      ins.run('bond', `垫底 ${i}`, `这是第 ${i} 张不相干的卡，讲的是别的事，用来把库撑大一点。`, '2026-08-01', '2026-08-01')
+    }
+    const fresh = new Date(Date.now() - 2 * 86400_000).toISOString()
+    for (let i = 0; i < 3; i++) {
+      ins.run('state', `这几天的枇杷 ${i}`, `她这几天一直在说枇杷这件事，第 ${i} 次。`, fresh, fresh)
+    }
+    ins.run('bond', '外婆家的枇杷树', '她说起小时候在外婆家那棵枇杷树，说树还在。', '2026-09-01', '2026-09-01')
+    const r = runRecall(db, '枇杷', { limit: 3 })
+    const freshLine = new Date(Date.now() - 7 * 86400_000).toISOString()
+    assert.ok(r.picked.length >= 2, '该捞到几条')
+    assert.ok(r.picked.filter(p => p.row.created_at >= freshLine).length <= 2, '三个位子里近 7 天最多占两个')
+    assert.ok((r.suppressed.近七天排满了 ?? 0) > 0, '要记下近 7 天排满了几条')
+    assert.ok(r.picked.some(p => p.row.title === '外婆家的枇杷树'), '远期那条没被挤光')
+  })
+
+  it('筛掉的都要有原因（「这轮为什么只有 1 条」要能回答）', () => {
+    const db = lib()
+    const r = runRecall(db, '海鲜', { limit: 1 })
+    assert.ok(Object.keys(r.suppressed).includes('没过门槛'))
+    assert.ok(typeof r.suppressed.判官挡了 === 'number')
+  })
+
+  it('长问句里偶然撞上一个两字片段：不算数（凑数的分数长这样）', () => {
+    const db = lib()
+    const ins = db.prepare(`INSERT INTO memories (layer, subject, title, fact_body, why, tags, grade, source, voice, created_at, updated_at)
+      VALUES ('bond', 'erica', '完全无关的一张', '她说起小时候在外婆家种的那棵枇杷树，说树还在。', '要紧', '[]', 'normal', 'hold', 'him', '2026-09-01', '2026-09-01')`)
+    ins.run()
+    const r = runRecall(db, '今天晚饭想吃点什么比较好呢你说枇杷算水果吗')
+    assert.ok(!r.picked.some(p => p.row.title === '完全无关的一张') || r.picked[0].hits.join('').length >= 3)
   })
 })

@@ -146,6 +146,7 @@ export const DIGEST_SYSTEM = [
   '',
   '硬规矩：',
   '- 不许编。只有这段对话里真的出现过的事才能写；没出现的一个字都不要加。',
+  '- **引号里的话必须是原文里一字不差的那句**。系统会逐字回查，对不上整条作废（编的引语最像真的）。',
   '- 不许替任何人下结论、不许总结他是什么样的人、不许写他的性格或习惯。',
   '- 每条必须有 subject（这是谁的事：erica=她 / ai=他自己 / us=你们俩 / 某个人的名字）。',
   '  一条只写一个主体；一件事里混着两个人就拆开，或者判 hold。',
@@ -272,6 +273,23 @@ export function stationCaller(cfg: DigestConfig & { maxTokens?: number }): CallD
   }
 }
 
+/**
+ * 引语逐字回源（抄 WrenWen 5.3 铁律①：「所有正文引语逐字回源校验，对不上整条丢弃」）。
+ * 他们的取证很刺：素材不够时模型唯一的选择就是编，而**编出来最像真的部分恰恰是引语**。
+ * 这里只校验带引号的部分：引号里的话必须在这一段材料里真的出现过（去掉标点空白再比）。
+ */
+const bare = (s: string) => s.replace(/[\s，。、,.!！?？"“”'‘’「」『』：:；;（）()~…—\-]/g, '')
+
+export function quotesAreReal(text: string, material: string): { ok: boolean; fake: string[] } {
+  const src = bare(material)
+  const fake: string[] = []
+  for (const m of String(text || '').matchAll(/[「“"]([^」”"\n]{4,})[」”"]/g)) {
+    const q = bare(m[1])
+    if (q.length >= 4 && !src.includes(q)) fake.push(m[1])
+  }
+  return { ok: !fake.length, fake }
+}
+
 export interface DigestResult {
   ran: boolean
   why: string
@@ -281,6 +299,8 @@ export interface DigestResult {
   amended: number
   skipped: number
   rejected: number
+  /** 引语对不上原文、被整条丢掉的（编的引语比编的叙述更像真的） */
+  fakeQuotes: number
   error?: string
 }
 
@@ -297,7 +317,7 @@ export async function runDigest(
 ): Promise<DigestResult> {
   const log = cfg.log ?? (() => {})
   const win = findDigestWindow(db, cfg, now)
-  if (!win.ready) return { ran: false, why: win.why, wrote: 0, inboxed: 0, amended: 0, skipped: 0, rejected: 0 }
+  if (!win.ready) return { ran: false, why: win.why, wrote: 0, inboxed: 0, amended: 0, skipped: 0, rejected: 0, fakeQuotes: 0 }
 
   const started = now.toISOString()
   const material = buildMaterial(win.episodes, cfg.maxChars ?? 12_000)
@@ -308,7 +328,7 @@ export async function runDigest(
     db.prepare('UPDATE memory_digest_runs SET finished_at = ?, error = ?, to_seq = ? WHERE id = ?')
       .run(new Date().toISOString(), msg.slice(0, 300), win.fromSeq, runId)   // 不推进
     log(`[memory:digest] 失败：${msg}`)
-    return { ran: false, why: win.why, wrote: 0, inboxed: 0, amended: 0, skipped: 0, rejected: 0, error: msg }
+    return { ran: false, why: win.why, wrote: 0, inboxed: 0, amended: 0, skipped: 0, rejected: 0, fakeQuotes: 0, error: msg }
   }
 
   const user = `这一段对话（行号是经历表里的 seq）：\n\n${material}`
@@ -330,10 +350,17 @@ export async function runDigest(
   }
   if (!parsed) return fail(`${lastErr}｜回复开头：${lastReply.slice(0, 120).replace(/\s+/g, ' ')}`)
 
-  const out: DigestResult = { ran: true, why: win.why, thread: parsed.thread, wrote: 0, inboxed: 0, amended: 0, skipped: 0, rejected: 0 }
+  const out: DigestResult = { ran: true, why: win.why, thread: parsed.thread, wrote: 0, inboxed: 0, amended: 0, skipped: 0, rejected: 0, fakeQuotes: 0 }
   const seqs = new Set(win.episodes.map(e => e.seq))
   for (const item of parsed.items.slice(0, cfg.maxItems ?? 3)) {
     if (item.decision === 'skip') { out.skipped++; continue }
+    // 引语对不上原文 → **整条丢掉**，不是只删那句引语
+    const check = quotesAreReal(`${item.title ?? ''}\n${item.fact ?? ''}\n${item.feeling ?? ''}`, material)
+    if (!check.ok) {
+      out.fakeQuotes++
+      log(`[memory:digest] 丢掉一条：引语在原文里找不到 —— ${check.fake.slice(0, 2).map(x => `「${x}」`).join('')}`)
+      continue
+    }
     const feeling = scrubFeeling(String(item.feeling ?? ''))
     const draft: MemoryDraft = {
       title: String(item.title ?? ''),
@@ -357,7 +384,7 @@ export async function runDigest(
   db.prepare(`UPDATE memory_digest_runs SET finished_at = ?, thread = ?, wrote = ?, inboxed = ?, amended = ?, skipped = ? WHERE id = ?`)
     .run(new Date().toISOString(), parsed.thread || null, out.wrote, out.inboxed, out.amended, out.skipped, runId)
   log(`[memory:digest] ${win.why} → 「${parsed.thread}」进库 ${out.wrote} / 信箱 ${out.inboxed} / 续接 ${out.amended} / 跳过 ${out.skipped}` +
-    (out.rejected ? ` / 退回 ${out.rejected}` : ''))
+    (out.rejected ? ` / 退回 ${out.rejected}` : '') + (out.fakeQuotes ? ` / 引语对不上丢掉 ${out.fakeQuotes}` : ''))
   return out
 }
 

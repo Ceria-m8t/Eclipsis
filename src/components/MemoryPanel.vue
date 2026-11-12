@@ -302,7 +302,13 @@ async function strike(m: MemoryItem) {
           <template v-if="p.axis.length >= 2"> · 这件事浮现过 {{ p.axis.length }} 次</template>
         </p>
         <p v-for="r in tried.rejected" :key="'r' + r.id" class="mem-unsure">✗ {{ r.title }}：{{ r.why }}</p>
-        <p v-if="!tried.picked.length" class="mem-meta">卡片一条都没给——没有相关的就不给，这是设计里的规矩。</p>
+        <p v-if="tried.suppressed" class="mem-meta">
+          筛掉的原因：{{ Object.entries(tried.suppressed).filter(([, n]) => n).map(([k, n]) => `${k} ${n}`).join('、') || '（没有被筛掉的）' }}
+        </p>
+        <p v-if="!tried.picked.length" class="mem-meta">
+          卡片一条都没给。这时候纸条上会**明说没搜到、让他自己去搜**——
+          每轮都摆着几条「已记得」的话，他就再也不会主动翻记忆了。
+        </p>
         <template v-if="tried.quotes.length">
           <p class="mem-why">
             原话（一字不改，{{ tried.quoteSpan.total }} 次里最像的几条{{ tried.quoteSpan.first ? '，最早 ' + tried.quoteSpan.first.slice(0, 10) : '' }}）：

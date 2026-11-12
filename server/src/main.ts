@@ -298,6 +298,7 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
                   mode, semantic: !!vec, candidates: r.candidates, picked: r.picked.length, rejected: r.rejected.length,
                   titles: r.picked.map(x => x.row.title), why: r.picked.map(x => x.why),
                   rejected_why: r.rejected.map(x => `${x.title}：${x.why}`),
+                  suppressed: r.suppressed,
                   chars: r.note.length,
                 }
                 if (mode === 'live') recallNote = r.note
