@@ -9,6 +9,7 @@ import {
   memoryProposals, decideProposals, runRejudgeBatch,
   memoryDetail, addCorrection, setMemoryPrivate, tryRecall, recallStats,
   listAliases, addAlias, removeAlias, vectorIndex, buildVectorIndex,
+  replayRecall, graduation, spotcheck, type ReplayItem,
   type MemoryDetail, type RecallTry, type RecallStats as RStats,
   LAYER_NAMES, KIND_NAMES, type MemoryStats, type Candidate, type MemoryItem, type Proposal,
 } from '../memory'
@@ -23,6 +24,32 @@ const tryQ = ref('')
 const tried = ref<RecallTry | null>(null)
 const aliases = ref<{ id: number; term: string; canonical: string }[]>([])
 const vindex = ref<{ total: number; indexed: number; model: string | null; queryCache: number; configured: boolean } | null>(null)
+const replay = ref<{ turns: number; withPicks: number; empty: number; avgPicked: number; wouldUseRate: number | null; items: ReplayItem[] } | null>(null)
+const grad = ref<{ shadowDays: number | null; shadowTurns: number; spotChecked: number; wrongMarked: number; ready: boolean; missing: string[] } | null>(null)
+
+async function doReplay() {
+  if (busy.value) return
+  busy.value = true
+  rejudgeMsg.value = '正在拿最近几十轮真实对话回放…（只读，不写任何东西）'
+  try {
+    replay.value = await replayRecall(30)
+    rejudgeMsg.value = ''
+  } catch (e: any) { rejudgeMsg.value = e.message }
+  busy.value = false
+}
+async function loadGrad() {
+  try { grad.value = await graduation() } catch { grad.value = null }
+}
+/** 抽看：这一条该给还是不该给。标过的会变成判官的新规则 */
+async function mark(it: ReplayItem, p: { id: number; title: string } | null, verdict: 'right' | 'wrong') {
+  busy.value = true
+  try {
+    const r = await spotcheck(it.said, verdict, p?.id)
+    if (!r.ok) err.value = r.error || '没记下'
+    await loadGrad()
+  } catch (e: any) { err.value = e.message }
+  busy.value = false
+}
 
 async function loadIndex() {
   try { vindex.value = await vectorIndex() } catch { vindex.value = null }
@@ -80,6 +107,7 @@ async function reload() {
       recall.value = await recallStats()
       await loadAliases()
       await loadIndex()
+      await loadGrad()
     } else if (tab.value === 'fix') {
       proposals.value = (await memoryProposals()).proposals
       picked.value = new Set()
@@ -318,6 +346,44 @@ async function strike(m: MemoryItem) {
           </p>
         </template>
       </div>
+
+      <div v-if="grad" class="mem-item">
+        <div class="mem-head">
+          <span class="mem-title">能不能切成真给他</span>
+          <span class="mem-tag">{{ grad.ready ? '条件齐了' : '还差几件' }}</span>
+          <span class="mem-spacer"></span>
+          <button class="mem-btn" :disabled="busy" @click="doReplay">回放最近 30 轮</button>
+        </div>
+        <p class="mem-meta">
+          影子 {{ grad.shadowDays ?? 0 }} 天 · 观测 {{ grad.shadowTurns }} 轮 · 你抽看过 {{ grad.spotChecked }} 条{{ grad.wrongMarked ? `（其中 ${grad.wrongMarked} 条你标了不该给）` : '' }}
+        </p>
+        <p v-for="(m, i) in grad.missing" :key="i" class="mem-unsure">· {{ m }}</p>
+      </div>
+
+      <template v-if="replay">
+        <div class="mem-stats">
+          <span>回放 {{ replay.turns }} 轮</span>
+          <span>给了东西的 {{ replay.withPicks }} 轮</span>
+          <span>平均 {{ replay.avgPicked }} 条</span>
+        </div>
+        <p class="mem-meta">
+          下面是「那一轮如果给了他，会给什么」。他当时**没看到**这些，所以「他回复里对上」的比例天然很低，
+          别拿它当准确率——**准不准要你自己看**：不该给的点「不该给」，会记进错题本。
+        </p>
+        <div v-for="(it, i) in replay.items.slice().reverse()" :key="i" class="mem-item">
+          <div class="mem-head">
+            <span class="mem-title">{{ it.said }}</span>
+            <span class="mem-tag">{{ it.at.slice(5, 16).replace('T', ' ') }}</span>
+          </div>
+          <p v-if="it.empty" class="mem-meta">一条都没给（纸条上会明说没搜到）</p>
+          <p v-for="p in it.picked" :key="p.id" class="mem-why">
+            ✓ {{ p.title }}（{{ p.score.toFixed(2) }}｜字 {{ p.lex.toFixed(2) }} / 义 {{ p.sem.toFixed(2) }}）{{ p.why }}
+            <button class="mem-link" :disabled="busy" @click="mark(it, p, 'wrong')">不该给</button>
+            <button class="mem-link" :disabled="busy" @click="mark(it, p, 'right')">该给</button>
+          </p>
+          <p v-if="it.quotes" class="mem-meta">还会给 {{ it.quotes }} 条原话</p>
+        </div>
+      </template>
 
       <div v-if="vindex" class="mem-item">
         <div class="mem-head">

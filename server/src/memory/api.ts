@@ -17,6 +17,9 @@
 //   POST /v1/eclipsis/memory/relations/extract   把 OB 的 relation_links 抽出来（可反复跑）
 //   GET  /v1/eclipsis/memory/recall?q=…   试算一遍：这句话会想起哪几条、哪几条被判官挡了（不写库）
 //   GET  /v1/eclipsis/memory/deliveries   影子运行的记录：递过/用上/没用上
+//   POST /v1/eclipsis/memory/replay       { turns, allowEmbed } 回放最近几轮真实对话（只读，无副作用）
+//   GET  /v1/eclipsis/memory/graduation   毕业条件：影子够久了吗、你抽看了几条、错题本里有没有
+//   GET/POST /v1/eclipsis/memory/spotcheck  错题本：这一条该给 / 不该给
 //   GET  /v1/eclipsis/memory/quotes?q=…   在原话里搜（经历表，一字不改）
 //   POST /v1/eclipsis/memory/index        给卡片算向量（离线一次性，之后只补新的）
 //   GET  /v1/eclipsis/memory/index        向量索引的状态
@@ -38,6 +41,7 @@ import { runRecall, runRecallWithSemantics, recallStats, judgeDeliveries, recall
 import { embedConfig, apiEmbedder, indexMemories, vectorStats } from './embed.ts'
 import { addAlias, removeAlias, listAliases, expandQuery } from './aliases.ts'
 import { searchQuotes, quoteSpan } from './quotes.ts'
+import { replayRecall, graduation, addSpotcheck, listSpotchecks, ensureSpotcheckSchema } from './replay.ts'
 import { chooseModel, currentStation } from '../station.ts'
 
 function json(res: ServerResponse, status: number, body: unknown) {
@@ -276,6 +280,35 @@ export async function handleMemoryApi(db: DB, req: IncomingMessage, res: ServerR
           return true
         }
         const r = addAlias(db, String(b?.term ?? ''), String(b?.canonical ?? ''))
+        json(res, r.ok ? 200 : 400, r)
+        return true
+      }
+    }
+
+    if (p === '/v1/eclipsis/memory/replay' && req.method === 'POST') {
+      const b = await readJson(req)
+      json(res, 200, await replayRecall(db, {
+        turns: Number(b?.turns) || 20,
+        allowEmbed: b?.allowEmbed !== false,
+        limit: Number(b?.limit) || 3,
+      }))
+      return true
+    }
+
+    if (p === '/v1/eclipsis/memory/graduation' && req.method === 'GET') {
+      json(res, 200, graduation(db))
+      return true
+    }
+
+    if (p === '/v1/eclipsis/memory/spotcheck') {
+      ensureSpotcheckSchema(db)
+      if (req.method === 'GET') { json(res, 200, { checks: listSpotchecks(db) }); return true }
+      if (req.method === 'POST') {
+        const b = await readJson(req)
+        const r = addSpotcheck(db, {
+          memoryId: Number.isFinite(Number(b?.memoryId)) ? Number(b.memoryId) : null,
+          query: String(b?.query ?? ''), verdict: b?.verdict, note: b?.note,
+        })
         json(res, r.ok ? 200 : 400, r)
         return true
       }

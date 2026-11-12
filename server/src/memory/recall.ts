@@ -15,6 +15,7 @@ import { ensureMemorySchema, type Layer, type MemoryRow } from './schema.ts'
 import { allowsPrivate } from './privacy.ts'
 import { expandQuery } from './aliases.ts'
 import { cosine, loadVectors } from './embed.ts'
+import { cleanForDigest } from './digest.ts'
 
 export interface Scored {
   row: MemoryRow
@@ -39,14 +40,28 @@ export interface Scorer {
 /** 二元组：中文不分词，直接切两个字一组 */
 export function bigrams(text: string): string[] {
   const out: string[] = []
+  // 日期和时间整串去掉：它们的碎片（026 / 11 / 48）在任何库里都"稀有"，却什么都不说明
+  text = String(text || '')
+    .replace(/\d{4}[-/年]\d{1,2}[-/月]\d{1,2}日?/g, ' ')
+    .replace(/\d{1,2}[:：]\d{2}(?:[:：]\d{2})?/g, ' ')
   // 按标点和空格切段，**只在段内切两字一组**。
   // 跨段拼会造出假片段：「我妈 妈妈」连起来会多出一个「妈妈妈」，
   // 看着像命中，其实两个词之间根本不相邻（2026-11-12 别名展开之后踩到的）。
   for (const seg of String(text || '').split(/[\s\p{P}\p{S}]+/u)) {
-    for (let i = 0; i < seg.length - 1; i++) out.push(seg.slice(i, i + 2))
+    for (let i = 0; i < seg.length - 1; i++) {
+      const g = seg.slice(i, i + 2)
+      // 数字/英文的两字片段不算：18110 会被下面按整词收，而「18」「81」「02」「26」
+      // 这些只是数字串切出来的碎片（她消息里的时间前缀就是这么乱命中的）
+      if (/^[0-9a-zA-Z._-]{2}$/.test(g)) continue
+      out.push(g)
+    }
   }
-  // 英文和数字按词也算一份（型号、端口、账号这类要能命中）
-  for (const w of String(text || '').toLowerCase().match(/[a-z0-9_.-]{2,}/g) ?? []) out.push(w)
+  // 英文和数字按词也算一份（型号、端口、账号这类要能命中）。
+  // **纯数字要 4 位以上**：18110（端口）有用，「026」「48」这种日期碎片只会乱命中。
+  for (const w of String(text || '').toLowerCase().match(/[a-z0-9_.-]{2,}/g) ?? []) {
+    if (/^[\d.]+$/.test(w) && w.replace(/\D/g, '').length < 4) continue
+    out.push(w)
+  }
   return out
 }
 
@@ -136,7 +151,24 @@ const FUNCTION_CHARS =
   '的了是不在有和就都也很啊呢吧吗嘛呀哦啦我你他她们个这那什么要会能着过被把让给说' +
   '一今天怎样点跟为次还没最近多少时候些哪里对可能应该觉得真当然于与之而且但' +
   '早晚上下前后里外中间次回边种样做'
-const isFunctionGram = (g: string) => g.length === 2 && [...g].every(c => FUNCTION_CHARS.includes(c))
+/**
+ * 词级停用表。直接抄 WrenWen §5.2 那张「弱召回词」表（他们的原话：命中了也不算数），
+ * 加上回放时真的看见的几个（「才能」「一段」「不清」这种）。
+ */
+const STOP_TERMS = new Set([
+  '我们', '你们', '这个', '那个', '就是', '还是', '已经', '现在', '继续', '好的', '可以',
+  '为什么', '怎么办', '什么', '没有', '一个', '不是', '知道', '感觉', '然后', '但是', '因为', '所以',
+  '才能', '一段', '不清', '起来', '出来', '过来', '时候', '事情', '东西', '地方', '问题', '觉得',
+])
+/** 助词：带助词的两字片段基本是跨词碎片（「的记」「了的」），不算特征 */
+const PARTICLES = '的了着过地得'
+
+const isFunctionGram = (g: string) =>
+  g.length === 2 && (
+    STOP_TERMS.has(g) ||
+    [...g].some(c => PARTICLES.includes(c)) ||
+    [...g].every(c => FUNCTION_CHARS.includes(c))
+  )
 
 /** BM25（字符二元组版）。分数压到 0–1，好和别的打分加权 */
 export interface Bm25Result {
@@ -228,8 +260,9 @@ export interface RecallOptions {
  */
 export function recallCandidates(db: DB, query: string, o: RecallOptions = {}): Scored[] {
   ensureMemorySchema(db)
-  // 她说「我妈」，卡里写的是「妈妈」——先把说法展开（aliases.ts），不然一条都搜不到
-  const expanded = expandQuery(db, query).text
+  // 先洗掉时间前缀（她的消息带着「（2026-11-12 10:48）」），再把说法展开
+  const clean = cleanForDigest(query)
+  const expanded = expandQuery(db, clean).text
   const where = ['retracted_at IS NULL', 'dont_surface = 0', 'needs_review = 0']
   const args: (string | number)[] = []
   if (o.layer) { where.push('layer = ?'); args.push(o.layer) }

@@ -57,6 +57,7 @@ export interface QuoteOptions {
  * 这样「我妈」展开成「妈妈/她妈」之后两边都能命中。
  */
 export function searchQuotes(db: DB, query: string, o: QuoteOptions = {}): Quote[] {
+  query = cleanForDigest(query)
   const exp = expandQuery(db, query)
   const words = [...new Set(bigrams(exp.text))].filter(g => g.length >= 2)
   if (!words.length) return []
@@ -97,7 +98,7 @@ export function searchQuotes(db: DB, query: string, o: QuoteOptions = {}): Quote
 
 /** 这些说法在原话里一共出现过多少次、第一次和最后一次是什么时候 */
 export function quoteSpan(db: DB, query: string, o: QuoteOptions = {}): { total: number; first: string | null; last: string | null } {
-  const exp = expandQuery(db, query)
+  const exp = expandQuery(db, cleanForDigest(query))
   const terms = [...new Set([...exp.matched, ...exp.added])].filter(t => t.length >= 2)
   if (!terms.length) return { total: 0, first: null, last: null }
   const like = terms.map(() => 'content LIKE ?').join(' OR ')

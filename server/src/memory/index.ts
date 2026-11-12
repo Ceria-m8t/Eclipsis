@@ -36,4 +36,8 @@ export {
 } from './embed.ts'
 export { expandQuery, addAlias, removeAlias, listAliases, ensureAliasSchema, BUILTIN_ALIASES } from './aliases.ts'
 export { searchQuotes, quoteSpan, renderQuotes, type Quote } from './quotes.ts'
+export {
+  replayRecall, graduation, addSpotcheck, listSpotchecks, ensureSpotcheckSchema,
+  type ReplayReport, type Graduation,
+} from './replay.ts'
 export { handleMemoryApi } from './api.ts'

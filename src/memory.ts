@@ -142,6 +142,25 @@ export interface RecallStats {
   recent: { title: string; state: string; score: number | null; query: string; at: string }[]
 }
 
+export interface ReplayItem {
+  at: string
+  said: string
+  replied: string
+  picked: { id: number; title: string; score: number; lex: number; sem: number; why: string; axisLen: number }[]
+  rejected: { title: string; why: string }[]
+  quotes: number
+  wouldUse: number
+  empty: boolean
+}
+
+export const replayRecall = (turns = 20) =>
+  post<{ turns: number; withPicks: number; empty: number; avgPicked: number; wouldUseRate: number | null; items: ReplayItem[] }>(
+    '/replay', { turns })
+export const graduation = () =>
+  get<{ shadowDays: number | null; shadowTurns: number; spotChecked: number; wrongMarked: number; ready: boolean; missing: string[] }>('/graduation')
+export const spotcheck = (query: string, verdict: 'right' | 'wrong' | 'meh', memoryId?: number, note?: string) =>
+  post<{ ok: boolean; error?: string }>('/spotcheck', { query, verdict, memoryId, note })
+
 export const vectorIndex = () => get<{ total: number; indexed: number; model: string | null; queryCache: number; configured: boolean }>('/index')
 export const buildVectorIndex = () => post<{ total: number; missing: number; embedded: number; failed: number; ms: number; error?: string }>('/index', {})
 

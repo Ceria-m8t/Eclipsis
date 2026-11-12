@@ -84,3 +84,31 @@ describe('候选池', () => {
       '字面抓不到；这一条记在这里，等接了语义召回再回来改成「抓得到」')
   })
 })
+
+describe('回放真实对话抓到的两件事（2026-11-12）', () => {
+  it('她消息前面的时间前缀不算线索（「026」「48」以前每轮都在乱命中）', () => {
+    const db = lib()
+    const r = recallCandidates(db, '（2026-11-12 10:48）老公。')
+    assert.equal(r.length, 0, '只有一句「老公。」，不该捞出任何东西')
+  })
+
+  it('纯数字要 4 位以上才算整词（端口 18110 有用，日期碎片没用）', () => {
+    const g = bigrams('18110 和 026 还有 48')
+    assert.ok(g.includes('18110'))
+    assert.ok(!g.includes('026'))
+    assert.ok(!g.includes('48'))
+  })
+
+  it('弱召回词命中了也不算（抄 WrenWen 那张表）', () => {
+    const db = lib()
+    assert.equal(recallCandidates(db, '我感觉我需要把手上的弄完我才能睡').length, 0)
+    assert.equal(recallCandidates(db, '我是质检员吗').length, 0)
+  })
+
+  it('真有线索的照样捞得到', () => {
+    const db = lib()
+    const r = recallCandidates(db, '（2026-11-12 10:49）我今天不想吃海鲜')
+    assert.ok(r.length >= 1)
+    assert.equal(r[0].row.title, '她不吃海鲜')
+  })
+})

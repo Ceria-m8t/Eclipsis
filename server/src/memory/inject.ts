@@ -19,6 +19,7 @@ import { PEOPLE_SEEDS } from './classify.ts'
 import { labelWithPeople } from './write.ts'
 import { listRelationsOf } from './relations.ts'
 import { searchQuotes, quoteSpan, renderQuotes, type Quote } from './quotes.ts'
+import { cleanForDigest } from './digest.ts'
 import { expandQuery } from './aliases.ts'
 import { embedConfig, apiEmbedder, queryVector, vectorStats } from './embed.ts'
 
@@ -176,7 +177,7 @@ export interface RecallOpts {
 export function runRecall(db: DB, query: string, o: RecallOpts = {}): RecallResult {
   ensureMemorySchema(db)
   const now = o.now ?? new Date()
-  const q = String(query || '').trim()
+  const q = cleanForDigest(String(query || '')).trim()
   const exp = expandQuery(db, q)
   const out: RecallResult = {
     query: q.slice(0, 200), expanded: exp.added, semantic: { used: false, cached: false, ms: 0 },
