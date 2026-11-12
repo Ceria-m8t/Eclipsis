@@ -277,12 +277,13 @@ describe('WrenWen 那份文档换来的几条（2026-11-12）', () => {
     assert.ok(typeof r.suppressed.判官挡了 === 'number')
   })
 
-  it('达标规则：长问句要命中四成，除非那个词特别罕见（拿规则本身测，不靠小库里的巧合）', () => {
+  it('达标规则：长问句要命中五成，除非那个词特别罕见（拿规则本身测，不靠小库里的巧合）', () => {
     const hit = (hitCount: number, longest: number, rarestContentDf: number) =>
       ({ score: 0.5, raw: 5, hits: [], hitCount, longest, rarestDf: rarestContentDf, rarestContentDf })
-    // 一句话里有 10 个实词片段 → 要命中 4 个
+    // 一句话里有 10 个实词片段 → 要命中 5 个（2026-11-12 她说「还有一点点杂」之后从四成提到五成）
     assert.equal(lexAdmitted(hit(2, 2, 40), 10, false, 200), false, '只命中两个到处都有的词 → 不算')
-    assert.equal(lexAdmitted(hit(4, 2, 40), 10, false, 200), true, '命中四成 → 算')
+    assert.equal(lexAdmitted(hit(4, 2, 40), 10, false, 200), false, '四成也不够了')
+    assert.equal(lexAdmitted(hit(5, 2, 40), 10, false, 200), true, '命中五成 → 算')
     assert.equal(lexAdmitted(hit(1, 2, 1), 10, false, 200), true, '只命中一个实词，而且整库只有一张卡提过 → 算')
     // 「我现」「每一」这种带代词的碎片不算实词：rarestContentDf 是 Infinity
     assert.equal(lexAdmitted({ score: 0.5, raw: 5, hits: [], hitCount: 1, longest: 2, rarestDf: 1, rarestContentDf: Infinity }, 10, false, 200), false,

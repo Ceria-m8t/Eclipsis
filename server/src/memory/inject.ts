@@ -82,7 +82,11 @@ export function judge(cand: Scored, query: string, now: Date = new Date()): Verd
   //    （换了说法的那类问话靠的就是这条，但门槛要高，不然等于随便给）。
   const solid = cand.hits.join('').replace(/\s/g, '')
   const sem = cand.sem ?? 0
-  if (solid.length < 2 && sem < 0.5) return { ok: false, why: '只是零星几个字像，说不清为什么相关' }
+  // 语义「单独放行」的线要压在随机噪声之上：
+  // 她的库里随机一句话 × 随机一张卡的余弦 p999 = 0.618，而 sem=0.64 对应余弦 ≈0.62。
+  // Latent 的规矩说得更狠：没在自己语料上标定过的模型，向量路只许参与排序、不许单独放行。
+  // 我们量过了，所以给它放行权，但线要压在 p999 上面。
+  if (solid.length < 2 && sem < 0.64) return { ok: false, why: '只是零星几个字像，意思也没到能单独算数的程度' }
 
   // 5. 单个两字片段、意思也不接近 → 说不出为什么该想起它。
   //    2026-11-12 回放看出来的：这一档全是「来再」「又来」「何东」「图片」这种，
@@ -91,7 +95,7 @@ export function judge(cand: Scored, query: string, now: Date = new Date()): Verd
   const rare = cand.rareDf
   // 她就问两三个字的时候不算在内（「枇杷」「海鲜」那两个字就是她要找的全部）
   const shortAsk = query.replace(/[\s\p{P}\p{S}]+/gu, '').length <= 5
-  if (!shortAsk && sem < 0.15 && cand.hits.length < 2 && longest < 3 && !(typeof rare === 'number' && rare <= 2)) {
+  if (!shortAsk && sem < 0.15 && cand.hits.length < 2 && longest < 3 && !(typeof rare === 'number' && rare <= 1)) {
     return { ok: false, why: `只命中「${cand.hits[0] ?? ''}」两个字，意思也不接近` }
   }
 

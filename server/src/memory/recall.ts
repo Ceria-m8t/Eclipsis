@@ -131,7 +131,8 @@ export function lexAdmitted(r: Bm25Result, queryTokens: number, titleHit: boolea
   // 2026-11-12 她看完回放说「太杂」：之前只要命中 2 个片段就算数，于是
   // 「我说我妈不在家，她问我成年了没…」这种长句靠「她问我」「回来」也能把卡捞上来。
   // 四成这条一上，长句必须真的对上话题才给。
-  const need = Math.max(2, Math.ceil(queryTokens * 0.4))
+  // 2026-11-12 她看完第二轮回放说「还有一点点杂」→ 四成提到五成
+  const need = Math.max(2, Math.ceil(queryTokens * 0.5))
   if (r.hitCount >= need) return true
   // 例外一：命中的那个词特别罕见（整库只有一两张卡提过）。
   //   「晚饭点个海鲜大餐好不好」里只有「海鲜」对得上，但「海鲜」在 177 张卡里只出现过一两次，
@@ -141,8 +142,12 @@ export function lexAdmitted(r: Bm25Result, queryTokens: number, titleHit: boolea
   return titleHit && r.hitCount >= 2
 }
 
-/** 「特别罕见」= 整库里最多这么多张卡提过（1% 封底 2 张） */
-export const rareEnough = (n: number) => Math.max(2, Math.floor(n * 0.01))
+/**
+ * 「特别罕见」= 整库里最多这么多张卡提过。
+ * 2026-11-12 第一版取 1%（177 张库 → 2 张），她说还是有点杂：
+ * 「体面」「生物」这种 2 张卡提过的词也靠这条例外进来了。收到 0.5%（→ 1 张）。
+ */
+export const rareEnough = (n: number) => Math.max(1, Math.floor(n * 0.005))
 export const SEM_ADMIT = 0.55
 export const SEM_CEIL = 0.66
 
