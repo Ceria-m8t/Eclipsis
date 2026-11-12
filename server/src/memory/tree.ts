@@ -154,37 +154,84 @@ function cleanLine(s: string): string {
 
 export interface SourcePage { from: string; to: string; total: number; offset: number; lines: string[]; next: number | null }
 
-/** 某段日期里她和他说过的话（日常聊天 + 存档里补回来的那段），按时间排 */
+const SRC_WHERE = [
+  'retracted_at IS NULL', "kind = 'message'", "actor IN ('erica','ai')", "scope = 'daily'",
+  "channel IN ('chat','archive')", 'ts >= ?', 'ts < ?',
+].join(' AND ')
+
+export interface SrcRow { ts: string; who: 'her' | 'him'; text: string; day: string }
+
+/** 某段日期里说过的话（原话，去掉念头和时间标记），按时间排。空话不算 */
+function fetchRows(db: DB, from: string, to: string): SrcRow[] {
+  const rows = db.prepare(`SELECT ts, actor, content, date(datetime(ts, '+8 hours')) AS day
+    FROM episodes WHERE ${SRC_WHERE} ORDER BY ts, seq`)
+    .all(dayStartUtc(from), dayEndUtc(to)) as { ts: string; actor: string; content: string; day: string }[]
+  const out: SrcRow[] = []
+  for (const r of rows) {
+    const text = cleanLine(r.content)
+    if (text) out.push({ ts: r.ts, who: r.actor === 'erica' ? 'her' : 'him', text, day: r.day })
+  }
+  return out
+}
+
+/** 每天多少句（折叠用：一节覆盖好几天时，先按天给，别一次倒几百句） */
+export interface DayCount { day: string; total: number; her: number; him: number }
+export function sourceDays(db: DB, o: { from: string; to: string }): { total: number; days: DayCount[] } {
+  const rows = fetchRows(db, o.from, o.to)
+  const map = new Map<string, DayCount>()
+  for (const r of rows) {
+    const d = map.get(r.day) ?? { day: r.day, total: 0, her: 0, him: 0 }
+    d.total++
+    if (r.who === 'her') d.her++; else d.him++
+    map.set(r.day, d)
+  }
+  return { total: rows.length, days: [...map.values()].sort((a, b) => a.day.localeCompare(b.day)) }
+}
+
+export interface SourceLine { ts: string; who: 'her' | 'him'; text: string; day: string; hit?: boolean }
+
+const cut = (text: string, per: number) => (text.length > per ? `${text.slice(0, per)}…（这条还有 ${text.length - per} 字）` : text)
+
+/** 在这几天里搜一个词：只给命中的那几句，前后各带几句上下文（断开的地方前端画一道分隔） */
+export function sourceSearch(db: DB, o: { from: string; to: string; query: string; context?: number; limit?: number; perLine?: number }):
+  { total: number; shown: number; lines: SourceLine[]; truncated: boolean } {
+  const rows = fetchRows(db, o.from, o.to)
+  const q = o.query.trim()
+  if (!q) return { total: 0, shown: 0, lines: [], truncated: false }
+  const ctx = Math.min(Math.max(o.context ?? 2, 0), 5)
+  const limit = Math.min(Math.max(o.limit ?? 40, 1), 120)
+  const hits: number[] = []
+  rows.forEach((r, i) => { if (r.text.includes(q)) hits.push(i) })
+  const take = hits.slice(0, limit)
+  const keep = new Set<number>()
+  for (const i of take) for (let j = Math.max(0, i - ctx); j <= Math.min(rows.length - 1, i + ctx); j++) keep.add(j)
+  const per = o.perLine ?? 2000
+  const lines = [...keep].sort((a, b) => a - b)
+    .map(i => ({ ts: rows[i]!.ts, who: rows[i]!.who, text: cut(rows[i]!.text, per), day: rows[i]!.day, hit: take.includes(i) || undefined }))
+  return { total: hits.length, shown: take.length, lines, truncated: hits.length > take.length }
+}
+
+/** 一段日期里的原话，分页。给他的工具用的是字符串版 */
 export function sourceLines(db: DB, o: { from: string; to: string; query?: string; offset?: number; limit?: number; maxChars?: number; perLine?: number }): SourcePage {
-  const where = [
-    'retracted_at IS NULL', "kind = 'message'", "actor IN ('erica','ai')", "scope = 'daily'",
-    "channel IN ('chat','archive')", 'ts >= ?', 'ts < ?',
-  ]
-  const args: (string | number)[] = [dayStartUtc(o.from), dayEndUtc(o.to)]
+  const all = fetchRows(db, o.from, o.to)
   const q = (o.query ?? '').trim()
-  if (q) { where.push('content LIKE ?'); args.push(`%${q}%`) }
-  const total = Number((db.prepare(`SELECT count(*) n FROM episodes WHERE ${where.join(' AND ')}`).get(...args) as { n: number }).n)
+  const rows = q ? all.filter(r => r.text.includes(q)) : all
   const offset = Math.max(0, Math.floor(o.offset ?? 0))
-  const limit = Math.min(Math.max(Math.floor(o.limit ?? 40), 1), 80)
-  const rows = db.prepare(`SELECT ts, actor, content FROM episodes WHERE ${where.join(' AND ')} ORDER BY ts, seq LIMIT ? OFFSET ?`)
-    .all(...args, limit, offset) as { ts: string; actor: string; content: string }[]
+  const limit = Math.min(Math.max(Math.floor(o.limit ?? 40), 1), 120)
   const per = o.perLine ?? 500
   const maxChars = o.maxChars ?? 12_000
   const lines: string[] = []
   let used = 0
   let taken = 0
-  for (const r of rows) {
-    let text = cleanLine(r.content)
-    if (!text) { taken++; continue }
-    if (text.length > per) text = `${text.slice(0, per)}…（这条还有 ${text.length - per} 字）`
-    const line = `[${bjShort(r.ts)}] ${r.actor === 'erica' ? '她' : '我'}：${text}`
+  for (const r of rows.slice(offset, offset + limit)) {
+    const line = `[${bjShort(r.ts)}] ${r.who === 'her' ? '她' : '我'}：${cut(r.text, per)}`
     if (used + line.length > maxChars && lines.length) break
     lines.push(line)
     used += line.length
     taken++
   }
   const nextAt = offset + taken
-  return { from: o.from, to: o.to, total, offset, lines, next: nextAt < total ? nextAt : null }
+  return { from: o.from, to: o.to, total: rows.length, offset, lines, next: nextAt < rows.length ? nextAt : null }
 }
 
 // ── 每轮注入 ──
@@ -230,13 +277,14 @@ export const TREE_TOOLS: McpTool[] = [
     description:
       '翻原话：某一节（或某几天）里她和我当时到底说了什么，按时间排，一字不改（我的念头不给，只给说出口的）。\n' +
       '用 section（tree_read 里的节号）或者 from/to（北京日期 2026-09-25）指定范围。query 只看含这个词的。around 往前后各多看几天（日期拿不准时用）。\n' +
-      '一次最多 80 条，有下一页会告诉我 offset。',
+      '一次最多 120 条，有下一页会告诉我 offset。一节覆盖好几天时先用 days=true 看每天多少句，再挑一天细看。',
     inputSchema: obj({
       section: { type: 'number', description: '节号（tree_read 里看）' },
       from: { type: 'string', description: '开始日期 YYYY-MM-DD（北京）' },
       to: { type: 'string', description: '结束日期 YYYY-MM-DD（含这一天）' },
       query: { type: 'string', description: '只看含这个词的' },
       around: { type: 'number', description: '前后各多看几天，默认 0，最多 7' },
+      days: { type: 'boolean', description: '只看每天多少句（不给正文），挑日子用' },
       offset: { type: 'number', description: '从第几条开始（翻页）' },
       limit: { type: 'number', description: '这一页几条，默认 40，最多 80' },
     }),
@@ -317,6 +365,12 @@ export function treeBox(db: DB): WakeBox {
           if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) to = from
           const around = Math.min(Math.max(Math.floor(Number(a.around) || 0), 0), 7)
           if (around) { from = addDays(from, -around); to = addDays(to, around) }
+          if (a.days === true) {
+            const d = sourceDays(db, { from, to })
+            if (!d.total) return ok(`${from} ~ ${to}：时间线里没有记录。`)
+            return ok([`${from} ~ ${to}：共 ${d.total} 句。挑一天再 tree_source from=那天：`, '',
+              ...d.days.map(x => `${x.day}　${x.total} 句（她 ${x.her} / 我 ${x.him}）`)].join('\n'))
+          }
           const page = sourceLines(db, {
             from, to, query: typeof a.query === 'string' ? a.query : undefined,
             offset: Number(a.offset) || 0, limit: Number(a.limit) || 40,

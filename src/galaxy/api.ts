@@ -17,6 +17,9 @@ export interface TreePage {
   rules: string[]
 }
 export interface SourcePage { from: string; to: string; total: number; offset: number; lines: string[]; next: number | null }
+export interface DayCount { day: string; total: number; her: number; him: number }
+export interface SourceLine { ts: string; who: 'her' | 'him'; text: string; day: string; hit?: boolean }
+export interface SearchPage { total: number; shown: number; lines: SourceLine[]; truncated: boolean }
 
 async function get<T>(path: string): Promise<T> {
   const r = await fetch(BASE + path, { cache: 'no-store' })
@@ -29,7 +32,10 @@ export const loadGraph = () => get<GGraph>('/galaxy/graph')
 export const loadTree = () => get<TreePage>('/tree')
 export const loadVersion = (id: number) => get<TreeVersionInfo & { body: string }>(`/tree/version?id=${id}`)
 export const loadSource = (from: string, to: string, offset = 0) =>
-  get<SourcePage>(`/tree/source?from=${from}&to=${to}&offset=${offset}`)
+  get<SourcePage>(`/tree/source?from=${from}&to=${to}&offset=${offset}&limit=80`)
+export const loadDays = (from: string, to: string) => get<{ total: number; days: DayCount[] }>(`/tree/source/days?from=${from}&to=${to}`)
+export const searchSource = (from: string, to: string, q: string) =>
+  get<SearchPage>(`/tree/source/search?from=${from}&to=${to}&q=${encodeURIComponent(q)}`)
 
 export async function postNote(body: string): Promise<{ id: number }> {
   const r = await fetch(BASE + '/tree/notes', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ body }) })

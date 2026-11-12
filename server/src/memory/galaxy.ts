@@ -12,7 +12,7 @@ import type { DB } from '../db.ts'
 import { ensureMemorySchema } from './schema.ts'
 import {
   currentTree, parseSections, listVersions, getVersion, openTreeNotes, addTreeNote, sourceLines, ensureTreeSchema,
-  TREE_MAX, RULES, type Section,
+  sourceDays, sourceSearch, TREE_MAX, RULES, type Section,
 } from './tree.ts'
 import { bjDate } from './when.ts'
 
@@ -162,6 +162,25 @@ export async function handleGalaxyApi(db: DB, req: IncomingMessage, res: ServerR
   if (p === '/v1/eclipsis/memory/tree/version' && req.method === 'GET') {
     const v = getVersion(db, Number(url.searchParams.get('id')))
     v ? json(res, 200, v) : json(res, 404, { error: '没有这一版' })
+    return true
+  }
+  // 一节覆盖好几天：先按天给数量，她点哪天看哪天（她说「原话太多了」）
+  if (p === '/v1/eclipsis/memory/tree/source/days' && req.method === 'GET') {
+    const from = url.searchParams.get('from') || ''
+    const to = url.searchParams.get('to') || from
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) { json(res, 400, { error: '要给 from/to（YYYY-MM-DD）' }); return true }
+    json(res, 200, sourceDays(db, { from, to }))
+    return true
+  }
+  // 在这一段里搜一个词：只给命中那几句 + 前后各两句上下文
+  if (p === '/v1/eclipsis/memory/tree/source/search' && req.method === 'GET') {
+    const from = url.searchParams.get('from') || ''
+    const to = url.searchParams.get('to') || from
+    const q = (url.searchParams.get('q') || '').trim()
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) { json(res, 400, { error: '要给 from/to（YYYY-MM-DD）' }); return true }
+    if (!q) { json(res, 400, { error: '要给搜什么（q）' }); return true }
+    if (q.length > 60) { json(res, 400, { error: '搜的词太长了' }); return true }
+    json(res, 200, sourceSearch(db, { from, to, query: q, context: 2, limit: 40 }))
     return true
   }
   if (p === '/v1/eclipsis/memory/tree/source' && req.method === 'GET') {
