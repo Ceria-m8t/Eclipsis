@@ -41,8 +41,22 @@ import { ensurePromptSchema, handlePromptApi } from './prompts.ts'
 import {
   ensureMemorySchema, handleMemoryApi, DigestScheduler,
   runRecall, recordDeliveries, recallMode, judgeDeliveries,
+  embedConfig, cachedQueryVector, warmQueryVector, vectorStats,
 } from './memory/index.ts'
 import { handleLetoApi, handleLetoAdmin, loadAgents, type LetoApiDeps } from './leto/index.ts'
+
+/**
+ * 聊天那条路要的查询向量：**同步只读缓存**，没命中就后台补算（这一轮先只用字面分，
+ * 下一次同样的问法就是 0 毫秒）。她说「花钱无所谓，我只是害怕它时间太长」——
+ * 所以这条路上一毫秒都不等网络。
+ */
+function recallQueryVector(db: DB, query: string): Float32Array | null {
+  const cfg = embedConfig()
+  if (!cfg || vectorStats(db).indexed === 0) return null
+  const hit = cachedQueryVector(db, query, cfg.model)
+  if (!hit) warmQueryVector(db, query, cfg)
+  return hit
+}
 
 function bearer(req: IncomingMessage): string {
   const h = String(req.headers.authorization || '')
@@ -275,10 +289,13 @@ export function buildServers(cfg: Config, db: DB, opts: ServerOptions = {}): { f
                   ? lastUser.content.filter((c: any) => c?.type === 'text').map((c: any) => c.text).join(' ')
                   : ''
               if (query.trim()) {
-                const r = runRecall(db, query, { scene: 'chat', limit: Number(process.env.MEMORY_RECALL_MAX) || 3 })
+                // 语义那条腿：查询向量用**上一轮算好的缓存**，缓存没有就这一轮先不用它
+                // （prepare 是同步的，这里一毫秒都不等网络；算好之后下次同样的问法就有了）
+                const vec = recallQueryVector(db, query)
+                const r = runRecall(db, query, { scene: 'chat', limit: Number(process.env.MEMORY_RECALL_MAX) || 3, queryVec: vec })
                 recordDeliveries(db, r.picked, { turn: turnHeader, scene: 'chat', mode, query: r.query })
                 transforms.memory_recall = {
-                  mode, candidates: r.candidates, picked: r.picked.length, rejected: r.rejected.length,
+                  mode, semantic: !!vec, candidates: r.candidates, picked: r.picked.length, rejected: r.rejected.length,
                   titles: r.picked.map(x => x.row.title), why: r.picked.map(x => x.why),
                   rejected_why: r.rejected.map(x => `${x.title}：${x.why}`),
                   chars: r.note.length,

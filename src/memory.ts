@@ -123,11 +123,12 @@ export interface Quote { seq: number; ts: string; who: string; text: string; hit
 export interface RecallTry {
   mode: string
   query: string
+  semantic: { used: boolean; cached: boolean; ms: number; why?: string }
   expanded: string[]
   quotes: Quote[]
   quoteSpan: { total: number; first: string | null; last: string | null }
   candidates: number
-  picked: { id: number; title: string; layer: string; subject: string; score: number; hits: string[]; why: string; axis: { date: string; title: string }[] }[]
+  picked: { id: number; title: string; layer: string; subject: string; score: number; lex: number | null; sem: number | null; hits: string[]; why: string; axis: { date: string; title: string }[] }[]
   rejected: { id: number; title: string; why: string }[]
   note: string
 }
@@ -139,6 +140,9 @@ export interface RecallStats {
   usedRate: number | null
   recent: { title: string; state: string; score: number | null; query: string; at: string }[]
 }
+
+export const vectorIndex = () => get<{ total: number; indexed: number; model: string | null; queryCache: number; configured: boolean }>('/index')
+export const buildVectorIndex = () => post<{ total: number; missing: number; embedded: number; failed: number; ms: number; error?: string }>('/index', {})
 
 export const searchQuotes = (q: string) =>
   get<{ query: string; expanded: string[]; span: { total: number; first: string | null }; quotes: Quote[] }>(`/quotes?q=${encodeURIComponent(q)}&limit=10`)

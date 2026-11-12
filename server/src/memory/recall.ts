@@ -14,12 +14,16 @@ import type { DB } from '../db.ts'
 import { ensureMemorySchema, type Layer, type MemoryRow } from './schema.ts'
 import { allowsPrivate } from './privacy.ts'
 import { expandQuery } from './aliases.ts'
+import { cosine, loadVectors } from './embed.ts'
 
 export interface Scored {
   row: MemoryRow
   score: number
   /** 为什么命中（可解释：命中了哪几个片段） */
   hits: string[]
+  /** 字面分 / 语义分（分开留着，好看出是哪条腿起的作用） */
+  lex?: number
+  sem?: number
 }
 
 export interface Scorer {
@@ -91,7 +95,8 @@ const SAT = 2.5
  */
 const FUNCTION_CHARS =
   '的了是不在有和就都也很啊呢吧吗嘛呀哦啦我你他她们个这那什么要会能着过被把让给说' +
-  '一今天怎样点跟为次还没最近多少时候些哪里对可能应该觉得真当然于与之而且但'
+  '一今天怎样点跟为次还没最近多少时候些哪里对可能应该觉得真当然于与之而且但' +
+  '早晚上下前后里外中间次回边种样做'
 const isFunctionGram = (g: string) => g.length === 2 && [...g].every(c => FUNCTION_CHARS.includes(c))
 
 /** BM25（字符二元组版）。分数压到 0–1，好和别的打分加权 */
@@ -115,14 +120,18 @@ export function bm25(query: string, doc: string, idf: Idf): { score: number; hit
     sum += w * ((f * (K1 + 1)) / (f + K1 * (1 - B + B * (len / idf.avgLen))))
   }
   if (!sum) return { score: 0, hits: [] }
-  // 把连着命中的二元组拼成人能读的片段
+  // 把连着命中的二元组拼成人能读的片段。**按段分别拼**，不跨段 ——
+  // 别名展开之后查询是「我妈 妈妈 她妈」，跨段拼会拼出「妈妈妈」这种没人说过的词
   const hits: string[] = []
-  let run = ''
-  for (const g of bigrams(query)) {
-    if (hitGrams.includes(g)) run = run ? run + g[g.length - 1] : g
-    else if (run) { if (run.length >= 2) hits.push(run); run = '' }
+  for (const seg of String(query || '').split(/[\s\p{P}\p{S}]+/u)) {
+    let run = ''
+    for (let i = 0; i < seg.length - 1; i++) {
+      const g = seg.slice(i, i + 2)
+      if (hitGrams.includes(g)) run = run ? run + g[1] : g
+      else { if (run.length >= 2) hits.push(run); run = '' }
+    }
+    if (run.length >= 2) hits.push(run)
   }
-  if (run.length >= 2) hits.push(run)
   // 饱和归一（不按问句长度分母）：一句长问话里只要有一小段真的命中，分数就不该被稀释掉。
   // 「晚饭点个海鲜大餐好不好」里有用的只有「海鲜」两个字，但那两个字就是全部意义所在。
   return { score: sum / (sum + SAT), hits: [...new Set(hits)].slice(0, 5) }
@@ -143,6 +152,10 @@ export interface RecallOptions {
   since?: string
   /** 哪个场景要召回。group / leto 这些**一律拿不到私密的那些** */
   scene?: string
+  /** 这一句的向量（有就混合打分；没有就纯字面，绝不等） */
+  queryVec?: Float32Array | null
+  /** 语义占多少权重，默认 0.45 */
+  semWeight?: number
 }
 
 /**
@@ -167,11 +180,30 @@ export function recallCandidates(db: DB, query: string, o: RecallOptions = {}): 
   const idf = buildIdf(docs)
   const floor = o.floor ?? 0.12
 
+  // 语义那条腿：有查询向量才算（没有就当它不存在，不等、不报错）
+  const vecs = o.queryVec ? loadVectors(db, rows.map(r => r.id)) : new Map<number, Float32Array>()
+  const useSem = !!o.queryVec
+  // bge-m3 中文「短问句 vs 长卡片」的余弦大多落在 0.40–0.75，低于下限算噪声
+  const SEM_FLOOR = 0.40
+  const SEM_CEIL = 0.75
+
   const scored: Scored[] = []
   rows.forEach((row, i) => {
     if (skip.has(row.id)) return
-    const { score, hits } = bm25(expanded, docs[i], idf)
-    if (score >= floor) scored.push({ row, score, hits })
+    const { score: lex, hits } = bm25(expanded, docs[i], idf)
+    let sem = 0
+    if (useSem) {
+      const v = vecs.get(row.id)
+      if (v) {
+        const c = cosine(o.queryVec!, v)
+        sem = c <= SEM_FLOOR ? 0 : Math.min(1, (c - SEM_FLOOR) / (SEM_CEIL - SEM_FLOOR))
+      }
+    }
+    // **取大的那条腿**，两条都有再加一点。
+    // 加权平均试过（0.6 字面 + 0.45 语义）：问「我做指甲那次」时「黑猫美甲」字面 0.75，
+    // 被语义 0.29 拖到 0.55，排名反而被「我做」这种套话命中挤掉。两条腿是互补不是投票。
+    const score = useSem ? Math.max(lex, sem * 0.95) + (lex > 0.3 && sem > 0.3 ? 0.1 : 0) : lex
+    if (score >= floor) scored.push({ row, score, hits, lex, sem })
   })
   scored.sort((a, b) => b.score - a.score || b.row.created_at.localeCompare(a.row.created_at))
   // 相对门槛：比最高分差太远的不算候选（一句话里总有几张卡沾到一两个字）

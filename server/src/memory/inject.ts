@@ -20,6 +20,7 @@ import { labelWithPeople } from './write.ts'
 import { listRelationsOf } from './relations.ts'
 import { searchQuotes, quoteSpan, renderQuotes, type Quote } from './quotes.ts'
 import { expandQuery } from './aliases.ts'
+import { embedConfig, apiEmbedder, queryVector, vectorStats } from './embed.ts'
 
 export type RecallMode = 'off' | 'shadow' | 'live'
 
@@ -73,11 +74,17 @@ export function judge(cand: Scored, query: string, now: Date = new Date()): Verd
     return { ok: false, why: '这条事实已经被推翻了（只该给当前有效的那条）' }
   }
 
-  // 4. 只靠一两个字命中的不递
-  const solid = cand.hits.join('')
-  if (solid.replace(/\s/g, '').length < 2) return { ok: false, why: '只是零星几个字像，说不清为什么相关' }
+  // 4. 说不清为什么相关的不递。
+  //    字面命中要有两个字以上；一个字都没命中时，只认**语义分够高**的那种
+  //    （换了说法的那类问话靠的就是这条，但门槛要高，不然等于随便给）。
+  const solid = cand.hits.join('').replace(/\s/g, '')
+  const sem = cand.sem ?? 0
+  if (solid.length < 2 && sem < 0.5) return { ok: false, why: '只是零星几个字像，说不清为什么相关' }
 
-  return { ok: true, why: cand.hits.length ? `命中「${cand.hits.join('」「')}」` : '语义相近' }
+  const why = cand.hits.length
+    ? `命中「${cand.hits.join('」「')}」${sem >= 0.5 ? '，意思也接近' : ''}`
+    : `字面对不上，但意思接近（${sem.toFixed(2)}）`
+  return { ok: true, why }
 }
 
 export interface AxisRow {
@@ -131,6 +138,9 @@ function firstSentence(text: string): string {
 export interface Picked {
   row: MemoryRow
   score: number
+  /** 字面分 / 语义分分开留着，好看出是哪条腿起的作用 */
+  lex?: number
+  sem?: number
   hits: string[]
   why: string
   axis: AxisRow[]
@@ -138,6 +148,8 @@ export interface Picked {
 
 export interface RecallResult {
   query: string
+  /** 语义这一层用上了没有、花了多久（她最怕的是「时间太长」） */
+  semantic: { used: boolean; cached: boolean; ms: number; why?: string }
   /** 展开后的说法（「我妈」→ 也搜「妈妈」「她妈」） */
   expanded: string[]
   candidates: number
@@ -151,6 +163,8 @@ export interface RecallResult {
 
 export interface RecallOpts {
   scene?: string
+  /** 这一句的向量（异步算好再传进来；runRecall 本身是同步的，绝不等网络） */
+  queryVec?: Float32Array | null
   limit?: number          // 最多递几条，默认 3
   exclude?: number[]      // 冷却：刚给过的不重复给
   now?: Date
@@ -163,12 +177,13 @@ export function runRecall(db: DB, query: string, o: RecallOpts = {}): RecallResu
   const q = String(query || '').trim()
   const exp = expandQuery(db, q)
   const out: RecallResult = {
-    query: q.slice(0, 200), expanded: exp.added, candidates: 0, picked: [], rejected: [],
+    query: q.slice(0, 200), expanded: exp.added, semantic: { used: false, cached: false, ms: 0 },
+    candidates: 0, picked: [], rejected: [],
     quotes: [], quoteSpan: { total: 0, first: null, last: null }, note: '',
   }
   if (q.replace(/\s/g, '').length < 2) return out
 
-  const cands = recallCandidates(db, q, { scene: o.scene, exclude: o.exclude, limit: 20 })
+  const cands = recallCandidates(db, q, { scene: o.scene, exclude: o.exclude, limit: 20, queryVec: o.queryVec ?? null })
   out.candidates = cands.length
   const max = Math.min(Math.max(o.limit ?? 3, 1), 5)
 
@@ -176,7 +191,10 @@ export function runRecall(db: DB, query: string, o: RecallOpts = {}): RecallResu
     if (out.picked.length >= max) break
     const v = judge(c, q, now)
     if (!v.ok) { out.rejected.push({ id: c.row.id, title: c.row.title, why: v.why }); continue }
-    out.picked.push({ row: c.row, score: c.score, hits: c.hits, why: v.why, axis: buildAxis(db, c.row.id) })
+    out.picked.push({
+      row: c.row, score: c.score, lex: c.lex, sem: c.sem,
+      hits: c.hits, why: v.why, axis: buildAxis(db, c.row.id),
+    })
   }
   // 原话那一层（第二条腿）：卡片不完备，原话完备。MEMORY_RECALL_QUOTES=0 关
   if (process.env.MEMORY_RECALL_QUOTES !== '0') {
@@ -313,4 +331,29 @@ export function recallStats(db: DB, env: NodeJS.ProcessEnv = process.env): Recal
     usedRate: used + dropped ? used / (used + dropped) : null,
     recent,
   }
+}
+
+
+/**
+ * 带语义的召回。**向量这一步有硬超时**（MEMORY_EMBED_TIMEOUT_MS，默认 250ms）：
+ * 超时就当语义层不存在，只用字面分 —— 她的原话是「花钱无所谓，我只是害怕它时间太长」，
+ * 所以这里永远不会让他的回复等着。
+ */
+export async function runRecallWithSemantics(db: DB, query: string, o: RecallOpts = {}): Promise<RecallResult> {
+  const cfg = embedConfig()
+  let vec: Float32Array | null = null
+  let meta = { used: false, cached: false, ms: 0, why: undefined as string | undefined }
+  if (!cfg) meta.why = '没配 embedding（MEMORY_EMBED_URL / KEY）'
+  else if (vectorStats(db).indexed === 0) meta.why = '卡片还没建过向量索引'
+  else {
+    const t0 = Date.now()
+    const got = await queryVector(db, query, apiEmbedder(cfg), { model: cfg.model, timeoutMs: cfg.timeoutMs })
+    meta = got
+      ? { used: true, cached: got.cached, ms: got.ms, why: undefined }
+      : { used: false, cached: false, ms: Date.now() - t0, why: `${cfg.timeoutMs}ms 内没算出来，这一轮只用字面分` }
+    vec = got?.vec ?? null
+  }
+  const r = runRecall(db, query, { ...o, queryVec: vec })
+  r.semantic = meta
+  return r
 }

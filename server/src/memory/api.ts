@@ -18,6 +18,8 @@
 //   GET  /v1/eclipsis/memory/recall?q=…   试算一遍：这句话会想起哪几条、哪几条被判官挡了（不写库）
 //   GET  /v1/eclipsis/memory/deliveries   影子运行的记录：递过/用上/没用上
 //   GET  /v1/eclipsis/memory/quotes?q=…   在原话里搜（经历表，一字不改）
+//   POST /v1/eclipsis/memory/index        给卡片算向量（离线一次性，之后只补新的）
+//   GET  /v1/eclipsis/memory/index        向量索引的状态
 //   GET  /v1/eclipsis/memory/aliases      说法对照表（「我妈」=「妈妈」）
 //   POST /v1/eclipsis/memory/aliases      { term, canonical } 加；{ id, remove:true } 删
 //   POST /v1/eclipsis/memory/deliveries/judge  手动跑一次第三态判定
@@ -32,7 +34,8 @@ import { listProposals, takeProposal, dropProposal, undoProposal, runRejudge } f
 import { listRelationsOf, addRelation, removeRelation, extractObRelations, KIND_LABEL, type RelationKind } from './relations.ts'
 import { addCorrection, withdrawCorrection, listCorrections, openCount } from './corrections.ts'
 import { markEpisodesPrivate, markTurnPrivate, markMemoryPrivate, privateCounts } from './privacy.ts'
-import { runRecall, recallStats, judgeDeliveries, recallMode } from './inject.ts'
+import { runRecall, runRecallWithSemantics, recallStats, judgeDeliveries, recallMode } from './inject.ts'
+import { embedConfig, apiEmbedder, indexMemories, vectorStats } from './embed.ts'
 import { addAlias, removeAlias, listAliases, expandQuery } from './aliases.ts'
 import { searchQuotes, quoteSpan } from './quotes.ts'
 import { chooseModel, currentStation } from '../station.ts'
@@ -207,14 +210,18 @@ export async function handleMemoryApi(db: DB, req: IncomingMessage, res: ServerR
 
     if (p === '/v1/eclipsis/memory/recall' && req.method === 'GET') {
       const q = url.searchParams.get('q') || ''
-      const r = runRecall(db, q, { scene: url.searchParams.get('scene') || 'chat', limit: Number(url.searchParams.get('limit')) || 3 })
+      const r = url.searchParams.get('lex') === '1'
+        ? runRecall(db, q, { scene: url.searchParams.get('scene') || 'chat', limit: Number(url.searchParams.get('limit')) || 3 })
+        : await runRecallWithSemantics(db, q, { scene: url.searchParams.get('scene') || 'chat', limit: Number(url.searchParams.get('limit')) || 3 })
       json(res, 200, {
         mode: recallMode(),
         query: r.query,
         candidates: r.candidates,
+        semantic: r.semantic,
         picked: r.picked.map(x => ({
           id: x.row.id, title: x.row.title, layer: x.row.layer, subject: x.row.subject,
-          score: Number(x.score.toFixed(3)), hits: x.hits, why: x.why, axis: x.axis,
+          score: Number(x.score.toFixed(3)), lex: x.lex ?? null, sem: x.sem ?? null,
+          hits: x.hits, why: x.why, axis: x.axis,
         })),
         rejected: r.rejected,
         expanded: r.expanded,
@@ -223,6 +230,24 @@ export async function handleMemoryApi(db: DB, req: IncomingMessage, res: ServerR
         note: r.note,
       })
       return true
+    }
+
+    if (p === '/v1/eclipsis/memory/index') {
+      if (req.method === 'GET') {
+        json(res, 200, { ...vectorStats(db), configured: !!embedConfig() })
+        return true
+      }
+      if (req.method === 'POST') {
+        const cfg = embedConfig()
+        if (!cfg) { json(res, 503, { error: '没配 embedding：backend.env 里要有 MEMORY_EMBED_URL / MEMORY_EMBED_KEY' }); return true }
+        const b = await readJson(req)
+        // 建索引不急，超时放宽（和每轮召回那 250ms 是两回事）
+        const r = await indexMemories(db, apiEmbedder(cfg, Number(b?.timeoutMs) || 60_000), {
+          model: cfg.model, batch: Number(b?.batch) || 32, limit: Number(b?.limit) || undefined,
+        })
+        json(res, 200, r)
+        return true
+      }
     }
 
     if (p === '/v1/eclipsis/memory/quotes' && req.method === 'GET') {

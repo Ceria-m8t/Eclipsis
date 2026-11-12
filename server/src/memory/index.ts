@@ -25,10 +25,15 @@ export { recallCandidates, bigrams, lexicalScorer, type Scored } from './recall.
 export { listRelationsOf, neighbors, addRelation, removeRelation, extractObRelations, renderNeighbors, KIND_LABEL } from './relations.ts'
 export { addCorrection, listCorrections, acceptCorrection, keepCorrection, withdrawCorrection, renderCorrectionLine } from './corrections.ts'
 export {
-  runRecall, judge, judgeDeliveries, recordDeliveries, recallMode, recallStats,
+  runRecall, runRecallWithSemantics, judge, judgeDeliveries, recordDeliveries, recallMode, recallStats,
   renderRecallNote, buildAxis, mentionedPeople, distinctWords,
   type RecallMode, type RecallResult, type Picked,
 } from './inject.ts'
+export {
+  embedConfig, apiEmbedder, indexMemories, queryVector, cachedQueryVector, warmQueryVector,
+  vectorStats, cosine, vectorText,
+  ensureVectorSchema, pruneQueryCache,
+} from './embed.ts'
 export { expandQuery, addAlias, removeAlias, listAliases, ensureAliasSchema, BUILTIN_ALIASES } from './aliases.ts'
 export { searchQuotes, quoteSpan, renderQuotes, type Quote } from './quotes.ts'
 export { handleMemoryApi } from './api.ts'

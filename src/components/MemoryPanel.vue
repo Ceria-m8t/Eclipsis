@@ -8,7 +8,7 @@ import {
   memoryStats, memoryInbox, memoryList, decideCandidates, retractMemory,
   memoryProposals, decideProposals, runRejudgeBatch,
   memoryDetail, addCorrection, setMemoryPrivate, tryRecall, recallStats,
-  listAliases, addAlias, removeAlias,
+  listAliases, addAlias, removeAlias, vectorIndex, buildVectorIndex,
   type MemoryDetail, type RecallTry, type RecallStats as RStats,
   LAYER_NAMES, KIND_NAMES, type MemoryStats, type Candidate, type MemoryItem, type Proposal,
 } from '../memory'
@@ -22,6 +22,23 @@ const recall = ref<RStats | null>(null)
 const tryQ = ref('')
 const tried = ref<RecallTry | null>(null)
 const aliases = ref<{ id: number; term: string; canonical: string }[]>([])
+const vindex = ref<{ total: number; indexed: number; model: string | null; queryCache: number; configured: boolean } | null>(null)
+
+async function loadIndex() {
+  try { vindex.value = await vectorIndex() } catch { vindex.value = null }
+}
+async function rebuildIndex() {
+  busy.value = true
+  rejudgeMsg.value = '正在给卡片算向量…（一次性，之后只补新的）'
+  try {
+    const r = await buildVectorIndex()
+    rejudgeMsg.value = r.error
+      ? `算到一半出错了：${r.error}`
+      : `算好了 ${r.embedded} 条，用了 ${(r.ms / 1000).toFixed(1)} 秒${r.failed ? `，${r.failed} 条失败` : ''}`
+    await loadIndex()
+  } catch (e: any) { rejudgeMsg.value = e.message }
+  busy.value = false
+}
 
 async function loadAliases() {
   try { aliases.value = (await listAliases()).aliases } catch (e: any) { err.value = e.message }
@@ -62,6 +79,7 @@ async function reload() {
     } else if (tab.value === 'recall') {
       recall.value = await recallStats()
       await loadAliases()
+      await loadIndex()
     } else if (tab.value === 'fix') {
       proposals.value = (await memoryProposals()).proposals
       picked.value = new Set()
@@ -275,8 +293,12 @@ async function strike(m: MemoryItem) {
           <span class="mem-tag">{{ tried.mode === 'live' ? '已经真的在给他' : '影子' }}</span>
         </div>
         <p v-if="tried.expanded.length" class="mem-meta">也当成同一个说法搜了：{{ tried.expanded.join('、') }}</p>
+        <p class="mem-meta">
+          语义这一层：{{ tried.semantic.used ? `用上了，${tried.semantic.ms} 毫秒${tried.semantic.cached ? '（缓存命中）' : ''}` : `没用上——${tried.semantic.why || ''}` }}
+        </p>
         <p v-for="p in tried.picked" :key="p.id" class="mem-why">
-          ✓ {{ p.title }}（{{ layerName(p.layer) }}·{{ p.score.toFixed(2) }}）{{ p.why }}
+          ✓ {{ p.title }}（{{ layerName(p.layer) }}·{{ p.score.toFixed(2) }}
+          <template v-if="p.sem !== null">｜字面 {{ (p.lex ?? 0).toFixed(2) }} / 意思 {{ p.sem.toFixed(2) }}</template>）{{ p.why }}
           <template v-if="p.axis.length >= 2"> · 这件事浮现过 {{ p.axis.length }} 次</template>
         </p>
         <p v-for="r in tried.rejected" :key="'r' + r.id" class="mem-unsure">✗ {{ r.title }}：{{ r.why }}</p>
@@ -289,6 +311,19 @@ async function strike(m: MemoryItem) {
             {{ q.ts.slice(0, 16).replace('T', ' ') }}　{{ q.who }}：{{ q.text }}
           </p>
         </template>
+      </div>
+
+      <div v-if="vindex" class="mem-item">
+        <div class="mem-head">
+          <span class="mem-title">语义索引</span>
+          <span class="mem-tag">{{ vindex.model || '没配' }}</span>
+          <span class="mem-spacer"></span>
+          <button class="mem-btn" :disabled="busy || !vindex.configured" @click="rebuildIndex">算一遍</button>
+        </div>
+        <p class="mem-meta">
+          {{ vindex.indexed }} / {{ vindex.total }} 条卡片算过向量；问过的句子缓存了 {{ vindex.queryCache }} 条。
+          卡片向量一次性算好，聊天时只用缓存里的查询向量——这条路上一毫秒都不等网络。
+        </p>
       </div>
 
       <div class="mem-item">
