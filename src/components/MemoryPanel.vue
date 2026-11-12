@@ -7,7 +7,7 @@ import { ref, computed, onMounted } from 'vue'
 import {
   memoryStats, memoryInbox, memoryList, decideCandidates, retractMemory,
   memoryProposals, decideProposals, runRejudgeBatch,
-  memoryDetail, addCorrection, type MemoryDetail,
+  memoryDetail, addCorrection, setMemoryPrivate, type MemoryDetail,
   LAYER_NAMES, KIND_NAMES, type MemoryStats, type Candidate, type MemoryItem, type Proposal,
 } from '../memory'
 
@@ -86,6 +86,17 @@ function toggleMemory(id: number) {
   if (expanded.value.has(id)) void loadDetail(id)
 }
 
+/** 私密：不进群聊、不进 Leto、夜里整理也不读；面板里默认折叠 */
+async function flipPrivate(m: MemoryItem) {
+  busy.value = true
+  try {
+    const r = await setMemoryPrivate(m.id, m.privacy !== 'private')
+    if (!r.ok) err.value = r.error || '改不了'
+    else await reload()
+  } catch (e: any) { err.value = e.message }
+  busy.value = false
+}
+
 /** 贴便条：她只写「哪里记错了」，改不改他定 */
 async function stickNote(m: MemoryItem) {
   const note = window.prompt(`在「${m.title}」上贴一张便条。写哪里记错了——他下次会看到，改不改由他定（原文不会被改掉）。`)
@@ -150,6 +161,7 @@ async function strike(m: MemoryItem) {
       <span>近况 {{ stats.byLayer.state || 0 }}</span>
       <span>我们之间 {{ stats.byLayer.bond || 0 }}</span>
       <span v-if="stats.relations">关系 {{ stats.relations }} 条</span>
+      <span v-if="stats.private?.memories">私密 {{ stats.private.memories }} 条</span>
       <span v-if="stats.corrections">便条 {{ stats.corrections }} 张等他看</span>
       <span v-if="stats.digest.runs">夜里整理过 {{ stats.digest.runs }} 次</span>
     </div>
@@ -261,12 +273,14 @@ async function strike(m: MemoryItem) {
           <span class="mem-tag">{{ m.subjectLabel }}</span>
           <span v-if="m.grade === 'resident'" class="mem-tag">常驻</span>
           <span v-if="m.bucket_id" class="mem-tag">从 OB 搬来</span>
+          <span v-if="m.privacy === 'private'" class="mem-tag priv">私密</span>
         </div>
         <p v-if="m.review_note" class="mem-unsure">{{ m.review_note }}</p>
         <p v-if="m.why" class="mem-why">为什么记：{{ m.why }}</p>
         <template v-if="expanded.has(m.id)">
           <p class="mem-body">{{ m.fact_body }}</p>
           <p v-if="m.feeling" class="mem-feeling">{{ m.feeling }}</p>
+          <p v-if="m.privacy === 'private'" class="mem-meta">私密：夜里整理不读它，群聊和别的 AI 永远拿不到。</p>
           <p class="mem-meta">
             {{ m.created_at.slice(0, 16).replace('T', ' ') }}
             · {{ m.voice === 'machine' ? '程序整理的' : '他自己写的' }}
@@ -287,6 +301,7 @@ async function strike(m: MemoryItem) {
         <div class="mem-row">
           <button class="mem-link" @click="toggleMemory(m.id)">{{ expanded.has(m.id) ? '收起' : '看全文' }}</button>
           <span class="mem-spacer"></span>
+          <button class="mem-btn" :disabled="busy" @click="flipPrivate(m)">{{ m.privacy === 'private' ? '取消私密' : '设为私密' }}</button>
           <button class="mem-btn" :disabled="busy" @click="stickNote(m)">贴便条</button>
           <button class="mem-btn danger" :disabled="busy" @click="strike(m)">划掉</button>
         </div>
@@ -316,6 +331,7 @@ async function strike(m: MemoryItem) {
 .mem-head { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
 .mem-title { font-weight: 600; font-size: 13.5px; color: var(--text); }
 .mem-tag { font-size: 10.5px; color: var(--text-3); border: 1px solid rgba(127, 127, 127, 0.3); border-radius: 6px; padding: 0 5px; }
+.mem-tag.priv { color: var(--accent); border-color: var(--accent); }
 .mem-why { font-size: 12px; color: var(--text-2); }
 .mem-unsure { font-size: 12px; color: var(--text-2); opacity: 0.9; }
 .mem-body { font-size: 12.5px; line-height: 1.6; color: var(--text); white-space: pre-wrap; }

@@ -12,6 +12,7 @@
 // embedding，只要实现同一个接口，召回那一层不用改。混合用法 = 两个分数加权（hybrid）。
 import type { DB } from '../db.ts'
 import { ensureMemorySchema, type Layer, type MemoryRow } from './schema.ts'
+import { allowsPrivate } from './privacy.ts'
 
 export interface Scored {
   row: MemoryRow
@@ -112,6 +113,8 @@ export interface RecallOptions {
   exclude?: number[]
   /** 只看这个时间之后的 */
   since?: string
+  /** 哪个场景要召回。group / leto 这些**一律拿不到私密的那些** */
+  scene?: string
 }
 
 /**
@@ -125,6 +128,7 @@ export function recallCandidates(db: DB, query: string, o: RecallOptions = {}): 
   if (o.layer) { where.push('layer = ?'); args.push(o.layer) }
   if (o.subject) { where.push('subject = ?'); args.push(o.subject) }
   if (o.since) { where.push('created_at >= ?'); args.push(o.since) }
+  if (!allowsPrivate(o.scene)) where.push("(privacy IS NULL OR privacy != 'private')")
   const rows = db.prepare(`SELECT * FROM memories WHERE ${where.join(' AND ')}`).all(...args) as unknown as MemoryRow[]
   if (!rows.length) return []
 

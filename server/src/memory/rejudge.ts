@@ -324,6 +324,49 @@ export function takeProposal(db: DB, id: number, by: 'her' | 'him' = 'her', now:
   })
 }
 
+/**
+ * 撤回一条已经采纳的建议（她 2026-11-12 要的：那 30 条「可能只是话题像」的合并先撤回来看看）。
+ * 能撤的：merge（把被合掉的那张放回来）、retract（放回来）、relayer（层改回去）、why（清掉机器补的那句）。
+ * **撤不了的：split** —— 切出来的几条已经是独立的卡了，硬拼回去反而更乱；要处理就手动。
+ * 撤完建议回到「待处理」，重新出现在整理建议里，她可以一条一条看。
+ */
+export function undoProposal(db: DB, id: number, now: Date = new Date()):
+  { ok: true; restored: boolean } | { ok: false; error: string } {
+  ensureMemorySchema(db)
+  const ts = now.toISOString()
+  const p = db.prepare('SELECT * FROM memory_proposals WHERE id = ?').get(id) as any
+  if (!p) return { ok: false, error: '没有这一条建议' }
+  if (p.status !== 'taken') return { ok: false, error: '这条建议还没被采纳过' }
+  if (p.kind === 'split') return { ok: false, error: '拆开的撤不回来（切出来的已经是独立的卡了），要处理就手动' }
+  const payload = JSON.parse(p.payload || '{}')
+
+  return tx(db, () => {
+    let restored = false
+    if (p.kind === 'merge' || p.kind === 'retract') {
+      const reason = p.kind === 'merge' ? 'merged' : 'rejudge_retract'
+      const r = db.prepare(`UPDATE memories SET retracted_at = NULL, retract_reason = NULL, merged_into = NULL, updated_at = ?
+        WHERE id = ? AND retract_reason = ?`).run(ts, p.memory_id, reason)
+      restored = Number(r.changes) > 0
+      if (p.kind === 'merge') {
+        db.prepare(`UPDATE memory_merges SET undone_at = ? WHERE dropped_bucket_id IN (
+          SELECT COALESCE(bucket_id, CAST(id AS TEXT)) FROM memories WHERE id = ?) AND undone_at IS NULL`)
+          .run(ts, p.memory_id)
+      }
+    } else if (p.kind === 'relayer' && payload.from) {
+      db.prepare('UPDATE memories SET layer = ?, updated_at = ? WHERE id = ? AND layer = ?')
+        .run(payload.from, ts, p.memory_id, payload.to)
+      restored = true
+    } else if (p.kind === 'why' && payload.why) {
+      // 只清掉「正是机器补的那一句」，他后来自己改过的不动
+      const r = db.prepare("UPDATE memories SET why = '', updated_at = ? WHERE id = ? AND why = ?")
+        .run(ts, p.memory_id, payload.why)
+      restored = Number(r.changes) > 0
+    }
+    db.prepare("UPDATE memory_proposals SET status = 'open', decided_at = NULL, decided_by = NULL WHERE id = ?").run(id)
+    return { ok: true as const, restored }
+  })
+}
+
 export function dropProposal(db: DB, id: number, by: 'her' | 'him' = 'her', now: Date = new Date()):
   { ok: true } | { ok: false; error: string } {
   const r = db.prepare("UPDATE memory_proposals SET status = 'dropped', decided_at = ?, decided_by = ? WHERE id = ? AND status = 'open'")

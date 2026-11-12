@@ -8,20 +8,24 @@
 //   POST /v1/eclipsis/memory/<id>/retract { reason }   她划掉一条（软删，不是真删）
 //   GET  /v1/eclipsis/memory/digest       夜里整理的近况（跑过几次、现在该不该跑）
 //   GET  /v1/eclipsis/memory/proposals    旧卡重整的建议（她点头才动库）
-//   POST /v1/eclipsis/memory/proposals/decide { id|ids, action: 'take'|'drop' }
+//   POST /v1/eclipsis/memory/proposals/decide { id|ids, action: 'take'|'drop'|'undo' }
+//        undo = 撤回已采纳的（merge/retract 放回来、relayer 层改回去、why 清掉机器补的；split 撤不了）
 //   POST /v1/eclipsis/memory/rejudge      { limit, layer, maxChars } 跑一批重整（只提建议）
 //   GET  /v1/eclipsis/memory/corrections  她贴的便条（?status=open|accepted|kept）
 //   POST /v1/eclipsis/memory/corrections  { memoryId, note } 贴一张；{ id, withdraw:true } 撤回
 //   POST /v1/eclipsis/memory/relations    { from, to, kind, reason } 连两条；{ id, remove:true } 去掉
 //   POST /v1/eclipsis/memory/relations/extract   把 OB 的 relation_links 抽出来（可反复跑）
+//   POST /v1/eclipsis/memory/private      { seqs?|turn?|memoryId?, private?:true }
+//        标私密：夜里整理不读它、群聊和外部 AI 拿不到、面板里默认折叠
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { DB } from '../db.ts'
 import { ensureMemorySchema } from './schema.ts'
 import { listInbox, decideCandidate, inboxCount, labelWithPeople } from './write.ts'
 import { findDigestWindow, stationCaller } from './digest.ts'
-import { listProposals, takeProposal, dropProposal, runRejudge } from './rejudge.ts'
+import { listProposals, takeProposal, dropProposal, undoProposal, runRejudge } from './rejudge.ts'
 import { listRelationsOf, addRelation, removeRelation, extractObRelations, KIND_LABEL, type RelationKind } from './relations.ts'
 import { addCorrection, withdrawCorrection, listCorrections, openCount } from './corrections.ts'
+import { markEpisodesPrivate, markTurnPrivate, markMemoryPrivate, privateCounts } from './privacy.ts'
 import { chooseModel, currentStation } from '../station.ts'
 
 function json(res: ServerResponse, status: number, body: unknown) {
@@ -85,6 +89,7 @@ export async function handleMemoryApi(db: DB, req: IncomingMessage, res: ServerR
         merged: Number(merged.n),
         inbox: inboxCount(db),
         corrections: openCount(db),
+        private: privateCounts(db),
         relations: Number((db.prepare('SELECT count(*) n FROM memory_relations WHERE removed_at IS NULL').get() as { n: number }).n),
         digest: { runs: Number(runs?.n || 0), wrote: Number(runs?.w || 0), inboxed: Number(runs?.i || 0), skipped: Number(runs?.s || 0) },
       })
@@ -129,11 +134,12 @@ export async function handleMemoryApi(db: DB, req: IncomingMessage, res: ServerR
 
     if (p === '/v1/eclipsis/memory/proposals/decide' && req.method === 'POST') {
       const b = await readJson(req)
-      const action = b?.action === 'drop' ? 'drop' : b?.action === 'take' ? 'take' : null
-      if (!action) { json(res, 400, { error: "action 只能是 take 或 drop" }); return true }
+      const action = ['drop', 'take', 'undo'].includes(String(b?.action)) ? String(b.action) : null
+      if (!action) { json(res, 400, { error: "action 只能是 take / drop / undo" }); return true }
       const ids: number[] = Array.isArray(b?.ids) ? b.ids.map(Number).filter(Number.isFinite) : [Number(b?.id)].filter(Number.isFinite)
       if (!ids.length) { json(res, 400, { error: '要给 id 或 ids' }); return true }
-      const results = ids.map(id => ({ id, ...(action === 'take' ? takeProposal(db, id) : dropProposal(db, id)) }))
+      const run = (id: number) => action === 'take' ? takeProposal(db, id) : action === 'undo' ? undoProposal(db, id) : dropProposal(db, id)
+      const results = ids.map(id => ({ id, ...run(id) }))
       json(res, 200, { results, open: listProposals(db).length })
       return true
     }
@@ -187,6 +193,20 @@ export async function handleMemoryApi(db: DB, req: IncomingMessage, res: ServerR
         reason: String(b?.reason ?? ''), auto: false, by: 'her',
       })
       json(res, r.ok ? 200 : 400, r)
+      return true
+    }
+
+    if (p === '/v1/eclipsis/memory/private' && req.method === 'POST') {
+      const b = await readJson(req)
+      const priv = b?.private !== false
+      if (Array.isArray(b?.seqs)) { json(res, 200, markEpisodesPrivate(db, b.seqs.map(Number), priv)); return true }
+      if (b?.turn) { json(res, 200, markTurnPrivate(db, String(b.turn), priv)); return true }
+      if (Number.isFinite(Number(b?.memoryId))) {
+        const ok = markMemoryPrivate(db, Number(b.memoryId), priv)
+        json(res, ok ? 200 : 404, ok ? { ok: true } : { error: '没有这条记忆' })
+        return true
+      }
+      json(res, 400, { error: '要给 seqs（几条经历）、turn（一整轮）或 memoryId' })
       return true
     }
 

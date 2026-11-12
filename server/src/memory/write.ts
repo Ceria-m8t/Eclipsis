@@ -43,6 +43,8 @@ export interface MemoryDraft {
   evidence?: number[]
   thread?: string
   origin: 'note' | 'digest'
+  /** 私密：不进群聊、不进外部 AI 的上下文，面板里默认折叠 */
+  privacy?: string
   valence?: number
   arousal?: number
 }
@@ -181,7 +183,7 @@ export function writeMemory(db: DB, draft: MemoryDraft, now: Date = new Date(), 
   if (opts.forceInbox) unsure.unshift(opts.forceInbox)
 
   const payload = {
-    layer, subject, title, fact, feeling: feeling || null, why,
+    layer, subject, title, fact, feeling: feeling || null, why, privacy: draft.privacy === 'private' ? 'private' : 'normal',
     tags: draft.tags ?? [], valence: draft.valence ?? null, arousal: draft.arousal ?? null,
     validFrom: layer === 'fact' ? ts : null,
   }
@@ -216,6 +218,7 @@ interface InsertInput {
   evidence: number[]
   thread: string | null
   source: string
+  privacy?: string
   /** 谁的笔。他随手记 = him；夜里整理 = machine（注入时情绪那半不给） */
   voice?: string
 }
@@ -223,10 +226,11 @@ interface InsertInput {
 function insertMemory(db: DB, o: InsertInput, ts: string): number {
   const r = db.prepare(`INSERT INTO memories
     (layer, subject, title, fact_body, feeling, why, tags, grade, valence, arousal, valid_from,
-     source, voice, evidence, thread, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 'normal', ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+     source, voice, privacy, evidence, thread, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 'normal', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(o.layer, o.subject, o.title, o.fact, o.feeling, o.why, JSON.stringify(o.tags),
       o.valence, o.arousal, o.validFrom, o.source, o.voice ?? (o.source === 'digest' ? 'machine' : 'him'),
+      o.privacy === 'private' ? 'private' : 'normal',
       JSON.stringify(o.evidence), o.thread, ts, ts)
   return Number(r.lastInsertRowid)
 }
@@ -324,6 +328,7 @@ export function decideCandidate(
       tags: edits.tags ?? p.tags ?? [],
       valence: p.valence ?? null, arousal: p.arousal ?? null,
       validFrom: layer === 'fact' ? (p.validFrom ?? ts) : null,
+      privacy: p.privacy,
       evidence: JSON.parse(row.evidence || '[]'),
       thread: row.thread,
       source: row.origin,

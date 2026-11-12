@@ -33,6 +33,7 @@ export const MEMO_TOOLS: McpTool[] = [
       feeling: { type: 'string', description: '当时的语气、我的感觉（可不填，但填了才是双轨）' },
       why: { type: 'string', description: '为什么要记这条。必填' },
       tags: { type: 'array', items: { type: 'string' }, description: '标签，可不填' },
+      private: { type: 'boolean', description: '私密：只在我和她之间，永远不进群聊、不进 Leto、不给别的 AI 看到；她那边默认折叠' },
     }, ['subject', 'fact', 'why']),
   },
   {
@@ -96,7 +97,7 @@ function describe(o: { kind: string } & Record<string, unknown>, db: DB): string
   switch (o.kind) {
     case 'written':
       return `记下了（#${o.id}，${o.layer === 'fact' ? '事实' : o.layer === 'state' ? '近况' : '我们之间'}，` +
-        `${labelWithPeople(db, String(o.subject))}的事）。`
+        `${labelWithPeople(db, String(o.subject))}的事${o.privacy === 'private' ? '，私密：只在我们之间' : ''}）。`
     case 'amended':
       return `这件事我记过了（「${o.title}」，像 ${Math.round(Number(o.overlap) * 100)}%），` +
         `这次的接在那条后面了，没新建一条。`
@@ -178,9 +179,10 @@ export function memoBox(db: DB, deps: MemoBoxDeps = {}): WakeBox {
             tags: Array.isArray(a.tags) ? a.tags.map(String).slice(0, 12) : undefined,
             evidence: deps.evidence ? deps.evidence() : recentEvidence(db),
             origin: 'note',
+            privacy: a.private === true ? 'private' : 'normal',
           }
           const out = writeMemory(db, draft)
-          const text = describe(out as any, db)
+          const text = describe({ ...(out as any), privacy: draft.privacy }, db)
           return { text, isError: out.kind === 'rejected' }
         }
 

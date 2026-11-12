@@ -87,9 +87,12 @@ export function findDigestWindow(db: DB, cfg: DigestConfig = { upstreamUrl: '', 
       ORDER BY seq LIMIT 1`).get(new Date(now.getTime() - backfillHours * 3600_000).toISOString()) as { seq: number } | undefined
     fromSeq = first ? Number(first.seq) - 1 : Number((db.prepare('SELECT COALESCE(max(seq), 0) s FROM episodes').get() as { s: number }).s)
   }
+  // privacy='private' 的一句都不取：**不发给中转站的模型去读、去改写**（2026-11-12）。
+  // 那种内容要成记忆只能他自己写 —— 他在场，他知道该留什么。
   const rows = db.prepare(`SELECT seq, ts, actor, content FROM episodes
     WHERE seq > ? AND retracted_at IS NULL AND channel = 'chat' AND kind = 'message'
       AND actor IN ('erica', 'ai') AND scope = 'daily'
+      AND (privacy IS NULL OR privacy != 'private')
     ORDER BY seq LIMIT ?`).all(fromSeq, maxEpisodes) as unknown as Episode[]
   if (!rows.length) return none('这一段没有新的对话')
 

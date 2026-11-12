@@ -10,6 +10,7 @@ export interface MemoryStats {
   needsReview: number
   merged: number
   inbox: number
+  private?: { episodes: number; memories: number }
   corrections: number
   relations: number
   digest: { runs: number; wrote: number; inboxed: number; skipped: number }
@@ -50,6 +51,7 @@ export interface MemoryItem {
   tags: string[]
   grade: string
   voice: string
+  privacy: string
   thread: string | null
   needs_review: number
   review_note: string | null
@@ -81,6 +83,8 @@ export const memoryList = (q: { layer?: string; review?: boolean; limit?: number
 }
 export const decideCandidates = (ids: number[], action: 'accept' | 'skip') =>
   post<{ results: { id: number; ok: boolean; error?: string }[]; inbox: number }>('/inbox/decide', { ids, action })
+export const setMemoryPrivate = (memoryId: number, isPrivate: boolean) =>
+  post<{ ok: boolean; error?: string }>('/private', { memoryId, private: isPrivate })
 export const retractMemory = (id: number, reason: string) => post<{ ok: true }>(`/${id}/retract`, { reason })
 
 export interface Proposal {

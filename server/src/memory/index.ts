@@ -14,7 +14,14 @@ export {
   stationCaller, scrubFeeling, DIGEST_SYSTEM, type DigestConfig, type DigestResult, type DigestItem,
 } from './digest.ts'
 export {
-  runRejudge, pickBatch, buildRejudgeMaterial, listProposals, takeProposal, dropProposal,
+  runRejudge, pickBatch, buildRejudgeMaterial, listProposals, takeProposal, dropProposal, undoProposal,
   REJUDGE_SYSTEM, type RejudgeResult, type Proposal,
 } from './rejudge.ts'
+export {
+  ensurePrivacySchema, allowsPrivate, privacySql, markEpisodesPrivate, markTurnPrivate,
+  markMemoryPrivate, privateCounts, PRIVATE,
+} from './privacy.ts'
+export { recallCandidates, bigrams, lexicalScorer, type Scored } from './recall.ts'
+export { listRelationsOf, neighbors, addRelation, removeRelation, extractObRelations, renderNeighbors, KIND_LABEL } from './relations.ts'
+export { addCorrection, listCorrections, acceptCorrection, keepCorrection, withdrawCorrection, renderCorrectionLine } from './corrections.ts'
 export { handleMemoryApi } from './api.ts'

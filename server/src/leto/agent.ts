@@ -61,7 +61,8 @@ export function buildXiaokeSystem(db: DB, now: Date = new Date()): string {
 }
 
 /** 读小克和 Erica 最近的私下对话（chat/room，daily），让他在 Leto 里不断片。
- *  2026-11-05 Erica 定：Leto 里也带近期对话（连贯优先）；但附明确提示别外传私事。 */
+ *  2026-11-05 Erica 定：Leto 里也带近期对话（连贯优先）；但附明确提示别外传私事。
+ *  2026-11-12：标了 privacy='private' 的一句都不带 —— 不靠"提示他别说"，直接不给。 */
 export function renderRecentDailyChat(db: DB, limit = 16, maxChars = 2000): string {
   let rows: { actor: string; content: string }[]
   try {
@@ -70,6 +71,7 @@ export function renderRecentDailyChat(db: DB, limit = 16, maxChars = 2000): stri
       WHERE retracted_at IS NULL AND channel IN ('chat', 'room') AND scope = 'daily'
         AND actor IN ('erica', 'ai') AND kind = 'message'
         AND content IS NOT NULL AND content != ''
+        AND (privacy IS NULL OR privacy != 'private')
       ORDER BY ts DESC LIMIT ?
     `).all(limit) as unknown as { actor: string; content: string }[]
   } catch { return '' }

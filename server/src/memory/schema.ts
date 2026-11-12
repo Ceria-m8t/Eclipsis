@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS memories (
   last_recalled_at TEXT,                 -- 上次真的被递给他的时刻（冷却、衰减用）
   recall_count INTEGER NOT NULL DEFAULT 0,
   dont_surface INTEGER NOT NULL DEFAULT 0,
+  privacy TEXT NOT NULL DEFAULT 'normal',   -- normal / private（私密：不交给夜里整理、不进群聊和外部）
   needs_review INTEGER NOT NULL DEFAULT 0,  -- 搬家时规则拿不准：等人看一眼，别先拿去召回
   review_note TEXT,
   merged_into INTEGER,                   -- 被合并掉的那张指向留下的那张
@@ -238,7 +239,7 @@ CREATE TABLE IF NOT EXISTS views (
 export function ensureMemorySchema(db: DB): void {
   db.exec(SCHEMA)
   // 第一期已经搬完的库：补上第二期加的两列
-  addColumns(db, 'memories', { evidence: "TEXT NOT NULL DEFAULT '[]'", thread: 'TEXT' })
+  addColumns(db, 'memories', { evidence: "TEXT NOT NULL DEFAULT '[]'", thread: 'TEXT', privacy: "TEXT NOT NULL DEFAULT 'normal'" })
   // 第二期之前搬进来的：grow 写的算程序的笔，其余算他自己的
   if (addColumns(db, 'memories', { voice: "TEXT NOT NULL DEFAULT 'him'" }).includes('voice')) {
     db.exec("UPDATE memories SET voice = 'machine' WHERE source IN ('grow', 'digest')")
@@ -265,6 +266,7 @@ export interface MemoryRow {
   created_at: string
   updated_at: string
   dont_surface: number
+  privacy: string
   needs_review: number
   review_note: string | null
   merged_into: number | null

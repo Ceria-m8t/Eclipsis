@@ -4,7 +4,7 @@ import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { openDb, type DB } from '../src/db.ts'
 import { ensureMemorySchema, liveMemories } from '../src/memory/schema.ts'
-import { runRejudge, pickBatch, buildRejudgeMaterial, listProposals, takeProposal, dropProposal } from '../src/memory/rejudge.ts'
+import { runRejudge, pickBatch, buildRejudgeMaterial, listProposals, takeProposal, dropProposal, undoProposal } from '../src/memory/rejudge.ts'
 import { scrubFeeling } from '../src/memory/digest.ts'
 
 const BODY_A = '她说「三句话猜真假」的规则是三句里有一句假的，我猜错了一次，她很得意。糯糯在旁边睡着了。'
@@ -197,6 +197,68 @@ describe('她点头之后才动库', () => {
     assert.equal(liveMemories(db).length, 3)
     assert.equal(dropProposal(db, prop.id).ok, false)
     assert.equal(takeProposal(db, prop.id).ok, false)
+  })
+})
+
+describe('采纳了还能撤回来（她 11-12 要的）', () => {
+  it('撤回合并：被合掉的那张放回来，合并证据标上已撤', async () => {
+    const db = dbWithCards()
+    const rows = pickBatch(db, { limit: 2 })
+    await runRejudge(db, async () => JSON.stringify({ items: [{ id: rows[1].id, decision: 'merge', target_id: rows[0].id }] }), 'm', { limit: 2 })
+    const prop = listProposals(db)[0]
+    takeProposal(db, prop.id)
+    assert.equal(liveMemories(db).length, 2)
+
+    const r = undoProposal(db, prop.id)
+    assert.equal(r.ok, true)
+    assert.equal((r as any).restored, true)
+    assert.equal(liveMemories(db).length, 3, '放回来了')
+    const back = db.prepare('SELECT retracted_at, merged_into FROM memories WHERE id = ?').get(rows[1].id) as any
+    assert.equal(back.retracted_at, null)
+    assert.equal(back.merged_into, null)
+    assert.ok((db.prepare('SELECT undone_at FROM memory_merges ORDER BY id DESC LIMIT 1').get() as any).undone_at)
+    assert.equal(listProposals(db)[0].id, prop.id, '建议回到待处理，她可以再看一遍')
+  })
+
+  it('撤回换层、撤回机器补的 why', async () => {
+    const db = dbWithCards()
+    const rows = pickBatch(db, { limit: 2 })
+    await runRejudge(db, async () => JSON.stringify({ items: [
+      { id: rows[0].id, decision: 'relayer', layer: 'fact' },
+      { id: rows[1].id, decision: 'why', why: '机器补的那句' },
+    ] }), 'm', { limit: 2 })
+    for (const p of listProposals(db)) takeProposal(db, p.id)
+    const taken = db.prepare("SELECT id, kind, memory_id FROM memory_proposals WHERE status = 'taken'").all() as any[]
+    for (const p of taken) assert.equal(undoProposal(db, p.id).ok, true)
+    assert.equal((db.prepare('SELECT layer FROM memories WHERE id = ?').get(rows[0].id) as any).layer, rows[0].layer)
+    assert.equal((db.prepare('SELECT why FROM memories WHERE id = ?').get(rows[1].id) as any).why, '')
+  })
+
+  it('他后来自己改过的 why 不会被撤回弄丢', async () => {
+    const db = dbWithCards()
+    const rows = pickBatch(db, { limit: 1 })
+    await runRejudge(db, async () => JSON.stringify({ items: [{ id: rows[0].id, decision: 'why', why: '机器补的那句' }] }), 'm', { limit: 1 })
+    const prop = listProposals(db)[0]
+    takeProposal(db, prop.id)
+    db.prepare("UPDATE memories SET why = '他自己后来写的' WHERE id = ?").run(rows[0].id)
+    const r = undoProposal(db, prop.id)
+    assert.equal((r as any).restored, false)
+    assert.equal((db.prepare('SELECT why FROM memories WHERE id = ?').get(rows[0].id) as any).why, '他自己后来写的')
+  })
+
+  it('没采纳过的撤不了；拆开的撤不了（切出来的已经是独立的卡）', async () => {
+    const db = dbWithCards()
+    const a = pickBatch(db, { limit: 5 }).find(r => r.bucket_id === 'b1')!
+    await runRejudge(db, async () => JSON.stringify({ items: [{ id: a.id, decision: 'split', parts: [
+      { subject: 'erica', quote: '她说「三句话猜真假」的规则是三句里有一句假的，我猜错了一次，她很得意。' },
+      { subject: 'person:nuonuo', quote: '糯糯在旁边睡着了。' },
+    ] }] }), 'm', { limit: 5 })
+    const prop = listProposals(db)[0]
+    assert.equal(undoProposal(db, prop.id).ok, false, '还没采纳')
+    takeProposal(db, prop.id)
+    const r = undoProposal(db, prop.id)
+    assert.equal(r.ok, false)
+    assert.match((r as any).error, /撤不回来/)
   })
 })
 
