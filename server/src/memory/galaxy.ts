@@ -15,6 +15,7 @@ import {
   sourceDays, sourceSearch, TREE_MAX, RULES, type Section,
 } from './tree.ts'
 import { bjDate } from './when.ts'
+import { searchFulltext, around, fulltextStats, syncFulltext } from './fulltext.ts'
 
 export interface GalaxyMemory { id: string; title: string; date?: string; category?: string; preview?: string; heat?: number; planetId?: string | null }
 export interface GalaxyPlanet { id: string; name: string; definition?: string; archetype?: 'rocky' | 'oceanic' | 'gas' | 'ice' | 'volcanic'; rank: number; memoryCount: number; memories?: GalaxyMemory[] }
@@ -165,6 +166,37 @@ export async function handleGalaxyApi(db: DB, req: IncomingMessage, res: ServerR
     return true
   }
   // 一节覆盖好几天：先按天给数量，她点哪天看哪天（她说「原话太多了」）
+  // 全库搜一句原话（细目层：不再只扫最近 4000 条）。只读
+  if (p === '/v1/eclipsis/memory/quotes/search' && req.method === 'GET') {
+    const q = (url.searchParams.get('q') || '').trim()
+    if (!q) { json(res, 400, { error: '要给搜什么（q）' }); return true }
+    if (q.length > 60) { json(res, 400, { error: '搜的词太长了' }); return true }
+    const day = /^\d{4}-\d{2}-\d{2}$/
+    const from = url.searchParams.get('from') || ''
+    const to = url.searchParams.get('to') || ''
+    const who = url.searchParams.get('who')
+    json(res, 200, {
+      ...searchFulltext(db, q, {
+        from: day.test(from) ? from : undefined,
+        to: day.test(to) ? to : undefined,
+        who: who === 'her' || who === 'him' ? who : undefined,
+        offset: Number(url.searchParams.get('offset')) || 0,
+        limit: 30,
+      }),
+      index: fulltextStats(db),
+    })
+    return true
+  }
+  if (p === '/v1/eclipsis/memory/quotes/around' && req.method === 'GET') {
+    const seq = Number(url.searchParams.get('seq'))
+    if (!Number.isInteger(seq)) { json(res, 400, { error: '要给 seq' }); return true }
+    json(res, 200, { lines: around(db, seq, Math.min(Math.max(Number(url.searchParams.get('n')) || 3, 1), 10)) })
+    return true
+  }
+  if (p === '/v1/eclipsis/memory/quotes/index') {
+    if (req.method === 'GET') { json(res, 200, fulltextStats(db)); return true }
+    if (req.method === 'POST') { json(res, 200, { ...syncFulltext(db, { batch: 20_000 }), stats: fulltextStats(db) }); return true }
+  }
   if (p === '/v1/eclipsis/memory/tree/source/days' && req.method === 'GET') {
     const from = url.searchParams.get('from') || ''
     const to = url.searchParams.get('to') || from

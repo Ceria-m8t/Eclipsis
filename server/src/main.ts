@@ -36,6 +36,7 @@ import {
 } from './pulse/index.ts'
 import { assembleSceneBlockForTurn, injectSceneBlock, renderRecentGroupBlock } from './assembler/index.ts'
 import { renderTreeBlock } from './memory/tree.ts'
+import { syncFulltext, fulltextStats } from './memory/fulltext.ts'
 import { renderRecentWakeBlock } from './wake/chat-block.ts'
 import { notifyXinchaoPresence, notifyXinchaoExchange } from './xinchao-client.ts'
 import { ensurePromptSchema, handlePromptApi } from './prompts.ts'
@@ -532,6 +533,22 @@ function main() {
       }, () => chooseModel(db), Number(process.env.MEMORY_DIGEST_TICK_MS) || 10 * 60_000)
       digestScheduler.start()
     }
+  }
+
+  // ── 原话全文索引（细目层第一块）。纯本地计算：补上新说的话，顺手补回最早那批 ──
+  const ftsTick = () => {
+    try {
+      const r = syncFulltext(db, { batch: Number(process.env.MEMORY_FTS_BATCH) || 4000 })
+      if (r.indexed) {
+        const st = fulltextStats(db)
+        log(`[memory:原话索引] 补了 ${r.indexed} 条，已索引 ${st.indexed}${st.behind ? `，还差 ${st.behind}` : '（齐了）'}`)
+      }
+    } catch (e) { log(`[memory:原话索引] 这次没补上：${String(e)}`) }
+  }
+  if (process.env.MEMORY_FULLTEXT !== '0') {
+    setTimeout(ftsTick, 3000)
+    const ftsTimer = setInterval(ftsTick, Number(process.env.MEMORY_FTS_TICK_MS) || 5 * 60_000)
+    if (typeof ftsTimer === 'object' && 'unref' in ftsTimer) ftsTimer.unref()
   }
 
   // 三态回执的第三态：注入（或影子算出）之后他有没有用上。不调模型，纯比对他的回复

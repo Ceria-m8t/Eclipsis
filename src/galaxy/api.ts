@@ -20,6 +20,11 @@ export interface SourcePage { from: string; to: string; total: number; offset: n
 export interface DayCount { day: string; total: number; her: number; him: number }
 export interface SourceLine { ts: string; who: 'her' | 'him'; text: string; day: string; hit?: boolean }
 export interface SearchPage { total: number; shown: number; lines: SourceLine[]; truncated: boolean }
+export interface QuoteHit { seq: number; ts: string; day: string; who: 'her' | 'him'; text: string }
+export interface QuoteSearch {
+  hits: QuoteHit[]; total: number; exact: boolean; offset: number; next: number | null
+  index: { indexed: number; total: number; behind: number }
+}
 
 async function get<T>(path: string): Promise<T> {
   const r = await fetch(BASE + path, { cache: 'no-store' })
@@ -36,6 +41,11 @@ export const loadSource = (from: string, to: string, offset = 0) =>
 export const loadDays = (from: string, to: string) => get<{ total: number; days: DayCount[] }>(`/tree/source/days?from=${from}&to=${to}`)
 export const searchSource = (from: string, to: string, q: string) =>
   get<SearchPage>(`/tree/source/search?from=${from}&to=${to}&q=${encodeURIComponent(q)}`)
+
+/** 全库找一句原话（细目层的全文索引，不再只扫最近 4000 条） */
+export const searchQuotes = (q: string, o: { who?: 'her' | 'him'; offset?: number } = {}) =>
+  get<QuoteSearch>(`/quotes/search?q=${encodeURIComponent(q)}${o.who ? `&who=${o.who}` : ''}${o.offset ? `&offset=${o.offset}` : ''}`)
+export const quoteAround = (seq: number) => get<{ lines: QuoteHit[] }>(`/quotes/around?seq=${seq}&n=3`)
 
 export async function postNote(body: string): Promise<{ id: number }> {
   const r = await fetch(BASE + '/tree/notes', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ body }) })

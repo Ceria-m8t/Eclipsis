@@ -4,9 +4,9 @@
 // 她在这里只能看、贴便条；时间树只有他能改（open_tree），页面上没有替他改字的按钮。
 import { ref, computed, onMounted, onBeforeUnmount, shallowRef } from 'vue'
 import { useRouter } from 'vue-router'
-import { loadGalaxy, loadGraph, loadTree, loadVersion, loadSource, loadDays, searchSource, postNote,
+import { loadGalaxy, loadGraph, loadTree, loadVersion, loadSource, loadDays, searchSource, searchQuotes, quoteAround, postNote,
   type GSnapshot, type GGraph, type GMemory, type TreePage, type TreeSection, type SourcePage,
-  type DayCount, type SourceLine } from '../galaxy/api'
+  type DayCount, type SourceLine, type QuoteHit, type QuoteSearch } from '../galaxy/api'
 import { mountRidge, hasWebGL2, type Mounted, type Pick, type View } from '../galaxy/bridge'
 
 const router = useRouter()
@@ -120,6 +120,33 @@ function gapBefore(i: number): boolean {
   return b.day !== a.day || Date.parse(b.ts) - Date.parse(a.ts) > 20 * 60_000
 }
 
+// ── 全库找一句原话（细目层）──
+const findOpen = ref(false)
+const findWord = ref('')
+const findWho = ref<'' | 'her' | 'him'>('')
+const findBusy = ref(false)
+const found = ref<QuoteSearch | null>(null)
+const foundHits = ref<QuoteHit[]>([])
+const ctxOf = ref<Record<number, QuoteHit[]>>({})
+
+async function runFind(more = false) {
+  const q = findWord.value.trim()
+  if (!q || findBusy.value) return
+  findBusy.value = true
+  try {
+    const r = await searchQuotes(q, { who: findWho.value || undefined, offset: more && found.value?.next ? found.value.next : 0 })
+    foundHits.value = more ? [...foundHits.value, ...r.hits] : r.hits
+    found.value = r
+    if (!more) ctxOf.value = {}
+  } catch (e: any) { error.value = e.message } finally { findBusy.value = false }
+}
+async function showCtx(h: QuoteHit) {
+  if (ctxOf.value[h.seq]) { const c = { ...ctxOf.value }; delete c[h.seq]; ctxOf.value = c; return }
+  try { ctxOf.value = { ...ctxOf.value, [h.seq]: (await quoteAround(h.seq)).lines } }
+  catch (e: any) { error.value = e.message }
+}
+function setWho(w: '' | 'her' | 'him') { findWho.value = w; if (found.value) runFind() }
+
 // ── 时间树（整篇）──
 const treeOpen = ref(false)
 const showRules = ref(false)
@@ -182,6 +209,7 @@ async function sendNote() {
         <button :class="{ on: view === '2d' }" @click="setView('2d')">星图</button>
         <button :class="{ on: view === 'galaxy' }" @click="setView('galaxy')">全部连线</button>
       </div>
+      <button class="tree-btn" @click="findOpen = true">🔍 找原话</button>
       <button class="tree-btn" @click="treeOpen = true">
         🌳 时间树<span v-if="tree?.open_notes" class="dot">{{ tree.open_notes }}</span>
       </button>
@@ -262,6 +290,46 @@ async function sendNote() {
             <p v-else class="muted">{{ pickedPlanet.definition }}</p>
             <h3>那段日子的记忆卡 · {{ pickedPlanet.memoryCount }} 张</h3>
             <ul class="mems"><li v-for="m in pickedPlanet.memories" :key="m.id"><b>{{ m.title }}</b><span class="d">{{ m.date }} · {{ m.category }}</span><p>{{ m.preview }}</p></li></ul>
+          </template>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- 全库找一句原话 -->
+    <Teleport to="#shell-overlay">
+      <div v-if="findOpen" class="sheet full" @click.self="findOpen = false">
+        <div class="card tall">
+          <button class="x" @click="findOpen = false">×</button>
+          <h2>找一句原话</h2>
+          <p class="muted">
+            从 9 月 25 日第一句开始，全部都能搜（{{ found?.index.indexed ?? '…' }} 句已建索引<span v-if="found && found.index.behind">，还差 {{ found.index.behind }} 句在补</span>）。
+            搜的是说出口的话，他的念头不在里面。两个词用空格隔开 = 两个都要出现。
+          </p>
+          <div class="qbar">
+            <input v-model="findWord" placeholder="比如 枇杷、我妈、如果硅基会心动" maxlength="60" @keyup.enter="runFind()" />
+            <button class="act small" :disabled="findBusy || !findWord.trim()" @click="runFind()">找</button>
+          </div>
+          <div class="seg inline">
+            <button :class="{ on: findWho === '' }" @click="setWho('')">都看</button>
+            <button :class="{ on: findWho === 'her' }" @click="setWho('her')">只看我说的</button>
+            <button :class="{ on: findWho === 'him' }" @click="setWho('him')">只看他说的</button>
+          </div>
+
+          <template v-if="found">
+            <p class="muted">
+              「{{ findWord }}」出现 {{ found.exact ? '' : '至少 ' }}{{ found.total }} 次<span v-if="found.total">，新的在前。点一条看前后几句。</span>
+            </p>
+            <template v-for="h in foundHits" :key="h.seq">
+              <p class="q" :class="h.who" @click="showCtx(h)">
+                <span class="t">{{ fmtDay(h.day) }} {{ hhmm(h.ts) }}</span>{{ h.who === 'her' ? '我' : '他' }}：{{ h.text.slice(0, 160) }}{{ h.text.length > 160 ? '…' : '' }}
+              </p>
+              <div v-if="ctxOf[h.seq]" class="ctx">
+                <p v-for="c in ctxOf[h.seq]" :key="c.seq" class="q small" :class="[c.who, { hit: c.seq === h.seq }]">
+                  <span class="t">{{ hhmm(c.ts) }}</span>{{ c.who === 'her' ? '我' : '他' }}：{{ c.text.slice(0, 200) }}{{ c.text.length > 200 ? '…' : '' }}
+                </p>
+              </div>
+            </template>
+            <button v-if="found.next !== null" class="act ghost" :disabled="findBusy" @click="runFind(true)">再往下看</button>
           </template>
         </div>
       </div>
@@ -373,6 +441,9 @@ h3 { font-size: 14px; margin: 18px 0 8px; color: rgba(255, 243, 210, 0.85); font
 }
 .day.on { border-color: rgba(232, 160, 82, 0.6); background: rgba(232, 160, 82, 0.16); color: #fff3d2; }
 .day .n { margin-left: 6px; opacity: 0.55; font-size: 11.5px; }
+.seg.inline { display: inline-flex; margin: 2px 0 8px; }
+.ctx { border-left: 2px solid rgba(232, 160, 82, 0.35); padding-left: 8px; margin: 2px 0 10px; }
+.q.small { font-size: 12.5px; opacity: 0.9; }
 .gap { height: 1px; background: rgba(205, 216, 238, 0.14); margin: 12px 0; }
 .q .t { color: rgba(205, 216, 238, 0.45); font-size: 11.5px; margin-right: 6px; }
 .q.hit { background: rgba(232, 160, 82, 0.13); border-radius: 8px; padding: 5px 8px; }
