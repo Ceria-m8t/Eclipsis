@@ -13,6 +13,7 @@
 import type { DB } from '../db.ts'
 import { ensureMemorySchema, type Layer, type MemoryRow } from './schema.ts'
 import { allowsPrivate } from './privacy.ts'
+import { expandQuery } from './aliases.ts'
 
 export interface Scored {
   row: MemoryRow
@@ -29,9 +30,13 @@ export interface Scorer {
 
 /** 二元组：中文不分词，直接切两个字一组 */
 export function bigrams(text: string): string[] {
-  const t = String(text || '').replace(/[\s\p{P}\p{S}]+/gu, '')
   const out: string[] = []
-  for (let i = 0; i < t.length - 1; i++) out.push(t.slice(i, i + 2))
+  // 按标点和空格切段，**只在段内切两字一组**。
+  // 跨段拼会造出假片段：「我妈 妈妈」连起来会多出一个「妈妈妈」，
+  // 看着像命中，其实两个词之间根本不相邻（2026-11-12 别名展开之后踩到的）。
+  for (const seg of String(text || '').split(/[\s\p{P}\p{S}]+/u)) {
+    for (let i = 0; i < seg.length - 1; i++) out.push(seg.slice(i, i + 2))
+  }
   // 英文和数字按词也算一份（型号、端口、账号这类要能命中）
   for (const w of String(text || '').toLowerCase().match(/[a-z0-9_.-]{2,}/g) ?? []) out.push(w)
   return out
@@ -146,6 +151,8 @@ export interface RecallOptions {
  */
 export function recallCandidates(db: DB, query: string, o: RecallOptions = {}): Scored[] {
   ensureMemorySchema(db)
+  // 她说「我妈」，卡里写的是「妈妈」——先把说法展开（aliases.ts），不然一条都搜不到
+  const expanded = expandQuery(db, query).text
   const where = ['retracted_at IS NULL', 'dont_surface = 0', 'needs_review = 0']
   const args: (string | number)[] = []
   if (o.layer) { where.push('layer = ?'); args.push(o.layer) }
@@ -163,7 +170,7 @@ export function recallCandidates(db: DB, query: string, o: RecallOptions = {}): 
   const scored: Scored[] = []
   rows.forEach((row, i) => {
     if (skip.has(row.id)) return
-    const { score, hits } = bm25(query, docs[i], idf)
+    const { score, hits } = bm25(expanded, docs[i], idf)
     if (score >= floor) scored.push({ row, score, hits })
   })
   scored.sort((a, b) => b.score - a.score || b.row.created_at.localeCompare(a.row.created_at))

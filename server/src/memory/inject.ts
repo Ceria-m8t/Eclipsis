@@ -18,6 +18,8 @@ import { recallCandidates, type Scored } from './recall.ts'
 import { PEOPLE_SEEDS } from './classify.ts'
 import { labelWithPeople } from './write.ts'
 import { listRelationsOf } from './relations.ts'
+import { searchQuotes, quoteSpan, renderQuotes, type Quote } from './quotes.ts'
+import { expandQuery } from './aliases.ts'
 
 export type RecallMode = 'off' | 'shadow' | 'live'
 
@@ -136,9 +138,14 @@ export interface Picked {
 
 export interface RecallResult {
   query: string
+  /** 展开后的说法（「我妈」→ 也搜「妈妈」「她妈」） */
+  expanded: string[]
   candidates: number
   picked: Picked[]
   rejected: { id: number; title: string; why: string }[]
+  /** 原话（经历表里一字不改的那几句）。卡片给判断，原话给质感 */
+  quotes: Quote[]
+  quoteSpan: { total: number; first: string | null; last: string | null }
   note: string
 }
 
@@ -154,7 +161,11 @@ export function runRecall(db: DB, query: string, o: RecallOpts = {}): RecallResu
   ensureMemorySchema(db)
   const now = o.now ?? new Date()
   const q = String(query || '').trim()
-  const out: RecallResult = { query: q.slice(0, 200), candidates: 0, picked: [], rejected: [], note: '' }
+  const exp = expandQuery(db, q)
+  const out: RecallResult = {
+    query: q.slice(0, 200), expanded: exp.added, candidates: 0, picked: [], rejected: [],
+    quotes: [], quoteSpan: { total: 0, first: null, last: null }, note: '',
+  }
   if (q.replace(/\s/g, '').length < 2) return out
 
   const cands = recallCandidates(db, q, { scene: o.scene, exclude: o.exclude, limit: 20 })
@@ -167,7 +178,14 @@ export function runRecall(db: DB, query: string, o: RecallOpts = {}): RecallResu
     if (!v.ok) { out.rejected.push({ id: c.row.id, title: c.row.title, why: v.why }); continue }
     out.picked.push({ row: c.row, score: c.score, hits: c.hits, why: v.why, axis: buildAxis(db, c.row.id) })
   }
-  out.note = renderRecallNote(db, out.picked)
+  // 原话那一层（第二条腿）：卡片不完备，原话完备。MEMORY_RECALL_QUOTES=0 关
+  if (process.env.MEMORY_RECALL_QUOTES !== '0') {
+    try {
+      out.quotes = searchQuotes(db, q, { scene: o.scene, limit: Number(process.env.MEMORY_RECALL_QUOTES_MAX) || 3 })
+      if (out.quotes.length) out.quoteSpan = quoteSpan(db, q, { scene: o.scene })
+    } catch { /* 搜不了就只给卡片 */ }
+  }
+  out.note = [renderRecallNote(db, out.picked), renderQuotes(out.quotes, out.quoteSpan)].filter(Boolean).join('\n\n')
   return out
 }
 

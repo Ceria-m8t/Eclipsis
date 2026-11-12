@@ -29,4 +29,6 @@ export {
   renderRecallNote, buildAxis, mentionedPeople, distinctWords,
   type RecallMode, type RecallResult, type Picked,
 } from './inject.ts'
+export { expandQuery, addAlias, removeAlias, listAliases, ensureAliasSchema, BUILTIN_ALIASES } from './aliases.ts'
+export { searchQuotes, quoteSpan, renderQuotes, type Quote } from './quotes.ts'
 export { handleMemoryApi } from './api.ts'

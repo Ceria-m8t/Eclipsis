@@ -8,6 +8,7 @@ import {
   memoryStats, memoryInbox, memoryList, decideCandidates, retractMemory,
   memoryProposals, decideProposals, runRejudgeBatch,
   memoryDetail, addCorrection, setMemoryPrivate, tryRecall, recallStats,
+  listAliases, addAlias, removeAlias,
   type MemoryDetail, type RecallTry, type RecallStats as RStats,
   LAYER_NAMES, KIND_NAMES, type MemoryStats, type Candidate, type MemoryItem, type Proposal,
 } from '../memory'
@@ -20,6 +21,29 @@ const tab = ref<'inbox' | 'fix' | 'recall' | 'all' | 'review'>('inbox')
 const recall = ref<RStats | null>(null)
 const tryQ = ref('')
 const tried = ref<RecallTry | null>(null)
+const aliases = ref<{ id: number; term: string; canonical: string }[]>([])
+
+async function loadAliases() {
+  try { aliases.value = (await listAliases()).aliases } catch (e: any) { err.value = e.message }
+}
+async function newAlias() {
+  const term = window.prompt('你平时怎么说？（比如「我妈」「大姨妈」「糯米团」）')
+  if (!term || !term.trim()) return
+  const canonical = window.prompt(`库里写的是什么？（「${term.trim()}」会和它当成同一个说法搜）`)
+  if (!canonical || !canonical.trim()) return
+  busy.value = true
+  try {
+    const r = await addAlias(term.trim(), canonical.trim())
+    if (!r.ok) err.value = r.error || '没加上'
+    await loadAliases()
+  } catch (e: any) { err.value = e.message }
+  busy.value = false
+}
+async function dropAlias(id: number) {
+  busy.value = true
+  try { await removeAlias(id); await loadAliases() } catch (e: any) { err.value = e.message }
+  busy.value = false
+}
 const proposals = ref<Proposal[]>([])
 const rejudgeMsg = ref('')
 const err = ref('')
@@ -37,6 +61,7 @@ async function reload() {
       picked.value = new Set()
     } else if (tab.value === 'recall') {
       recall.value = await recallStats()
+      await loadAliases()
     } else if (tab.value === 'fix') {
       proposals.value = (await memoryProposals()).proposals
       picked.value = new Set()
@@ -246,15 +271,40 @@ async function strike(m: MemoryItem) {
       </div>
       <div v-if="tried" class="mem-item">
         <div class="mem-head">
-          <span class="mem-title">候选 {{ tried.candidates }} 条 → 会想起 {{ tried.picked.length }} 条</span>
+          <span class="mem-title">卡片 {{ tried.candidates }} 条 → 想起 {{ tried.picked.length }} 条｜原话 {{ tried.quotes.length }} 条</span>
           <span class="mem-tag">{{ tried.mode === 'live' ? '已经真的在给他' : '影子' }}</span>
         </div>
+        <p v-if="tried.expanded.length" class="mem-meta">也当成同一个说法搜了：{{ tried.expanded.join('、') }}</p>
         <p v-for="p in tried.picked" :key="p.id" class="mem-why">
           ✓ {{ p.title }}（{{ layerName(p.layer) }}·{{ p.score.toFixed(2) }}）{{ p.why }}
           <template v-if="p.axis.length >= 2"> · 这件事浮现过 {{ p.axis.length }} 次</template>
         </p>
         <p v-for="r in tried.rejected" :key="'r' + r.id" class="mem-unsure">✗ {{ r.title }}：{{ r.why }}</p>
-        <p v-if="!tried.picked.length" class="mem-meta">一条都没给——没有相关的就不给，这是设计里的规矩。</p>
+        <p v-if="!tried.picked.length" class="mem-meta">卡片一条都没给——没有相关的就不给，这是设计里的规矩。</p>
+        <template v-if="tried.quotes.length">
+          <p class="mem-why">
+            原话（一字不改，{{ tried.quoteSpan.total }} 次里最像的几条{{ tried.quoteSpan.first ? '，最早 ' + tried.quoteSpan.first.slice(0, 10) : '' }}）：
+          </p>
+          <p v-for="q in tried.quotes" :key="q.seq" class="mem-body">
+            {{ q.ts.slice(0, 16).replace('T', ' ') }}　{{ q.who }}：{{ q.text }}
+          </p>
+        </template>
+      </div>
+
+      <div class="mem-item">
+        <div class="mem-head">
+          <span class="mem-title">说法对照表</span>
+          <span class="mem-spacer"></span>
+          <button class="mem-btn" :disabled="busy" @click="newAlias">+ 加一组</button>
+        </div>
+        <p class="mem-meta">
+          你说「我妈」、他记成「妈妈」——对照表让两种说法互相认得。
+          人物卡上的名字和别名自动算，例假/大姨妈这类出厂就带了几组。
+        </p>
+        <p v-for="a in aliases" :key="a.id" class="mem-why">
+          「{{ a.term }}」=「{{ a.canonical }}」
+          <button class="mem-link" :disabled="busy" @click="dropAlias(a.id)">删</button>
+        </p>
       </div>
       <template v-if="recall">
         <div class="mem-stats">

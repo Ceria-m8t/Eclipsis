@@ -17,6 +17,9 @@
 //   POST /v1/eclipsis/memory/relations/extract   把 OB 的 relation_links 抽出来（可反复跑）
 //   GET  /v1/eclipsis/memory/recall?q=…   试算一遍：这句话会想起哪几条、哪几条被判官挡了（不写库）
 //   GET  /v1/eclipsis/memory/deliveries   影子运行的记录：递过/用上/没用上
+//   GET  /v1/eclipsis/memory/quotes?q=…   在原话里搜（经历表，一字不改）
+//   GET  /v1/eclipsis/memory/aliases      说法对照表（「我妈」=「妈妈」）
+//   POST /v1/eclipsis/memory/aliases      { term, canonical } 加；{ id, remove:true } 删
 //   POST /v1/eclipsis/memory/deliveries/judge  手动跑一次第三态判定
 //   POST /v1/eclipsis/memory/private      { seqs?|turn?|memoryId?, private?:true }
 //        标私密：夜里整理不读它、群聊和外部 AI 拿不到、面板里默认折叠
@@ -30,6 +33,8 @@ import { listRelationsOf, addRelation, removeRelation, extractObRelations, KIND_
 import { addCorrection, withdrawCorrection, listCorrections, openCount } from './corrections.ts'
 import { markEpisodesPrivate, markTurnPrivate, markMemoryPrivate, privateCounts } from './privacy.ts'
 import { runRecall, recallStats, judgeDeliveries, recallMode } from './inject.ts'
+import { addAlias, removeAlias, listAliases, expandQuery } from './aliases.ts'
+import { searchQuotes, quoteSpan } from './quotes.ts'
 import { chooseModel, currentStation } from '../station.ts'
 
 function json(res: ServerResponse, status: number, body: unknown) {
@@ -212,9 +217,42 @@ export async function handleMemoryApi(db: DB, req: IncomingMessage, res: ServerR
           score: Number(x.score.toFixed(3)), hits: x.hits, why: x.why, axis: x.axis,
         })),
         rejected: r.rejected,
+        expanded: r.expanded,
+        quotes: r.quotes,
+        quoteSpan: r.quoteSpan,
         note: r.note,
       })
       return true
+    }
+
+    if (p === '/v1/eclipsis/memory/quotes' && req.method === 'GET') {
+      const q = url.searchParams.get('q') || ''
+      const scene = url.searchParams.get('scene') || 'chat'
+      const limit = Number(url.searchParams.get('limit')) || 10
+      const actorParam = url.searchParams.get('actor')
+      const actor = actorParam === 'erica' || actorParam === 'ai' ? actorParam : undefined
+      json(res, 200, {
+        query: q,
+        expanded: expandQuery(db, q).added,
+        span: quoteSpan(db, q, { scene }),
+        quotes: searchQuotes(db, q, { scene, limit, actor }),
+      })
+      return true
+    }
+
+    if (p === '/v1/eclipsis/memory/aliases') {
+      if (req.method === 'GET') { json(res, 200, { aliases: listAliases(db) }); return true }
+      if (req.method === 'POST') {
+        const b = await readJson(req)
+        if (b?.remove === true) {
+          const ok = removeAlias(db, Number(b?.id))
+          json(res, ok ? 200 : 404, ok ? { ok: true } : { error: '没有这一条' })
+          return true
+        }
+        const r = addAlias(db, String(b?.term ?? ''), String(b?.canonical ?? ''))
+        json(res, r.ok ? 200 : 400, r)
+        return true
+      }
     }
 
     if (p === '/v1/eclipsis/memory/deliveries' && req.method === 'GET') {

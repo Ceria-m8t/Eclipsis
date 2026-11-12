@@ -24,10 +24,12 @@ describe('二元组', () => {
     assert.ok(g.includes('端口'))
     assert.ok(g.includes('18110'), '型号端口这类要能整词命中')
   })
-  it('标点和空格不算（abcd 连起来切）', () => {
-    const g = bigrams('ab，cd')
-    assert.ok(g.includes('bc'), '标点被去掉之后 b 和 c 就相邻了')
-    assert.ok(g.includes('ab') && g.includes('cd'))
+  it('不跨标点和空格拼字（「我妈 妈妈」不该造出「妈妈妈」）', () => {
+    const g = bigrams('我妈 妈妈')
+    assert.ok(g.includes('我妈') && g.includes('妈妈'))
+    assert.ok(!g.includes('妈妈妈'), '跨段拼出来的假片段会看着像命中')
+    const h = bigrams('ab，cd')
+    assert.ok(!h.includes('bc'), '标点两边不相邻')
   })
 })
 

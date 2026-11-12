@@ -118,9 +118,14 @@ export const listCorrections = (status?: string) =>
   get<{ corrections: any[]; open: number }>(`/corrections${status ? `?status=${status}` : ''}`)
 export const withdrawCorrection = (id: number) => post<{ ok: boolean }>('/corrections', { id, withdraw: true })
 
+export interface Quote { seq: number; ts: string; who: string; text: string; hits: string[] }
+
 export interface RecallTry {
   mode: string
   query: string
+  expanded: string[]
+  quotes: Quote[]
+  quoteSpan: { total: number; first: string | null; last: string | null }
   candidates: number
   picked: { id: number; title: string; layer: string; subject: string; score: number; hits: string[]; why: string; axis: { date: string; title: string }[] }[]
   rejected: { id: number; title: string; why: string }[]
@@ -134,6 +139,12 @@ export interface RecallStats {
   usedRate: number | null
   recent: { title: string; state: string; score: number | null; query: string; at: string }[]
 }
+
+export const searchQuotes = (q: string) =>
+  get<{ query: string; expanded: string[]; span: { total: number; first: string | null }; quotes: Quote[] }>(`/quotes?q=${encodeURIComponent(q)}&limit=10`)
+export const listAliases = () => get<{ aliases: { id: number; term: string; canonical: string }[] }>('/aliases')
+export const addAlias = (term: string, canonical: string) => post<{ ok: boolean; error?: string }>('/aliases', { term, canonical })
+export const removeAlias = (id: number) => post<{ ok: boolean }>('/aliases', { id, remove: true })
 
 export const tryRecall = (q: string) => get<RecallTry>(`/recall?q=${encodeURIComponent(q)}`)
 export const recallStats = () => get<RecallStats>('/deliveries')
