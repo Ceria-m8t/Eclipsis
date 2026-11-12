@@ -89,7 +89,9 @@ export function judge(cand: Scored, query: string, now: Date = new Date()): Verd
   //    真正的好命中要么意思也接近、要么命中好几处、要么那个词够长够特别。
   const longest = cand.hits.reduce((n, h) => Math.max(n, h.length), 0)
   const rare = cand.rareDf
-  if (sem < 0.15 && cand.hits.length < 2 && longest < 3 && !(typeof rare === 'number' && rare <= 2)) {
+  // 她就问两三个字的时候不算在内（「枇杷」「海鲜」那两个字就是她要找的全部）
+  const shortAsk = query.replace(/[\s\p{P}\p{S}]+/gu, '').length <= 5
+  if (!shortAsk && sem < 0.15 && cand.hits.length < 2 && longest < 3 && !(typeof rare === 'number' && rare <= 2)) {
     return { ok: false, why: `只命中「${cand.hits[0] ?? ''}」两个字，意思也不接近` }
   }
 

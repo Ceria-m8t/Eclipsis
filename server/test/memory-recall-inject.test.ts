@@ -75,9 +75,9 @@ describe('判官：只管递不递', () => {
   it('她问「这几天」时，三天前的近况也不给', () => {
     const db = lib()
     const row = byTitle(db, '糯糯吐了')
-    assert.equal(judge({ row, score: 0.6, hits: ['糯糯'] }, '糯糯怎么了').ok, true)
+    assert.equal(judge({ row, score: 0.6, hits: ['糯糯'], rareDf: 1 }, '糯糯怎么了').ok, true)
     const old = { ...row, created_at: new Date(Date.now() - 5 * 86400_000).toISOString() }
-    const v = judge({ row: old, score: 0.6, hits: ['糯糯'] }, '糯糯这几天怎么样')
+    const v = judge({ row: old, score: 0.6, hits: ['糯糯'], rareDf: 1 }, '糯糯这几天怎么样')
     assert.equal(v.ok, false)
     assert.match(v.why, /这几天/)
   })
