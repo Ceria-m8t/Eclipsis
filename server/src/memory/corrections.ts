@@ -12,6 +12,7 @@
 // IB 的边界（她的反馈能影响召回，但不变成「事实」）；年轮的镜子（外部只递证据，从不下结论）。
 import type { DB } from '../db.ts'
 import { ensureMemorySchema } from './schema.ts'
+import { bjDate } from './when.ts'
 
 export interface Correction {
   id: number
@@ -98,7 +99,7 @@ export function acceptCorrection(
   const words = String(hisWords ?? '').trim().slice(0, 300)
   if (words.replace(/\s/g, '').length < 2) return { ok: false, error: '要写一句：这条该怎么算' }
   const ts = now.toISOString()
-  const layer = `\n\n【${ts.slice(0, 10)} 更正】${words}\n（她当时说：${c.note}）`
+  const layer = `\n\n【${bjDate(ts)} 更正】${words}\n（她当时说：${c.note}）`
   db.prepare('UPDATE memories SET fact_body = fact_body || ?, updated_at = ? WHERE id = ?').run(layer, ts, c.memory_id)
   db.prepare("UPDATE memory_corrections SET status = 'accepted', his_reply = ?, decided_at = ?, seen_at = COALESCE(seen_at, ?) WHERE id = ?")
     .run(words, ts, ts, id)

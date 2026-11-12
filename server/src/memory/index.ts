@@ -40,4 +40,5 @@ export {
   replayRecall, graduation, addSpotcheck, listSpotchecks, ensureSpotcheckSchema,
   type ReplayReport, type Graduation,
 } from './replay.ts'
+export { bjDate, bjShort, bjStamp, bjFull, bjAgo } from './when.ts'
 export { handleMemoryApi } from './api.ts'

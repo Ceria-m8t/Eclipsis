@@ -12,6 +12,7 @@
 import type { DB } from '../db.ts'
 import { ensureMemorySchema } from './schema.ts'
 import { writeMemory, type MemoryDraft } from './write.ts'
+import { bjShort } from './when.ts'
 
 export interface DigestConfig {
   upstreamUrl: string
@@ -127,7 +128,9 @@ export function buildMaterial(episodes: Episode[], maxChars = 12_000): string {
     const text = cleanForDigest(e.content)
     if (!text) continue
     const who = e.actor === 'erica' ? '她' : '我'
-    const one = `#${e.seq} ${e.ts.slice(5, 16).replace('T', ' ')} ${who}：${text.length > 700 ? text.slice(0, 700) + '…' : text}`
+    // **这里一定要北京时间**：2026-11-12 这里原来是 UTC，模型读到「05:25」
+    // 就把下午一点半那段写成了「凌晨崩溃」——时间错了，连带把那件事的定性也写错了
+    const one = `#${e.seq} ${bjShort(e.ts)} ${who}：${text.length > 700 ? text.slice(0, 700) + '…' : text}`
     total += one.length
     if (total > maxChars) { lines.push('（更早的略）'); break }
     lines.push(one)

@@ -177,4 +177,25 @@ export const KIND_NAMES: Record<string, string> = {
   merge: '合并', split: '拆开', relayer: '换层', why: '补「为什么记」', retract: '划掉',
 }
 
+/**
+ * 时间一律过这里（2026-11-12 她问「时间不太对」）：后端存的是 UTC（带 Z），
+ * 直接 slice 字符串等于把 UTC 念成北京时间，差 8 小时。
+ */
+export function when(iso: string | null | undefined, withYear = false): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return String(iso)
+  const p = (n: number) => String(n).padStart(2, '0')
+  const md = `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+  return withYear ? `${d.getFullYear()}-${md}` : md
+}
+
+export function whenDate(iso: string | null | undefined): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return String(iso)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
 export const LAYER_NAMES: Record<string, string> = { fact: '事实', state: '近况', bond: '我们之间' }

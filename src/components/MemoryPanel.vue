@@ -11,7 +11,7 @@ import {
   listAliases, addAlias, removeAlias, vectorIndex, buildVectorIndex,
   replayRecall, graduation, spotcheck, type ReplayItem,
   type MemoryDetail, type RecallTry, type RecallStats as RStats,
-  LAYER_NAMES, KIND_NAMES, type MemoryStats, type Candidate, type MemoryItem, type Proposal,
+  LAYER_NAMES, KIND_NAMES, when, whenDate, type MemoryStats, type Candidate, type MemoryItem, type Proposal,
 } from '../memory'
 
 const stats = ref<MemoryStats | null>(null)
@@ -339,10 +339,10 @@ async function strike(m: MemoryItem) {
         </p>
         <template v-if="tried.quotes.length">
           <p class="mem-why">
-            原话（一字不改，{{ tried.quoteSpan.total }} 次里最像的几条{{ tried.quoteSpan.first ? '，最早 ' + tried.quoteSpan.first.slice(0, 10) : '' }}）：
+            原话（一字不改，{{ tried.quoteSpan.total }} 次里最像的几条{{ tried.quoteSpan.first ? '，最早 ' + whenDate(tried.quoteSpan.first) : '' }}）：
           </p>
           <p v-for="q in tried.quotes" :key="q.seq" class="mem-body">
-            {{ q.ts.slice(0, 16).replace('T', ' ') }}　{{ q.who }}：{{ q.text }}
+            {{ when(q.ts) }}　{{ q.who }}：{{ q.text }}
           </p>
         </template>
       </div>
@@ -373,7 +373,7 @@ async function strike(m: MemoryItem) {
         <div v-for="(it, i) in replay.items.slice().reverse()" :key="i" class="mem-item">
           <div class="mem-head">
             <span class="mem-title">{{ it.said }}</span>
-            <span class="mem-tag">{{ it.at.slice(5, 16).replace('T', ' ') }}</span>
+            <span class="mem-tag">{{ when(it.at) }}</span>
           </div>
           <p v-if="it.empty" class="mem-meta">一条都没给（纸条上会明说没搜到）</p>
           <p v-for="p in it.picked" :key="p.id" class="mem-why">
@@ -495,7 +495,7 @@ async function strike(m: MemoryItem) {
           <p v-if="m.feeling" class="mem-feeling">{{ m.feeling }}</p>
           <p v-if="m.privacy === 'private'" class="mem-meta">私密：夜里整理不读它，群聊和别的 AI 永远拿不到。</p>
           <p class="mem-meta">
-            {{ m.created_at.slice(0, 16).replace('T', ' ') }}
+            {{ when(m.created_at, true) }}
             · {{ m.voice === 'machine' ? '程序整理的' : '他自己写的' }}
             {{ m.tags.length ? ' · ' + m.tags.slice(0, 8).join('、') : '' }}
           </p>

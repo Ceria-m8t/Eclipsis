@@ -16,6 +16,7 @@ import type { DB } from '../db.ts'
 import { tx } from '../db.ts'
 import { ensureMemorySchema, type Grade, type Layer, type MemoryRow } from './schema.ts'
 import { classify, guessSubject, overlap, synthCard } from './classify.ts'
+import { bjDate } from './when.ts'
 
 export const AMEND_AT = 0.70     // 这个以上算同一件事：接到已有那条上
 export const UNSURE_AT = 0.55    // 这两条之间算「像但不一样」：进信箱
@@ -156,7 +157,7 @@ export function writeMemory(db: DB, draft: MemoryDraft, now: Date = new Date(), 
     let tags: string[] = []
     try { tags = JSON.parse(row.tags) } catch { tags = [] }
     const merged = [...new Set([...tags, ...(draft.tags ?? [])])]
-    const addition = `\n\n（${ts.slice(0, 10)} 又记了一次）${fact}${feeling ? '\n' + feeling : ''}`
+    const addition = `\n\n（${bjDate(ts)} 又记了一次）${fact}${feeling ? '\n' + feeling : ''}`
     let ev: number[] = []
     try { ev = JSON.parse((row as unknown as { evidence?: string }).evidence || '[]') } catch { ev = [] }
     db.prepare(`UPDATE memories SET fact_body = fact_body || ?, tags = ?, evidence = ?, updated_at = ?,

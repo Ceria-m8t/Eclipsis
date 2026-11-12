@@ -17,6 +17,7 @@ import { ensureMemorySchema, type Layer, type MemoryRow } from './schema.ts'
 import { overlap } from './classify.ts'
 import { labelWithPeople } from './write.ts'
 import type { CallDigestModel } from './digest.ts'
+import { bjDate } from './when.ts'
 
 export type ProposalKind = 'merge' | 'split' | 'relayer' | 'why' | 'retract'
 
@@ -96,7 +97,7 @@ export function buildRejudgeMaterial(db: DB, rows: MemoryRow[]): string {
     const body = r.fact_body.length > MAX_BODY ? r.fact_body.slice(0, MAX_BODY) + '…' : r.fact_body
     return [
       `## id=${r.id}`,
-      `层=${r.layer}  主体=${labelWithPeople(db, r.subject)}  日期=${r.created_at.slice(0, 10)}  笔=${r.voice === 'machine' ? '程序整理' : '他自己'}`,
+      `层=${r.layer}  主体=${labelWithPeople(db, r.subject)}  日期=${bjDate(r.created_at)}（北京）  笔=${r.voice === 'machine' ? '程序整理' : '他自己'}`,
       `标题：${r.title}`,
       `为什么记：${r.why || '（空着）'}`,
       `正文：${body}`,

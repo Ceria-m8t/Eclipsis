@@ -12,6 +12,7 @@ import { ensureMemorySchema, type Layer } from './schema.ts'
 import { writeMemory, labelWithPeople, inboxCount, type MemoryDraft } from './write.ts'
 import { listCorrections, markSeen, acceptCorrection, keepCorrection } from './corrections.ts'
 import { listRelationsOf, addRelation, KIND_LABEL, HAND_KINDS, type RelationKind } from './relations.ts'
+import { bjStamp } from './when.ts'
 
 const LAYERS: Layer[] = ['fact', 'state', 'bond']
 
@@ -129,7 +130,7 @@ export function memoBox(db: DB, deps: MemoBoxDeps = {}): WakeBox {
             .all(...(layer ? [layer, limit] : [limit])) as unknown as
             { id: number; layer: string; subject: string; title: string; why: string | null; created_at: string }[]
           if (!rows.length) return { text: '还没记过什么。', isError: false }
-          const lines = rows.map(r => `#${r.id} ${r.created_at.slice(0, 16).replace('T', ' ')} [${r.layer}] ` +
+          const lines = rows.map(r => `#${r.id} ${bjStamp(r.created_at)} [${r.layer}] ` +
             `${labelWithPeople(db, r.subject)}：${r.title}${r.why ? `（为什么记：${r.why}）` : ''}`)
           return { text: lines.join('\n'), isError: false }
         }

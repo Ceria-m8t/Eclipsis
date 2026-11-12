@@ -20,6 +20,7 @@ import { labelWithPeople } from './write.ts'
 import { listRelationsOf } from './relations.ts'
 import { searchQuotes, quoteSpan, renderQuotes, type Quote } from './quotes.ts'
 import { cleanForDigest } from './digest.ts'
+import { bjDate } from './when.ts'
 import { expandQuery } from './aliases.ts'
 import { embedConfig, apiEmbedder, queryVector, vectorStats } from './embed.ts'
 
@@ -142,7 +143,7 @@ export function buildAxis(db: DB, memoryId: number, limit = 6): AxisRow[] {
     .all(...ids) as unknown as { id: number; title: string; fact_body: string; created_at: string }[]
   return rows.slice(0, limit).map(r => ({
     id: r.id,
-    date: r.created_at.slice(0, 10),
+    date: bjDate(r.created_at),
     title: r.title,
     line: firstSentence(r.fact_body),
   }))
@@ -292,7 +293,7 @@ export function renderRecallNote(db: DB, picked: Picked[]): string {
   const parts: string[] = [NOTE_HEAD, '']
   for (const p of picked) {
     const r = p.row
-    parts.push(`· ${r.created_at.slice(0, 10)}｜${labelWithPeople(db, r.subject)}｜${r.title}`)
+    parts.push(`· ${bjDate(r.created_at)}｜${labelWithPeople(db, r.subject)}｜${r.title}`)
     parts.push(`  ${firstSentence(r.fact_body)}`)
     if (r.feeling && r.voice === 'him') parts.push(`  当时：${firstSentence(r.feeling)}`)
     if (r.why) parts.push(`  当时记它是因为：${r.why}`)

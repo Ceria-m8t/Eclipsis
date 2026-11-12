@@ -18,6 +18,7 @@ import { expandQuery } from './aliases.ts'
 import { allowsPrivate } from './privacy.ts'
 import { cleanForDigest } from './digest.ts'
 import { isWeakTerm } from './recall.ts'
+import { bjDate, bjStamp } from './when.ts'
 
 export interface Quote {
   seq: number
@@ -190,10 +191,10 @@ export function renderQuotes(quotes: Quote[], span?: { total: number; first: str
   if (!quotes.length) return ''
   const lines = ['〔你们的原话（一字不改，从经历表里捞的）：']
   if (span && span.total > quotes.length) {
-    lines.push(`这个说法一共出现过 ${span.total} 次${span.first ? `，最早是 ${span.first.slice(0, 10)}` : ''}，下面是最像的几条。`)
+    lines.push(`这个说法一共出现过 ${span.total} 次${span.first ? `，最早是 ${bjDate(span.first)}` : ''}，下面是最像的几条。`)
   }
   for (const q of quotes) {
-    lines.push(`· ${q.ts.slice(0, 16).replace('T', ' ')}　${q.who}：${q.text}`)
+    lines.push(`· ${bjStamp(q.ts)}　${q.who}：${q.text}`)
   }
   lines.push('〕')
   return lines.join('\n')
