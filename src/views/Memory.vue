@@ -20,7 +20,6 @@ import { useRouter } from 'vue-router'
 import MemoryPanel from '../components/MemoryPanel.vue'
 import Underwater from '../components/Underwater.vue'
 import Orn from '../components/vault/VaultOrnaments.vue'
-import Fg from '../components/vault/VaultFiligree.vue'
 import { Pond, pondSupported } from '../liquid/pond'
 import { startGlobalPond, stopGlobalPond } from '../liquid/pond-global'
 import { pageDark } from '../theme'
@@ -59,6 +58,33 @@ const OBJ: Record<string, string> = {
  * （nginx snippets/memory-bg.conf → /_memory-bg.jpg，no-store）。
  */
 const BG_URL = '/_memory-bg.jpg'
+
+/**
+ * 花饰 PNG（她 2026-11-13 定：「以后的话，我觉得我需要发你 PNG」）。
+ *
+ * 为什么必须用图：我手写贝塞尔坐标「编」出来的花饰，没有一枚像她发的参考图。
+ * 那不是没调好 —— 她的参考图每一枚卷草有二三十条交错曲线、叶片有粗细变化、还有填充黑块，
+ * 我写的是五条等宽描边线，靠凑坐标永远到不了那个密度。所以改成**直接用她的线稿**。
+ *
+ * 用法：把线稿（白色描线、背景透明的 PNG）放到服务器上，文件名对应位置：
+ *   corner.png  四角角花（左上那一枚，其余三角自动翻转）
+ *   crest.png   题头顶上的冠饰
+ *   tail.png    页底尾花
+ * 放了哪张就显示哪张，没放的不显示（不会出破图）。走 /_memory-orn/<名字>.png，
+ * nginx snippets/memory-orn.conf，no-store，换图立刻生效、build 碰不到。
+ */
+const ORN_DIR = '/_memory-orn'
+const orn = ref<Record<string, boolean>>({})
+
+function loadOrn(): Promise<void> {
+  const names = ['corner', 'crest', 'tail']
+  return Promise.all(names.map(n => new Promise<void>(res => {
+    const img = new Image()
+    img.onload = () => { if (img.naturalWidth > 1) orn.value[n] = true; res() }
+    img.onerror = () => res()
+    img.src = `${ORN_DIR}/${n}.png`
+  }))).then(() => undefined)
+}
 /** 底图在不在（不在就用兜底，不要显示破图） */
 const bg = ref('')
 /** 头部那张水下画面用的底图（画进 canvas 的那一份） */
@@ -158,6 +184,7 @@ async function startWater() {
 
 onMounted(async () => {
   pageDark.value = true          // 底栏跟着变透（她：底栏为什么一直是白色的）
+  void loadOrn()                 // 她放了花饰 PNG 就用，没放就只有底图自带的纹样
   await loadBg()          // 先知道有没有底图，再起水面（头部那张画面要用它）
   void startWater()
   try {
@@ -190,11 +217,21 @@ const subTitle = computed(() => sub.value === 'inbox' ? '沉淀信箱' : sub.val
   <div class="mem-page shell-page" ref="pageEl">
     <!-- 水下：光从上面射进来，会动（水面亮边 / 四道光柱 / 焦散 / 浮尘） -->
     <Underwater :src="bg" depth="shallow" />
-    <!-- 整页四角：洛可可涡卷角花（不是直角刻线——那是新古典，方向正好相反） -->
-    <div class="edge">
-      <Fg name="corner" class="cnr tl" /><Fg name="corner" class="cnr tr" />
-      <Fg name="corner" class="cnr bl" /><Fg name="corner" class="cnr br" />
+    <!-- 她放了 corner.png 才出现（四角自动翻转） -->
+    <div v-if="orn.corner" class="edge">
+      <img :src="`${ORN_DIR}/corner.png`" class="cnr tl" alt="" aria-hidden="true">
+      <img :src="`${ORN_DIR}/corner.png`" class="cnr tr" alt="" aria-hidden="true">
+      <img :src="`${ORN_DIR}/corner.png`" class="cnr bl" alt="" aria-hidden="true">
+      <img :src="`${ORN_DIR}/corner.png`" class="cnr br" alt="" aria-hidden="true">
     </div>
+    <!--
+      ⚠ 2026-11-13 她定：**现在只用底图自带的纹样**。
+      我手写贝塞尔坐标「编」出来的花饰，没有一个像她发的参考图——那不是没调好，
+      是方法不对：她的参考图每一枚卷草有二三十条交错的曲线、叶片有粗细变化、还有填充黑块，
+      我写的是五条等宽描边线，靠凑坐标永远到不了那个密度。
+      以后她会发 PNG 线稿，到时候走 ORNAMENT_URL 那条路直接用图（见下面）。
+      所以这里不再画角花，整页四角留空，花饰交给她选的底图。
+    -->
 
     <div class="scroll" ref="scrollEl">
       <header class="head" ref="headEl" :class="{ water }" :style="water ? { height: headH + 'px' } : undefined">
@@ -202,9 +239,7 @@ const subTitle = computed(() => sub.value === 'inbox' ? '沉淀信箱' : sub.val
         <p v-if="water" class="sr-only">{{ headText(headData) }}</p>
         <!-- 水面跑不起来：同样内容的 DOM 题头（铜牌 + 日蚀 + 四角花饰） -->
         <div v-else class="plate">
-          <Fg name="corner" class="cnr tl" /><Fg name="corner" class="cnr tr" />
           <p class="eyebrow">E C L I P S I S &nbsp;·&nbsp; 未</p>
-          <Fg name="crest" class="crest" />
           <h1>Remember</h1>
           <p class="zh">记 忆 的 柜 子</p>
           <template v-if="data">
@@ -230,8 +265,7 @@ const subTitle = computed(() => sub.value === 'inbox' ? '沉淀信箱' : sub.val
         <!-- 分区题：刻线 + 书名号 -->
         <section v-for="s in data.sections" :key="s.title">
           <div class="sec">
-            <Fg name="sprig" class="sprig" /><b>{{ s.title }}</b>
-            <Fg name="rule" class="rule" /><em>{{ s.en }}</em><hr>
+            <b>{{ s.title }}</b><em>{{ s.en }}</em><hr>
           </div>
           <!-- 器物抽屉：一行一件（她：不是等大方格） -->
           <div class="drawers">
@@ -239,13 +273,13 @@ const subTitle = computed(() => sub.value === 'inbox' ? '沉淀信箱' : sub.val
                     :class="{ empty: c.todo, tappable: !!c.to }" @click="open(c)">
               <span class="edge-l"></span>
               <span class="idx">{{ roman(i + 1) }}</span>
-              <span class="obj"><Fg name="bracket" class="bracket" /><Orn :name="OBJ[c.key] || 'cards'" /></span>
+              <span class="obj"><Orn :name="OBJ[c.key] || 'cards'" /></span>
               <span class="txt">
                 <b>{{ c.name }}</b>
                 <span class="cen">{{ c.en }}</span>
                 <u v-if="c.note">{{ c.note }}</u>
               </span>
-              <span v-if="c.todo" class="seal"><Fg name="seal" /><b>未</b></span>
+              <span v-if="c.todo" class="seal"><b>未</b></span>
               <span class="val"><em>{{ c.n.toLocaleString() }}</em><i v-if="c.unit">{{ c.unit }}</i></span>
               <span class="pull"><s></s><s></s></span>
             </button>
@@ -254,7 +288,7 @@ const subTitle = computed(() => sub.value === 'inbox' ? '沉淀信箱' : sub.val
 
         <!-- 在运转吗：不占格子 -->
         <section>
-          <div class="sec"><Fg name="sprig" class="sprig" /><b>在 运 转 吗</b><Fg name="rule" class="rule" /><em>Pulse of it</em><hr></div>
+          <div class="sec"><b>在 运 转 吗</b><em>Pulse of it</em><hr></div>
           <ul class="health drawer-face">
             <li v-for="h in data.health" :key="h.label">
               <i :class="{ bad: !h.ok }"></i><b>{{ h.label }}</b><span>{{ h.value }}</span>
@@ -262,7 +296,7 @@ const subTitle = computed(() => sub.value === 'inbox' ? '沉淀信箱' : sub.val
           </ul>
         </section>
 
-        <div class="tailpiece"><Fg name="tail" /></div>
+        <div v-if="orn.tail" class="tailpiece"><img :src="`${ORN_DIR}/tail.png`" alt="" aria-hidden="true"></div>
         <p class="foot muted">心潮和脉的柜子还没做。记忆只有他能写，你能划掉、能贴便条——这里没有替他改写的按钮。</p>
       </template>
 
@@ -458,6 +492,9 @@ h1 { font-family: "Pinyon Script", cursive; font-weight: 400; font-size: 36px; l
 .health b { font-weight: 600; color: var(--moon-2); min-width: 68px; }
 .health span { color: var(--moon-3); }
 
+/* 她发的线稿 PNG：screen 混合 + 不吃点击。白描线贴在深底图上像刻上去的 */
+.edge img.cnr, .tailpiece img { mix-blend-mode: screen; opacity: 0.72; pointer-events: none; }
+.tailpiece img { width: 210px; height: auto; }
 .tailpiece { display: flex; justify-content: center; margin: 22px 0 6px; color: var(--mist); opacity: 0.6; }
 .tailpiece :deep(svg) { width: 210px; height: auto; }
 .muted { color: var(--moon-3); font-size: 12px; }

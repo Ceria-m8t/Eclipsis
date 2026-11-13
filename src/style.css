@@ -50,6 +50,9 @@
   --sans: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', system-ui, sans-serif;
   --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 
+  /* ⚠ 她 2026-11-13 问「为什么网页和实际看到的颜色不同」：
+     PWA 全屏下 iOS 会按 color-scheme 给内容做一次补偿，声明 light 的页面放深色内容
+     就会被提亮、发灰。地下室那几页是深色的，由 .shell-dark 覆盖成 dark（见 Home.vue）。 */
   color-scheme: light;
   font-family: var(--app-font, var(--sans));
   color: var(--text);
