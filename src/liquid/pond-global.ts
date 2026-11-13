@@ -12,10 +12,26 @@ import { Pond, pondSupported } from './pond'
 let pond: Pond | null = null
 let host: HTMLElement | null = null
 
+/**
+ * ⚠ 2026-11-13 **默认关着**（`POND_GLOBAL=1` 才开，见下面的 enabled）。
+ *
+ * 她手机上这一层会凭空出现一道横跨整页的大椭圆弧和一块「透镜」斑，**而且是没人碰的时候就有**。
+ * 我在服务器上用 headless chromium + swiftshader 反复截图都是干净的，复现不出来，
+ * 说明是她设备上的真实行为（iOS 的 half-float 精度 / 整页那么大的画布）和我这边不一样。
+ * 靠猜去改她眼前的东西不行，所以先关掉；要再开必须能在真机上验。
+ *
+ * 整页「在水下」的感觉现在由 Underwater.vue 给（光柱 / 水面亮边 / 焦散 / 浮尘，纯 CSS，不会出这种事）；
+ * 手指划过有波的那块仍在记忆面板头部（refract 模式，她已经看过并点头）。
+ */
+function enabled(): boolean {
+  try { return localStorage.getItem('eclipsis-pond-global') === '1' } catch { return false }
+}
+
 /** 整页都在水下：在外壳上挂一层只画波的水面。重复调用只挂一次。 */
 export function startGlobalPond(el: HTMLElement): boolean {
   if (pond && host === el) return true
   stopGlobalPond()
+  if (!enabled()) return false
   if (!pondSupported()) return false
   host = el
   pond = new Pond({

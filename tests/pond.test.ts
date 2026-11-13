@@ -119,6 +119,19 @@ describe('记忆面板的头部（泡在水里那一块）', () => {
   })
 })
 
+describe('全局那一层默认关着（她手机上出现椭圆弧和透镜斑，我复现不出来）', () => {
+  it('没开开关就不挂：startGlobalPond 返回 false，一个画布都不加', async () => {
+    const { startGlobalPond, globalPondRunning } = await import('../src/liquid/pond-global')
+    const el = document.createElement('div')
+    document.body.appendChild(el)
+    localStorage.removeItem('eclipsis-pond-global')
+    expect(startGlobalPond(el)).toBe(false)
+    expect(globalPondRunning()).toBe(false)
+    expect(el.querySelector('canvas')).toBe(null)
+    el.remove()
+  })
+})
+
 /** happy-dom 没有真的 2D 上下文，自己记一份调用（只要能看出画了什么字、用了什么字体） */
 function paintProbe(data: { quotes: number; cards: number; relations: number } | null) {
   const texts: string[] = []
