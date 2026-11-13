@@ -376,7 +376,7 @@ const subTitle = computed(() => sub.value === 'inbox' ? '沉淀信箱' : sub.val
 .plate {
   position: relative; margin: 10px 2px 0; padding: 18px 16px 16px; text-align: center;
   border: 1px solid var(--hair);
-  background: linear-gradient(180deg, rgba(240, 233, 216, 0.06), rgba(240, 233, 216, 0.02));
+  background: linear-gradient(180deg, rgba(10, 24, 46, 0.26), rgba(6, 16, 34, 0.34));
 }
 .plate::before { content: ""; position: absolute; inset: 4px; border: 1px solid var(--hair-2); pointer-events: none; }
 .plate::after {
@@ -395,13 +395,12 @@ h1 { font-family: "Pinyon Script", cursive; font-weight: 400; font-size: 36px; l
 .drawer-face {
   position: relative; border: 1px solid var(--hair); overflow: hidden; isolation: isolate;
   background:
-    repeating-linear-gradient(118deg, rgba(240, 233, 216, 0.03) 0 1px, transparent 1px 7px),
-    linear-gradient(180deg, rgba(240, 233, 216, 0.08), rgba(240, 233, 216, 0.03));
-  /* 她 2026-11-13：「你可以是磨砂的，但是透光性我觉得是要保证的。太闷太闷了。
-     你把透光性先改成原版吧，我宁愿看不清，然后慢慢调。」
-     所以回到**提亮的薄膜**（不是压暗的厚底）：磨砂还在，光全透得过来。
-     字看不清用描边阴影解决（见 .scroll 的 text-shadow），不靠压暗底图。 */
-  backdrop-filter: blur(9px);
+    repeating-linear-gradient(118deg, rgba(240, 233, 216, 0.028) 0 1px, transparent 1px 7px),
+    linear-gradient(180deg, rgba(10, 24, 46, 0.34), rgba(6, 16, 34, 0.46));
+  /* 她指着网页预览那张说「颜色我也想要如图二的颜色」：那是**压暗带蓝**的玻璃
+     （不是提亮的薄膜），但不透明度只到四成左右，所以底图的纹样还透得出来、不闷。
+     磨砂保持 blur 10px。 */
+  backdrop-filter: blur(10px);
   box-shadow:
     inset 0 1px 0 rgba(233, 238, 246, 0.16),
     inset 0 -1px 0 rgba(8, 18, 34, 0.3),
@@ -419,7 +418,7 @@ h1 { font-family: "Pinyon Script", cursive; font-weight: 400; font-size: 36px; l
   background: linear-gradient(90deg, transparent, var(--iris-a) 32%, var(--iris-b) 68%, transparent);
 }
 
-.spark { padding: 11px 13px; margin-bottom: 18px; }
+.spark { padding: 13px 14px; margin-bottom: 18px; }
 .spark-head { display: flex; justify-content: space-between; font-size: 12.5px; color: var(--moon-2); }
 .bars { display: flex; align-items: flex-end; gap: 2px; height: 44px; margin: 8px 0 4px; }
 .bars i { flex: 1; min-height: 2px; border-radius: 1px; background: linear-gradient(180deg, rgba(198, 222, 255, 0.72), rgba(157, 180, 221, 0.4)); }
@@ -435,8 +434,11 @@ h1 { font-family: "Pinyon Script", cursive; font-weight: 400; font-size: 36px; l
 
 /* 器物抽屉：一行一件 */
 .drawers { display: flex; flex-direction: column; gap: 8px; }
+/* 她 2026-11-13：「我依旧想要之前框的高度，如图二的高度」。
+   去掉花饰托架之后行高掉了（托架 40px 撑着），所以这里显式给回原来的高度。 */
 .drawer {
-  display: flex; align-items: center; gap: 10px; padding: 11px 12px; width: 100%;
+  display: flex; align-items: center; gap: 11px; padding: 15px 13px; width: 100%;
+  min-height: 72px;
   text-align: left; font-family: inherit; color: inherit;
   transition: transform 0.22s cubic-bezier(.34, 1.56, .64, 1), background 0.22s;
 }
@@ -450,7 +452,8 @@ h1 { font-family: "Pinyon Script", cursive; font-weight: 400; font-size: 36px; l
 .obj {
   position: relative; width: 40px; height: 40px; flex: none; display: grid; place-items: center;
   color: #ecdfc4;
-  background: radial-gradient(70% 70% at 40% 28%, rgba(157, 180, 221, 0.22), transparent 74%);
+  border: 1px solid rgba(240, 233, 216, 0.14);
+  background: radial-gradient(70% 70% at 40% 28%, rgba(180, 200, 235, 0.14), transparent 74%);
 }
 .obj .bracket { position: absolute; inset: 0; width: 40px; height: 40px; color: rgba(232, 220, 192, 0.5); }
 .obj :deep(svg.orn) { width: 20px; height: 20px; }

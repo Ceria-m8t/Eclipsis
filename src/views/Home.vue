@@ -161,12 +161,20 @@ function go(t: (typeof tabs)[number]) {
   background: rgba(197, 214, 245, 0.16);
   box-shadow: inset 0 1px 0 rgba(233, 238, 246, 0.22), 0 2px 10px rgba(2, 8, 18, 0.25);
 }
-/* 深色页声明 dark 配色：PWA 全屏下 iOS 不再按浅色方案补偿，颜色和 Safari 里一致
-   （她：「为什么网页和实际看到的颜色不同」） */
+/* 深色页声明 dark 配色：PWA 全屏下 iOS 不再按浅色方案补偿 */
 .shell-dark { color-scheme: dark; }
-/* 深色页的页面区铺到底栏下面：底图透过底栏的玻璃显出来 */
-.shell-dark .shell-main { margin-bottom: calc((var(--tabbar-h) + var(--tabbar-safe)) * -1); }
-.shell-dark .shell-main > * { padding-bottom: calc(var(--tabbar-h) + var(--tabbar-safe)); }
+/*
+ * 深色页的页面区铺到底栏下面（底图透过底栏的玻璃显出来）。
+ * ⚠ 用 absolute 覆盖而不是负 margin：负 margin 会把**页面高度**撑高 48px，
+ * 于是同一张底图 cover 出来的取景和网页预览里不一样 —— 她问「颜色还是不一样」，
+ * 其实是取到了图的不同段落。现在页面高度仍是可视区高度，只是背景延伸下去。
+ */
+.shell-dark .shell-main { position: relative; }
+.shell-dark .shell-main::after {
+  content: ""; position: absolute; left: 0; right: 0; top: 100%;
+  height: calc(var(--tabbar-h) + var(--tabbar-safe));
+  background: inherit; pointer-events: none;
+}
 
 .tab-icon { display: block; }
 .tab-label { font-size: 10.5px; line-height: 1.1; }

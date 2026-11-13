@@ -92,7 +92,15 @@ const beams = [
 </template>
 
 <style scoped>
-.uw { position: absolute; inset: 0; overflow: hidden; pointer-events: none; background: #091426; }
+/*
+ * ⚠ 往下多铺出底栏那么高：底栏的玻璃透出的是**同一张底图**，而页面本身的高度不变。
+ * 这样 cover 的取景和网页预览里一致（她：「颜色还是不一样」——其实是取到了图的不同段）。
+ */
+.uw {
+  position: absolute; left: 0; right: 0; top: 0;
+  bottom: calc((var(--tabbar-h, 42px) + var(--tabbar-safe, 6px)) * -1);
+  overflow: hidden; pointer-events: none; background: #091426;
+}
 /* 只看底图：覆盖层全不画（排查用） */
 .uw.raw .plate.shine, .uw.raw .caustic, .uw.raw .motes { display: none; }
 .uw.raw .plate:not(.shine) { animation: none; filter: none; }
