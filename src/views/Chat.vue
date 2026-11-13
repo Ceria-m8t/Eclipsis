@@ -14,7 +14,7 @@ import { pageBackdrop } from '../theme'
 import { aiStatus, fetchStatus } from '../status'
 import { fontName, setFontFile, clearFont } from '../font'
 import { LiquidStage, measureLum, type GlassParams } from '../liquid/stage'
-import { liquidActive, setGlobalTint } from '../liquid/global'
+import { liquidActive, setGlobalTint, setGlobalThick } from '../liquid/global'
 import { type ChatMessage, type MessageVersion, newId } from '../db'
 import {
   loadLatest, loadBefore, loadAfter, deleteOnServer, mergeServer, contextTail,
@@ -50,13 +50,14 @@ interface ChatStyle {
   glassShine: number
   glassDisp: number
   glassShadow: number
+  glassThick: number
 }
 
 const STYLE_KEY = 'eclipsis-chat-style-v2'
 // 两套起点：清透 = 参考图二（中间清楚、只有边上弯）；水波 = 参考图一（整块在扭）
 const GLASS_PRESETS = {
-  clear: { glassRefract: 0.9, glassBevel: 12, glassWobble: 0, glassTint: 0.06, glassShine: 1, glassDisp: 0.08 },
-  ripple: { glassRefract: 1.5, glassBevel: 22, glassWobble: 0.7, glassTint: 0.04, glassShine: 1.1, glassDisp: 0.14 },
+  clear: { glassRefract: 0.9, glassBevel: 12, glassWobble: 0, glassTint: 0.06, glassShine: 1, glassDisp: 0.08, glassThick: 0.3 },
+  ripple: { glassRefract: 1.5, glassBevel: 22, glassWobble: 0.7, glassTint: 0.04, glassShine: 1.1, glassDisp: 0.14, glassThick: 0.55 },
 }
 const DEFAULT_STYLE: ChatStyle = {
   bgColor: '',
@@ -183,7 +184,7 @@ const glassParams = computed<GlassParams>(() => {
   const s = chatStyle.value
   return {
     refract: s.glassRefract, bevel: s.glassBevel, wobble: s.glassWobble, tint: s.glassTint,
-    shine: s.glassShine, dispersion: s.glassDisp, shadow: s.glassShadow, tone: glassTone.value,
+    shine: s.glassShine, dispersion: s.glassDisp, shadow: s.glassShadow, thick: s.glassThick ?? 0.55, tone: glassTone.value,
   }
 })
 
@@ -232,6 +233,7 @@ watch(() => chatStyle.value.bgImage, measureBg, { immediate: true })
 const chatDark = computed(() => !!chatStyle.value.bgImage && glassTone.value === 'dark')
 watch(glassParams, p => stage?.setParams(p))
 watch(() => chatStyle.value.glassTint, t => setGlobalTint(t), { immediate: true })
+watch(() => chatStyle.value.glassThick, t => setGlobalThick(t ?? 0.55), { immediate: true })
 watch(() => [chatStyle.value.aiBubbleBg, chatStyle.value.userBubbleBg, chatStyle.value.fontSize, chatStyle.value.customCSS], () => stage?.invalidate())
 function applyGlassPreset(k: keyof typeof GLASS_PRESETS) { Object.assign(chatStyle.value, GLASS_PRESETS[k]) }
 
@@ -1131,6 +1133,10 @@ const subtitle = computed(() => settings.value.chatSubtitle || '')
                     <input type="range" min="0" max="1.5" step="0.05" v-model.number="chatStyle.glassShine" /></label>
                   <label>分色 {{ Math.round(chatStyle.glassDisp * 100) }}%
                     <input type="range" min="0" max="0.3" step="0.01" v-model.number="chatStyle.glassDisp" /></label>
+                  <label class="full">厚度 {{ Math.round((chatStyle.glassThick ?? 0.55) * 100) }}%
+                    <input type="range" min="0" max="1.5" step="0.05" :value="chatStyle.glassThick ?? 0.55"
+                      @input="chatStyle.glassThick = +($event.target as HTMLInputElement).value" />
+                    <span class="glass-note">里面泡的那层料有多厚，边上会出现一道切割过的棱。全站玻璃一起变。</span></label>
                   <label>影子 {{ Math.round(chatStyle.glassShadow * 100) }}%
                     <input type="range" min="0" max="1.5" step="0.05" v-model.number="chatStyle.glassShadow" /></label>
                 </template>

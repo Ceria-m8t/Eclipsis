@@ -15,6 +15,7 @@ export interface GlassParams {
   shine: number       // 高光 0–1.5
   dispersion: number  // 色散 0–0.3
   shadow: number      // 接地影 0–1.5
+  thick: number       // 厚度 0–1.5（0 = 以前那样薄；里面泡一层料 + 内壁一道棱）
   tone: 'light' | 'dark'
 }
 
@@ -39,7 +40,7 @@ export class LiquidStage {
   private u = {} as Uniforms
   private img: { w: number; h: number } | null = null
   private wallpaperUrl = ''
-  private params: GlassParams = { refract: 0.9, bevel: 12, wobble: 0, tint: 0.06, shine: 1, dispersion: 0.08, shadow: 0.6, tone: 'light' }
+  private params: GlassParams = { refract: 0.9, bevel: 12, wobble: 0, tint: 0.06, shine: 1, dispersion: 0.08, shadow: 0.6, thick: 0, tone: 'light' }
 
   private hosts: Element[] = []
   private visible = new Set<Element>()
@@ -220,6 +221,7 @@ export class LiquidStage {
     gl.uniform1f(U.uShine, P.shine)
     gl.uniform1f(U.uShadow, P.shadow)
     gl.uniform1f(U.uTint, P.tint)
+    gl.uniform1f(U.uThick, P.thick)
     gl.uniform1f(U.uDark, P.tone === 'dark' ? 1 : 0)
     let n = 0
     for (const { r, el, radii } of hosts) {

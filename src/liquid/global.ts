@@ -20,7 +20,7 @@ const MARGIN = 160          // 超出屏幕这么多以内的部分也画（滚�
 const WIN_STEP = 128        // 高玻璃只画看得见的那段，按这个步长取整，免得每帧改画布尺寸
 
 /** 水波（参考图一，Erica 选的）：全站统一。底色浓度跟着聊天样式里气泡的「底色浓度」（Erica：底栏跟着气泡） */
-const P = { refract: 1.5, bevel: 22, wobble: 0.7, tint: chatBubbleTint(), shine: 1.1, dispersion: 0.14 }
+const P = { refract: 1.5, bevel: 22, wobble: 0.7, tint: chatBubbleTint(), shine: 1.1, dispersion: 0.14, thick: chatGlassThick() }
 
 function chatBubbleTint(): number {
   try {
@@ -29,6 +29,21 @@ function chatBubbleTint(): number {
   } catch {}
   return 0.04
 }
+function chatGlassThick(): number {
+  try {
+    const t = JSON.parse(localStorage.getItem('eclipsis-chat-style-v2') || '{}').glassThick
+    if (typeof t === 'number' && t >= 0 && t <= 1.5) return t
+  } catch {}
+  return 0.55
+}
+/** 聊天样式里改了厚度：全站玻璃一起变 */
+export function setGlobalThick(t: number) {
+  if (!(t >= 0 && t <= 1.5) || t === P.thick) return
+  P.thick = t
+  for (const st of states.values()) st.key = ''
+  poke(200)
+}
+
 /** 聊天样式里改了气泡的底色浓度：全站玻璃（底栏、顶栏、面板）一起变 */
 export function setGlobalTint(t: number) {
   if (!(t >= 0 && t <= 0.6) || t === P.tint) return
@@ -452,6 +467,8 @@ function frame() {
     gl.uniform1f(U.uShine, P.shine * (0.6 + 0.4 * small))
     gl.uniform1f(U.uShadow, 0)
     gl.uniform1f(U.uTint, P.tint + (strong ? 0.1 : 0))
+    // 小按钮上光学长度要跟着缩，不然指甲盖大的格子会糊成一块
+    gl.uniform1f(U.uThick, P.thick * (0.55 + 0.45 * small))
     gl.uniform1f(U.uDark, tone === 'dark' ? 1 : 0)
     gl.uniform1f(U.uSeed, st.seed)
     gl.uniform3f(U.uTintColor, 1, 1, 1)

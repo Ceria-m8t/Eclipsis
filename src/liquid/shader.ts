@@ -21,7 +21,7 @@ uniform vec2 uImgOrigin;
 uniform vec2 uImgSize;
 uniform vec4 uRect;
 uniform vec4 uRadii;   // 左上、右上、右下、左下（CSS 像素）
-uniform float uBevel, uRefract, uWobble, uDisp, uShine, uShadow, uTint, uDark, uDpr, uSeed;
+uniform float uBevel, uRefract, uWobble, uDisp, uShine, uShadow, uTint, uDark, uDpr, uSeed, uThick;
 uniform vec3 uTintColor;
 out vec4 outColor;
 
@@ -90,6 +90,14 @@ void main() {
   col = mix(col, tc, clamp(amt, 0.0, 0.85));
   if (uDark > 0.5) col += 0.035 * (1.0 - lum);   // 暗处提亮，黑玻璃不像一个洞
 
+  // 厚度（uThick 0 = 以前那样薄）：光在料里走的路越长，颜色越沉；贴边最长。
+  // 这是「里面泡着一层料」的厚，不是把整块压暗。
+  if (uThick > 0.001) {
+    float path = e * e * (0.55 + 0.45 * e);
+    vec3 deep = uDark > 0.5 ? uTintColor * 0.10 : uTintColor * 0.92;
+    col = mix(col, deep, clamp(uThick * 0.42 * path, 0.0, 0.62));
+  }
+
   // 边光：约 1px 的亮唇，左上那瓣最亮，右下那瓣次之，斜面上一层宽柔光
   float ang = atan(n.y, n.x);
   float ul = exp(-pow(angDiff(ang, -2.36) / 0.62, 2.0));
@@ -98,6 +106,16 @@ void main() {
   float glint = hair * (0.16 + ul * 0.66 + lr * 0.48);
   float soft = e * e * e * (0.10 * ul + 0.05 * lr);
   col = mix(col, vec3(1.0), clamp((glint + soft) * uShine, 0.0, 0.8));
+
+  // 厚玻璃的棱：内壁往里缩一点再来一道窄亮线（像切割过的玻璃砖，看得出这一圈有厚度）
+  if (uThick > 0.001) {
+    float inner = max(bw * 0.42, 1.5);
+    float edge = exp(-pow((dist - inner) / max(1.0, inner * 0.45), 2.0));
+    float lit = 0.35 + 0.65 * clamp(ul + lr * 0.7, 0.0, 1.0);
+    col = mix(col, vec3(1.0), clamp(edge * lit * uThick * 0.5 * uShine, 0.0, 0.55));
+    float back = exp(-pow(angDiff(ang, 2.0) / 1.5, 2.0)) * e * e;
+    col *= 1.0 - clamp(back * uThick * 0.1, 0.0, 0.12);
+  }
   // 背后很亮时，不亮的那几段换成深色细线，白底上才有边
   float dk = hair * (1.0 - clamp(ul + lr, 0.0, 1.0)) * smoothstep(0.65, 0.92, lum) * 0.22;
   col *= 1.0 - dk;
@@ -105,7 +123,7 @@ void main() {
   outColor = vec4(col * cov, cov + (1.0 - cov) * sa);
 }`
 
-export const UNIFORMS = ['uTex', 'uImgOrigin', 'uImgSize', 'uRect', 'uRadii', 'uBevel', 'uRefract', 'uWobble', 'uDisp', 'uShine', 'uShadow', 'uTint', 'uDark', 'uDpr', 'uSeed', 'uTintColor', 'uQuad', 'uView'] as const
+export const UNIFORMS = ['uTex', 'uImgOrigin', 'uImgSize', 'uRect', 'uRadii', 'uBevel', 'uRefract', 'uWobble', 'uDisp', 'uShine', 'uShadow', 'uTint', 'uDark', 'uDpr', 'uSeed', 'uTintColor', 'uQuad', 'uView', 'uThick'] as const
 export type Uniforms = Record<(typeof UNIFORMS)[number], WebGLUniformLocation | null>
 
 /** 编译着色器、建单位四边形、开预乘混合。失败返回 null（调用方退回 CSS） */
