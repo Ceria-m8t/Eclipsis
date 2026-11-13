@@ -200,10 +200,6 @@ onBeforeUnmount(() => { pond?.destroy(); pond = null; stopGlobalPond(); pageDark
 const maxDaily = computed(() => Math.max(1, ...(data.value?.daily ?? []).map(d => d.n)))
 const todayNone = computed(() => (data.value?.daily.at(-1)?.n ?? 0) === 0)
 
-/** 抽屉编号用罗马数字（参考图里那种 No. VII / Pl. VI 的标号感） */
-const ROMAN = ['', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII']
-function roman(n: number): string { return ROMAN[n] || String(n) }
-
 function open(c: Cell) {
   if (!c.to) return
   if (c.to === 'galaxy') router.push('/galaxy')
@@ -267,21 +263,26 @@ const subTitle = computed(() => sub.value === 'inbox' ? '沉淀信箱' : sub.val
           <div class="sec">
             <b>{{ s.title }}</b><em>{{ s.en }}</em><hr>
           </div>
-          <!-- 器物抽屉：一行一件（她：不是等大方格） -->
-          <div class="drawers">
-            <button v-for="(c, i) in s.cells" :key="c.key" class="drawer drawer-face"
-                    :class="{ empty: c.todo, tappable: !!c.to }" @click="open(c)">
-              <span class="edge-l"></span>
-              <span class="idx">{{ roman(i + 1) }}</span>
-              <span class="obj"><Orn :name="OBJ[c.key] || 'cards'" /></span>
-              <span class="txt">
-                <b>{{ c.name }}</b>
-                <span class="cen">{{ c.en }}</span>
-                <u v-if="c.note">{{ c.note }}</u>
+          <!--
+            布局照她 2026-11-13 发的后两张参考图：**大小格混排**，不是每行一条。
+            每区第一个格子占整行（名字 + 英文 + 大数字 + 一条小图表），
+            其余两列并排（名字 + 英文 + 大数字 + 一个小示意图）。
+          -->
+          <div class="tiles">
+            <button v-for="(c, i) in s.cells" :key="c.key" class="tile drawer-face"
+                    :class="{ wide: i === 0, empty: c.todo, tappable: !!c.to }" @click="open(c)">
+              <span class="t-head">
+                <span class="t-name">
+                  <b>{{ c.name }}</b>
+                  <em>{{ c.en }}</em>
+                </span>
+                <span v-if="c.todo" class="t-seal">未</span>
               </span>
-              <span v-if="c.todo" class="seal"><b>未</b></span>
-              <span class="val"><em>{{ c.n.toLocaleString() }}</em><i v-if="c.unit">{{ c.unit }}</i></span>
-              <span class="pull"><s></s><s></s></span>
+              <span class="t-body">
+                <span class="t-num">{{ c.n.toLocaleString() }}<i v-if="c.unit">{{ c.unit }}</i></span>
+                <span class="t-art"><Orn :name="OBJ[c.key] || 'cards'" /></span>
+              </span>
+              <span v-if="c.note && i === 0" class="t-note">{{ c.note }}</span>
             </button>
           </div>
         </section>
@@ -432,7 +433,39 @@ h1 { font-family: "Pinyon Script", cursive; font-weight: 400; font-size: 36px; l
 .sec .rule { flex: 1; min-width: 40px; height: 10px; color: var(--mist); opacity: 0.6; }
 .sec hr { flex: 1; border: none; border-top: 1px solid var(--hair); border-bottom: 1px solid var(--hair-2); height: 3px; margin: 0; }
 
-/* 器物抽屉：一行一件 */
+/* 大小格混排（照她发的参考图） */
+.tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.tile {
+  display: flex; flex-direction: column; justify-content: space-between; gap: 10px;
+  min-height: 104px; padding: 13px 14px; text-align: left; font-family: inherit; color: inherit;
+  transition: transform 0.22s cubic-bezier(.34, 1.56, .64, 1), background 0.22s;
+}
+.tile.wide { grid-column: 1 / -1; min-height: 118px; }
+.tile.tappable:active { transform: scale(0.985); }
+.t-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 6px; }
+.t-name b { display: block; font-size: 15px; font-weight: 600; letter-spacing: 0.4px; color: #fdfbf6; }
+.t-name em {
+  display: block; margin-top: 1px; font-style: italic; font-family: "Cormorant Garamond", serif;
+  font-size: 11.5px; letter-spacing: 0.6px; color: var(--moon-3);
+}
+.t-seal {
+  flex: none; width: 22px; height: 22px; display: grid; place-items: center; border-radius: 11px;
+  border: 1px solid rgba(236, 226, 200, 0.3); color: rgba(236, 226, 200, 0.7); font-size: 11px;
+}
+.t-body { display: flex; align-items: flex-end; justify-content: space-between; gap: 8px; }
+.t-num {
+  font-family: "Cormorant Garamond", serif; font-size: 30px; line-height: 1; color: #fdfbf6;
+}
+.tile.wide .t-num { font-size: 36px; }
+.t-num i { font-style: normal; font-size: 12px; margin-left: 3px; color: var(--moon-3); }
+.t-art { flex: none; color: rgba(236, 226, 200, 0.5); }
+.t-art :deep(svg) { width: 30px; height: 30px; }
+.tile.wide .t-art :deep(svg) { width: 36px; height: 36px; }
+.t-note { font-size: 11px; line-height: 1.5; color: var(--moon-3); }
+.tile.empty { background: linear-gradient(180deg, rgba(10, 24, 46, 0.2), rgba(6, 16, 34, 0.28)); border-style: dashed; }
+.tile.empty .t-name b, .tile.empty .t-num { color: var(--moon-3); }
+
+/* 器物抽屉（旧版，留着给心潮/脉那两个柜子参考） */
 .drawers { display: flex; flex-direction: column; gap: 8px; }
 /* 她 2026-11-13：「我依旧想要之前框的高度，如图二的高度」。
    去掉花饰托架之后行高掉了（托架 40px 撑着），所以这里显式给回原来的高度。 */

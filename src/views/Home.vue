@@ -164,17 +164,12 @@ function go(t: (typeof tabs)[number]) {
 /* 深色页声明 dark 配色：PWA 全屏下 iOS 不再按浅色方案补偿 */
 .shell-dark { color-scheme: dark; }
 /*
- * 深色页的页面区铺到底栏下面（底图透过底栏的玻璃显出来）。
- * ⚠ 用 absolute 覆盖而不是负 margin：负 margin 会把**页面高度**撑高 48px，
- * 于是同一张底图 cover 出来的取景和网页预览里不一样 —— 她问「颜色还是不一样」，
- * 其实是取到了图的不同段落。现在页面高度仍是可视区高度，只是背景延伸下去。
+ * 深色页：页面高度**不动**（撑高会改变底图 cover 的取景，她因此看到两种颜色），
+ * 底图那一层自己往下多铺出底栏那么高（见 Underwater.vue 的 .uw），底栏的玻璃就透出同一张图。
+ * ⚠ 这里曾经加过一个 `::after { background: inherit }` 想补背景，
+ * 结果 inherit 到的是 transparent —— 等于一块空白盖在底栏上，她看到底栏「突然有问题」。
  */
 .shell-dark .shell-main { position: relative; }
-.shell-dark .shell-main::after {
-  content: ""; position: absolute; left: 0; right: 0; top: 100%;
-  height: calc(var(--tabbar-h) + var(--tabbar-safe));
-  background: inherit; pointer-events: none;
-}
 
 .tab-icon { display: block; }
 .tab-label { font-size: 10.5px; line-height: 1.1; }

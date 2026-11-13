@@ -38,7 +38,8 @@ withDefaults(defineProps<{
 const raw = (() => { try { return localStorage.getItem('eclipsis-uw-raw') === '1' } catch { return false } })()
 
 /** 浮尘 / 气泡 */
-const motes = Array.from({ length: 26 }, (_, i) => ({
+// 26 粒在 iPhone 上每粒一个合成层，太多了；16 粒看着一样
+const motes = Array.from({ length: 16 }, (_, i) => ({
   left: Math.random() * 100,
   top: 30 + Math.random() * 80,
   dur: 14 + Math.random() * 24,
@@ -63,11 +64,12 @@ const beams = [
     <template v-if="src">
       <!-- ① 底图自己呼吸：光在变 -->
       <div class="plate" :style="{ backgroundImage: `url(${src})` }"></div>
-      <!-- ② 同一张底图只留亮部，错相位推移 → 光束忽明忽暗（动效的主力） -->
+      <!-- ② 同一张底图只留亮部，错相位推移 → 光束忽明忽暗（动效的主力）
+           ⚠ 只留**一层**：两层 `filter: brightness+contrast+blur` 作用在整屏图片上，
+           叠在 backdrop-filter 的抽屉下面，iPhone 上每帧要重算好几遍大面积模糊 —— 她说页面越来越卡。 -->
       <div class="plate shine a" :style="{ backgroundImage: `url(${src})` }"></div>
-      <div class="plate shine b" :style="{ backgroundImage: `url(${src})` }"></div>
-      <!-- ③ 焦散扰动：水面的光斑不规则地挪 -->
-      <div class="caustic"><i></i><i></i></div>
+      <!-- ③ 焦散扰动：水面的光斑不规则地挪（一层就够） -->
+      <div class="caustic"><i></i></div>
     </template>
 
     <!-- 没底图时的兜底（纯 CSS，她见过，就是塑料条） -->
@@ -140,22 +142,18 @@ const beams = [
  */
 .plate.shine {
   mix-blend-mode: screen;
-  filter: brightness(0.42) contrast(9) saturate(0.9) blur(3px);
+  filter: brightness(0.42) contrast(9) saturate(0.9) blur(2px);
   mask-image: linear-gradient(180deg, #000 0%, rgba(0, 0, 0, 0.5) 44%, transparent 82%);
 }
 .plate.shine.a { animation: shineA 17s ease-in-out infinite alternate; }
-.plate.shine.b { animation: shineB 23s ease-in-out infinite alternate-reverse; }
+
 /* 亮部闪动：幅度要能看见（0.1 看不出来），但只作用在最亮那一撮像素上，不会洗白整张图 */
 @keyframes shineA {
   0% { transform: scale(1.05) translate3d(-2.5%, 0, 0); opacity: 0.16; }
   45% { opacity: 0.44; }
   100% { transform: scale(1.14) translate3d(3%, 2%, 0); opacity: 0.24; }
 }
-@keyframes shineB {
-  0% { transform: scale(1.12) translate3d(3%, 1.5%, 0); opacity: 0.1; }
-  60% { opacity: 0.32; }
-  100% { transform: scale(1.04) translate3d(-2.5%, 0, 0); opacity: 0.18; }
-}
+
 
 /* ③ 焦散扰动 */
 .caustic { position: absolute; inset: 0; mix-blend-mode: screen; opacity: 0.4; }
@@ -167,11 +165,7 @@ const beams = [
   filter: blur(26px);
   animation: wander 31s ease-in-out infinite alternate;
 }
-.caustic i:nth-child(2) {
-  height: 48%;
-  background: radial-gradient(38% 36% at 52% 14%, rgba(176, 214, 252, 0.26), transparent 74%);
-  animation-duration: 43s; animation-direction: alternate-reverse;
-}
+
 @keyframes wander {
   0% { transform: translate3d(-4%, 0, 0) scale(1); opacity: 0.55; }
   50% { opacity: 1; }
@@ -222,6 +216,5 @@ const beams = [
 @media (prefers-reduced-motion: reduce) {
   .plate, .plate.shine, .caustic i, .shafts i, .motes i { animation: none !important; }
   .plate.shine.a { opacity: 0.16; }
-  .plate.shine.b { opacity: 0.1; }
 }
 </style>
