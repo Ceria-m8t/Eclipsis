@@ -190,37 +190,73 @@ function paintHeadText(
   ctx.strokeStyle = 'rgba(255,217,233,0.85)'; ctx.lineWidth = 1.1
   ctx.beginPath(); ctx.arc(cx, L.eclipse, r, -Math.PI / 2, Math.PI / 2); ctx.stroke()
 
-  // ── 洛可可：不对称的 C 形涡卷 + 花彩垂饰 + 扇贝（她要的「深海洛可可」）──
-  // 左右故意不一样：洛可可不讲镜像对称。
-  ctx.strokeStyle = 'rgba(197,214,245,0.5)'
-  ctx.lineWidth = 1
-  // 左涡卷（大）
-  ctx.beginPath()
-  ctx.moveTo(cx - 118, L.eclipse + 22)
-  ctx.bezierCurveTo(cx - 118, L.eclipse - 6, cx - 96, L.eclipse - 20, cx - 68, L.eclipse - 20)
-  ctx.bezierCurveTo(cx - 50, L.eclipse - 20, cx - 42, L.eclipse - 8, cx - 46, L.eclipse + 2)
-  ctx.bezierCurveTo(cx - 50, L.eclipse + 10, cx - 60, L.eclipse + 10, cx - 61, L.eclipse + 3)
-  ctx.stroke()
-  ctx.beginPath(); ctx.arc(cx - 58, L.eclipse + 1, 1.8, 0, Math.PI * 2)
-  ctx.fillStyle = 'rgba(197,214,245,0.7)'; ctx.fill()
-  // 右涡卷（小，形状不同）
-  ctx.beginPath()
-  ctx.moveTo(cx + 112, L.eclipse + 16)
-  ctx.bezierCurveTo(cx + 112, L.eclipse - 4, cx + 94, L.eclipse - 16, cx + 72, L.eclipse - 16)
-  ctx.bezierCurveTo(cx + 58, L.eclipse - 16, cx + 52, L.eclipse - 6, cx + 56, L.eclipse + 2)
-  ctx.stroke()
-  // 两道花彩垂饰（swag）
-  ctx.strokeStyle = 'rgba(197,214,245,0.3)'
-  ctx.beginPath()
-  ctx.moveTo(cx - 112, L.eclipse + 30)
-  ctx.quadraticCurveTo(cx - 70, L.eclipse + 52, cx - 30, L.eclipse + 36)
-  ctx.stroke()
-  ctx.beginPath()
-  ctx.moveTo(cx + 106, L.eclipse + 26)
-  ctx.quadraticCurveTo(cx + 68, L.eclipse + 48, cx + 32, L.eclipse + 34)
-  ctx.stroke()
+  // ── 洛可可：卷叶涡饰（rocaille）──
+  // 她看完第一版说「旁边两个是蜗牛壳吗」——我画成了单圈螺线，那确实是蜗牛。
+  // 真正的洛可可涡卷是**贝壳状的卷叶**：一条 C 形主脊 + 外缘翻卷的叶瓣 + 内侧几道叶脉，
+  // 末端才收成一个小卷心；而且左右**不对称**（洛可可不讲镜像）。
+  const leaf = (dir: -1 | 1, scale: number) => {
+    const x0 = cx + dir * 46, y0 = L.eclipse
+    const P = (px: number, py: number): [number, number] => [x0 + dir * px * scale, y0 + py * scale]
+
+    ctx.strokeStyle = 'rgba(214, 230, 252, 0.6)'
+    ctx.lineWidth = 1.15
+    ctx.lineCap = 'round'
+
+    // 主脊：从日蚀旁起手，向外上扬再向下回卷
+    ctx.beginPath()
+    ctx.moveTo(...P(0, 6))
+    ctx.bezierCurveTo(...P(22, -12), ...P(52, -16), ...P(66, -2))
+    ctx.bezierCurveTo(...P(78, 10), ...P(70, 26), ...P(55, 26))
+    ctx.bezierCurveTo(...P(44, 26), ...P(40, 17), ...P(46, 12))
+    ctx.bezierCurveTo(...P(50, 9), ...P(56, 11), ...P(56, 16))
+    ctx.stroke()
+
+    // 外缘翻卷的叶瓣（比主脊细一号，稍微错开，制造厚度）
+    ctx.strokeStyle = 'rgba(214, 230, 252, 0.4)'
+    ctx.lineWidth = 0.85
+    ctx.beginPath()
+    ctx.moveTo(...P(4, 1))
+    ctx.bezierCurveTo(...P(26, -20), ...P(58, -24), ...P(72, -8))
+    ctx.stroke()
+
+    // 叶脉：三道短弧
+    ctx.strokeStyle = 'rgba(214, 230, 252, 0.26)'
+    ctx.lineWidth = 0.7
+    for (const [a, b, c, d] of [[18, -6, 26, -14], [34, -8, 42, -17], [50, -6, 57, -14]] as const) {
+      ctx.beginPath()
+      ctx.moveTo(...P(a, b))
+      ctx.quadraticCurveTo(...P((a + c) / 2 + 2, (b + d) / 2 - 3), ...P(c, d))
+      ctx.stroke()
+    }
+
+    // 卷心
+    ctx.fillStyle = 'rgba(226, 240, 255, 0.72)'
+    ctx.beginPath()
+    const [hx, hy] = P(56, 16)
+    ctx.arc(hx, hy, 1.7, 0, Math.PI * 2)
+    ctx.fill()
+
+    // 垂下来的花彩（swag）：一道弧 + 两条坠饰
+    ctx.strokeStyle = 'rgba(214, 230, 252, 0.26)'
+    ctx.lineWidth = 0.8
+    ctx.beginPath()
+    ctx.moveTo(...P(10, 24))
+    ctx.quadraticCurveTo(...P(38, 46), ...P(64, 32))
+    ctx.stroke()
+    for (const [px, py] of [[26, 38], [48, 40]] as const) {
+      ctx.beginPath()
+      ctx.moveTo(...P(px, py))
+      ctx.quadraticCurveTo(...P(px + 2, py + 7), ...P(px - 1, py + 11))
+      ctx.stroke()
+    }
+  }
+  // 左大右小：不对称
+  leaf(-1, 1.06)
+  leaf(1, 0.84)
+
   // 日蚀顶上的棕叶饰
-  ctx.strokeStyle = 'rgba(197,214,245,0.42)'
+  ctx.strokeStyle = 'rgba(214, 230, 252, 0.46)'
+  ctx.lineWidth = 0.9
   ctx.beginPath()
   ctx.moveTo(cx, L.eclipse - r - 4)
   ctx.bezierCurveTo(cx - 5, L.eclipse - r - 13, cx - 4, L.eclipse - r - 20, cx, L.eclipse - r - 25)

@@ -41,6 +41,16 @@ export const theme = ref<Theme>(load())
 /** 当前页面想要的背景（CSS background 值的样式对象），空对象表示用全局背景 */
 export const pageBackdrop = ref<Record<string, string> | null>(null)
 
+/**
+ * 当前页面是不是深色（地下室那几个柜子）。
+ *
+ * 她 2026-11-13：「我们的底栏为什么一直是白色的？我希望它一直是透的。」
+ * 原来 .tabbar 写死了白底 + saturate(190%)，深色页面下面就是一条白条。
+ * 页面声明 dark 之后，底栏换成压暗的玻璃、图标和文字转成浅色，
+ * 并且页面背景会**铺到底栏下面**（原来两者上下排开，底图根本到不了底栏）。
+ */
+export const pageDark = ref(false)
+
 function mix(a: string, b: string): string {
   // 中间色：两端各取一半
   const p = (h: string) => {

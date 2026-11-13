@@ -109,10 +109,12 @@ const beams = [
   filter: brightness(var(--gain));
   animation: breathe 26s ease-in-out infinite alternate;
 }
+/* 她说「似乎没有动效」：位移 1.2% 在手机上根本看不出来。
+   现在慢慢游一段明显的距离（缩放 1.02→1.12、横移 4%），26 秒走完，像水在缓缓流过。 */
 @keyframes breathe {
-  0% { transform: scale(1.02) translate3d(0, 0, 0); filter: brightness(calc(var(--gain) * 0.98)); }
-  50% { filter: brightness(calc(var(--gain) * 1.03)); }
-  100% { transform: scale(1.07) translate3d(-1.2%, 0.8%, 0); filter: brightness(var(--gain)); }
+  0% { transform: scale(1.02) translate3d(-2%, 0, 0); filter: brightness(calc(var(--gain) * 0.97)); }
+  50% { filter: brightness(calc(var(--gain) * 1.04)); }
+  100% { transform: scale(1.12) translate3d(2.5%, 2%, 0); filter: brightness(var(--gain)); }
 }
 
 /*
@@ -135,19 +137,20 @@ const beams = [
 }
 .plate.shine.a { animation: shineA 17s ease-in-out infinite alternate; }
 .plate.shine.b { animation: shineB 23s ease-in-out infinite alternate-reverse; }
+/* 亮部闪动：幅度要能看见（0.1 看不出来），但只作用在最亮那一撮像素上，不会洗白整张图 */
 @keyframes shineA {
-  0% { transform: scale(1.04) translate3d(-1%, 0, 0); opacity: 0.1; }
-  45% { opacity: 0.22; }
-  100% { transform: scale(1.1) translate3d(1.6%, 1%, 0); opacity: 0.14; }
+  0% { transform: scale(1.05) translate3d(-2.5%, 0, 0); opacity: 0.16; }
+  45% { opacity: 0.44; }
+  100% { transform: scale(1.14) translate3d(3%, 2%, 0); opacity: 0.24; }
 }
 @keyframes shineB {
-  0% { transform: scale(1.08) translate3d(1.4%, 0.6%, 0); opacity: 0.07; }
-  60% { opacity: 0.17; }
-  100% { transform: scale(1.03) translate3d(-1.2%, 0, 0); opacity: 0.11; }
+  0% { transform: scale(1.12) translate3d(3%, 1.5%, 0); opacity: 0.1; }
+  60% { opacity: 0.32; }
+  100% { transform: scale(1.04) translate3d(-2.5%, 0, 0); opacity: 0.18; }
 }
 
 /* ③ 焦散扰动 */
-.caustic { position: absolute; inset: 0; mix-blend-mode: screen; opacity: 0.22; }
+.caustic { position: absolute; inset: 0; mix-blend-mode: screen; opacity: 0.4; }
 .caustic i {
   position: absolute; left: -20%; right: -20%; top: -10%; height: 62%;
   background:
@@ -205,7 +208,7 @@ const beams = [
 
 /* 浅水（头部那一段）：光更多 */
 
-.uw.shallow .caustic { opacity: 0.3; }
+.uw.shallow .caustic { opacity: 0.5; }
 
 /* 她在系统里开了「减少动态效果」：画面还在，但不动 */
 @media (prefers-reduced-motion: reduce) {

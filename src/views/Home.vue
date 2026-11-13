@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { keyboardOpen } from '../viewport'
-import { pageBackdrop } from '../theme'
+import { pageBackdrop, pageDark } from '../theme'
 import Icon from '../components/Icon.vue'
 
 const router = useRouter()
@@ -30,7 +30,7 @@ function go(t: (typeof tabs)[number]) {
 
 <template>
   <!-- 应用外壳：上面是页面，下面是常驻底栏，两者上下排开，不重叠 -->
-  <div class="app-shell app-screen">
+  <div class="app-shell app-screen" :class="{ 'shell-dark': pageDark }">
     <!-- 背景层：铺满整屏（包括底栏下面），底栏的玻璃才透得出颜色 -->
     <div class="shell-bg" data-glass-backdrop aria-hidden="true"></div>
     <div v-if="pageBackdrop" class="shell-bg page-backdrop" data-glass-backdrop :style="pageBackdrop" aria-hidden="true"></div>
@@ -45,7 +45,7 @@ function go(t: (typeof tabs)[number]) {
     </div>
 
     <!-- 键盘弹起时收起底栏，把空间留给输入框 -->
-    <nav v-show="!keyboardOpen" class="tabbar" data-glass aria-label="主导航">
+    <nav v-show="!keyboardOpen" class="tabbar" :class="{ dark: pageDark }" data-glass aria-label="主导航">
       <button
         v-for="t in tabs"
         :key="t.key"
@@ -141,6 +141,26 @@ function go(t: (typeof tabs)[number]) {
     inset 0 -1px 1px rgba(255, 255, 255, 0.3),
     0 2px 10px rgba(60, 72, 110, 0.08);
 }
+/* 深色页（地下室）：底栏不要白条，透出页面自己的背景 */
+.tabbar.dark {
+  background: rgba(9, 20, 38, 0.3);
+  -webkit-backdrop-filter: blur(22px);
+  backdrop-filter: blur(22px);
+  border-top: 0.5px solid rgba(197, 214, 245, 0.2);
+  box-shadow:
+    inset 0 1px 0 rgba(197, 214, 245, 0.14),
+    0 -4px 18px rgba(2, 8, 18, 0.3);
+}
+.tabbar.dark .tab-btn { color: rgba(233, 238, 246, 0.6); }
+.tabbar.dark .tab-btn.active {
+  color: #eaf0f8;
+  background: rgba(197, 214, 245, 0.16);
+  box-shadow: inset 0 1px 0 rgba(233, 238, 246, 0.22), 0 2px 10px rgba(2, 8, 18, 0.25);
+}
+/* 深色页的页面区铺到底栏下面：底图透过底栏的玻璃显出来 */
+.shell-dark .shell-main { margin-bottom: calc((var(--tabbar-h) + var(--tabbar-safe)) * -1); }
+.shell-dark .shell-main > * { padding-bottom: calc(var(--tabbar-h) + var(--tabbar-safe)); }
+
 .tab-icon { display: block; }
 .tab-label { font-size: 10.5px; line-height: 1.1; }
 .tab-btn.active .tab-label { font-weight: 600; }

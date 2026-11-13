@@ -23,6 +23,7 @@ import Orn from '../components/vault/VaultOrnaments.vue'
 import Roc from '../components/vault/VaultRococo.vue'
 import { Pond, pondSupported } from '../liquid/pond'
 import { startGlobalPond, stopGlobalPond } from '../liquid/pond-global'
+import { pageDark } from '../theme'
 import { headLayout, paintHead, headText, headFontSpecs, cnFamily, type HeadData } from './memory-head'
 import '@fontsource/pinyon-script/400.css'
 import '@fontsource/cormorant-garamond/600.css'
@@ -156,6 +157,7 @@ async function startWater() {
 }
 
 onMounted(async () => {
+  pageDark.value = true          // 底栏跟着变透（她：底栏为什么一直是白色的）
   await loadBg()          // 先知道有没有底图，再起水面（头部那张画面要用它）
   void startWater()
   try {
@@ -166,7 +168,7 @@ onMounted(async () => {
 })
 
 watch(headData, () => pond?.repaint())
-onBeforeUnmount(() => { pond?.destroy(); pond = null; stopGlobalPond() })
+onBeforeUnmount(() => { pond?.destroy(); pond = null; stopGlobalPond(); pageDark.value = false })
 
 const maxDaily = computed(() => Math.max(1, ...(data.value?.daily ?? []).map(d => d.n)))
 const todayNone = computed(() => (data.value?.daily.at(-1)?.n ?? 0) === 0)
@@ -286,20 +288,22 @@ const subTitle = computed(() => sub.value === 'inbox' ? '沉淀信箱' : sub.val
 /* 地下室是另一个世界（她定的）：上面的家是浅色液态玻璃，这里是水面之下。
    三个柜子共用这套骨架和这组变量，皮肤各做——记忆是档案 / 标本，心潮是波形和情绪的月相，脉是生命监护仪。 */
 .mem-page {
-  --moon: #e9eef6;
-  --moon-2: rgba(233, 238, 246, 0.64);
-  --moon-3: rgba(233, 238, 246, 0.36);
-  --mist: #9db4dd;
-  --hair: rgba(233, 238, 246, 0.17);
-  --hair-2: rgba(233, 238, 246, 0.09);
-  --iris-a: rgba(176, 202, 255, 0.55);
-  --iris-b: rgba(255, 206, 230, 0.45);
+  /* 她说框的颜色和底图不搭：原来是冷蓝描边压在蓝绿的海上，糊成一片。
+     改成**暖银**（偏象牙的白金），和水的蓝绿拉开，像沉在水里的旧银器。 */
+  --moon: #f4f1ea;
+  --moon-2: rgba(244, 241, 234, 0.72);
+  --moon-3: rgba(240, 236, 226, 0.46);
+  --mist: #d8cfbb;
+  --hair: rgba(240, 233, 216, 0.3);
+  --hair-2: rgba(240, 233, 216, 0.14);
+  --iris-a: rgba(238, 226, 198, 0.6);
+  --iris-b: rgba(255, 214, 226, 0.4);
   position: absolute; inset: 0; overflow: hidden; color: var(--moon);
 }
 
 /* 整页四角：洛可可涡卷角花 */
 .edge { position: absolute; inset: 6px; z-index: 3; pointer-events: none; }
-.cnr { position: absolute; width: 46px; height: 46px; color: rgba(197, 214, 245, 0.42); }
+.cnr { position: absolute; width: 46px; height: 46px; color: rgba(236, 226, 200, 0.5); }
 .cnr.tl { left: 0; top: 0; }
 .cnr.tr { right: 0; top: 0; transform: scaleX(-1); }
 .cnr.bl { left: 0; bottom: 0; transform: scaleY(-1); }
@@ -309,6 +313,8 @@ const subTitle = computed(() => sub.value === 'inbox' ? '沉淀信箱' : sub.val
   position: relative; z-index: 2; height: 100%; overflow-y: auto; -webkit-overflow-scrolling: touch;
   padding: 0 16px 28px;
   font-family: var(--app-font, "Noto Serif SC", "Songti SC", serif);
+  /* 底图很花：所有字都带一层暗影，边缘才咬得住（她：看不太清文字） */
+  text-shadow: 0 1px 3px rgba(2, 8, 18, 0.75), 0 0 10px rgba(2, 8, 18, 0.4);
 }
 
 .head { position: relative; margin: 0 -16px 16px; padding: calc(env(safe-area-inset-top, 0px) + 46px) 16px 0; }
@@ -329,7 +335,8 @@ const subTitle = computed(() => sub.value === 'inbox' ? '沉淀信箱' : sub.val
 .plate {
   position: relative; margin: 10px 2px 0; padding: 16px 16px 14px; text-align: center;
   border: 1px solid var(--hair);
-  background: linear-gradient(180deg, rgba(9, 20, 38, 0.18), rgba(9, 20, 38, 0.06));
+  /* 中间深、四周淡：字那一片压得住，边缘又不切断底图 */
+  background: radial-gradient(120% 90% at 50% 46%, rgba(6, 16, 32, 0.6), rgba(6, 16, 32, 0.14) 78%, transparent);
 }
 .plate::before { content: ""; position: absolute; inset: 4px; border: 1px solid var(--hair-2); pointer-events: none; }
 .plate::after {
@@ -347,10 +354,11 @@ h1 { font-family: "Pinyon Script", cursive; font-weight: 400; font-size: 36px; l
 .drawer-face {
   position: relative; border: 1px solid var(--hair); overflow: hidden; isolation: isolate;
   background:
-    repeating-linear-gradient(118deg, rgba(233, 238, 246, 0.03) 0 1px, transparent 1px 7px),
-    linear-gradient(180deg, rgba(9, 20, 38, 0.3), rgba(9, 20, 38, 0.46));
-  /* 不要 saturate：底图是蓝的，加饱和会把它抽成荧光蓝。模糊也减半，底图的鱼还看得出来 */
-  backdrop-filter: blur(5px);
+    repeating-linear-gradient(118deg, rgba(233, 238, 246, 0.022) 0 1px, transparent 1px 7px),
+    linear-gradient(180deg, rgba(6, 16, 32, 0.66), rgba(6, 16, 32, 0.78));
+  /* 底图很花，字要看得清就必须有自己的底：压到七成不透明 + 轻模糊，底图只做隐约的质感。
+     不加 saturate（底图是蓝的，加饱和会抽成荧光蓝）。 */
+  backdrop-filter: blur(7px);
   box-shadow:
     inset 0 1px 0 rgba(233, 238, 246, 0.16),
     inset 0 -1px 0 rgba(8, 18, 34, 0.3),
@@ -398,10 +406,10 @@ h1 { font-family: "Pinyon Script", cursive; font-weight: 400; font-size: 36px; l
 /* 器物坐在涡卷托架里（洛可可：曲线托着物件，不是方框圈着） */
 .obj {
   position: relative; width: 40px; height: 40px; flex: none; display: grid; place-items: center;
-  color: #d2e2ff;
+  color: #ecdfc4;
   background: radial-gradient(70% 70% at 40% 28%, rgba(157, 180, 221, 0.22), transparent 74%);
 }
-.obj .bracket { position: absolute; inset: 0; width: 40px; height: 40px; color: rgba(197, 214, 245, 0.5); }
+.obj .bracket { position: absolute; inset: 0; width: 40px; height: 40px; color: rgba(232, 220, 192, 0.5); }
 .obj :deep(svg.orn) { width: 20px; height: 20px; }
 /* 小字标号：压在抽屉左上角 */
 .idx {
@@ -409,11 +417,11 @@ h1 { font-family: "Pinyon Script", cursive; font-weight: 400; font-size: 36px; l
   font-size: 8.5px; letter-spacing: 1.6px; color: rgba(197, 214, 245, 0.42);
 }
 .txt { flex: 1; min-width: 0; padding-left: 2px; }
-.txt b { display: block; font-size: 13.5px; font-weight: 600; letter-spacing: 0.6px; }
+.txt b { display: block; font-size: 14px; font-weight: 600; letter-spacing: 0.6px; color: #fdfbf6; }
 .txt .cen { display: block; font-size: 8px; letter-spacing: 2.3px; color: var(--moon-3); margin-top: 2px; }
 .txt u { display: block; text-decoration: none; font-size: 10.5px; color: var(--moon-2); margin-top: 4px; line-height: 1.55; }
 .val { text-align: right; padding-left: 4px; }
-.val em { font-style: normal; font-family: "Cormorant Garamond", serif; font-size: 20px; color: #f1f5fb; }
+.val em { font-style: normal; font-family: "Cormorant Garamond", serif; font-size: 20px; color: #fdfbf6; }
 .val i { font-style: normal; font-size: 9.5px; color: var(--moon-3); margin-left: 2px; }
 .pull { width: 11px; margin-left: 7px; display: flex; flex-direction: column; gap: 3px; opacity: 0.45; }
 .pull s { display: block; height: 1px; background: var(--moon); text-decoration: none; }
