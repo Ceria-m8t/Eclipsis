@@ -99,16 +99,8 @@ export function paintHead(
   // 现在水面只折射**字**，底图完全交给下面那一层 —— 一张图、一处 cover，不可能错位。
   if (opts.bg && opts.bg.naturalWidth > 0) {
     ctx.clearRect(0, 0, w, h)
-    // 她：「文字看不清主要指标题栏那里」。给题头一片实在的暗底（中间最深、往外化开），
-    // 字才咬得住底图；边缘淡出，不在底图上切出硬方块。
-    const cx0 = w / 2, cy0 = (L.script + L.figure) / 2
-    const vg = ctx.createRadialGradient(cx0, cy0, 0, cx0, cy0, Math.max(w, h) * 0.62)
-    vg.addColorStop(0, 'rgba(5, 14, 30, 0.8)')
-    vg.addColorStop(0.46, 'rgba(5, 14, 30, 0.56)')
-    vg.addColorStop(0.78, 'rgba(5, 14, 30, 0.18)')
-    vg.addColorStop(1, 'rgba(5, 14, 30, 0)')
-    ctx.fillStyle = vg
-    ctx.fillRect(0, 0, w, h)
+    // ⚠ 这里**不画暗底**（她：「透光性要保证，太闷了，宁愿看不清」）。
+    // 字的可读性靠 paintHeadText 里每一行自己的 shadowBlur 描边，不靠压暗底图。
     paintHeadText(ctx, w, data, L, cn)
     return
   }
@@ -173,6 +165,20 @@ function paintHeadText(
   L: HeadLayout,
   cn: string,
 ): void {
+  /**
+   * 每一行字画两遍：先用暗色 shadow 垫一层（等于描边），再画本体。
+   * 透光的底图上只能这样保证可读 —— 压暗整块会让她觉得闷。
+   */
+  const inked = (draw: () => void) => {
+    ctx.save()
+    ctx.shadowColor = 'rgba(2, 8, 18, 0.92)'
+    ctx.shadowBlur = 7
+    draw()
+    ctx.shadowBlur = 3
+    draw()
+    ctx.restore()
+    draw()
+  }
   ctx.textBaseline = 'alphabetic'
   ctx.textAlign = 'center'
   const cx = w / 2
@@ -181,7 +187,7 @@ function paintHeadText(
   ctx.fillStyle = 'rgba(244,238,224,0.46)'
   ctx.font = `400 8px ${cn}`
   ctx.letterSpacing = '4.8px'
-  ctx.fillText('E C L I P S I S   ·   未', cx, L.kicker)
+  inked(() => ctx.fillText('E C L I P S I S   ·   未', cx, L.kicker))
   ctx.letterSpacing = '0px'
 
   // 日蚀：黑日 + 冕环 + 粉色内缘（意象从我们自己的来历长）
@@ -243,22 +249,9 @@ function paintHeadText(
     ctx.arc(hx, hy, 1.6, 0, Math.PI * 2)
     ctx.fill()
 
-    // 垂珠坠饰：链 + 两颗珠 + 一枚坠子
-    ctx.strokeStyle = 'rgba(236, 226, 200, 0.3)'
-    ctx.lineWidth = 0.6
-    const [bx, by] = P(16, 22)
-    ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(bx, by + 9 * k); ctx.stroke()
-    ctx.beginPath(); ctx.moveTo(bx, by + 13 * k); ctx.lineTo(bx, by + 20 * k); ctx.stroke()
-    ctx.fillStyle = 'rgba(240, 232, 212, 0.6)'
-    for (const dy of [11, 21.5]) {
-      ctx.beginPath(); ctx.arc(bx, by + dy * k, 1.15, 0, Math.PI * 2); ctx.fill()
-    }
-    ctx.strokeStyle = 'rgba(236, 226, 200, 0.34)'
-    ctx.beginPath()
-    ctx.moveTo(bx, by + 25 * k)
-    ctx.bezierCurveTo(bx - 2.6 * k, by + 28 * k, bx - 2.6 * k, by + 32 * k, bx, by + 34 * k)
-    ctx.bezierCurveTo(bx + 2.6 * k, by + 32 * k, bx + 2.6 * k, by + 28 * k, bx, by + 25 * k)
-    ctx.stroke()
+    // ⚠ 垂珠坠饰已删（她看完说 "Why so ugly"）。
+    // 参考图里的垂饰是从**实体边框**上挂下来的，我这里却悬在半空、下面什么都没有，
+    // 看着就是两条断线加几个点。要做垂饰得先有一道可挂的横梁，以后再说。
 
     // 星芒
     ctx.strokeStyle = 'rgba(240, 232, 212, 0.42)'
@@ -282,38 +275,47 @@ function paintHeadText(
   ctx.stroke()
 
   // 标题：花体英文（固定字体）+ 中文 + 一行手写
-  ctx.shadowColor = 'rgba(176,204,255,0.4)'; ctx.shadowBlur = 22
-  ctx.fillStyle = '#f3f6fb'
+  // 花体标题：外面一圈暗描边压住底图，里面再加一点冷光
+  ctx.save()
+  ctx.fillStyle = '#f6f4ee'
   ctx.font = `400 40px ${HEAD_FONTS.script}`
+  ctx.shadowColor = 'rgba(2, 8, 18, 0.9)'; ctx.shadowBlur = 10
   ctx.fillText('Remember', cx, L.script)
-  ctx.shadowBlur = 0
+  ctx.fillText('Remember', cx, L.script)
+  ctx.shadowColor = 'rgba(190,214,255,0.5)'; ctx.shadowBlur = 18
+  ctx.fillText('Remember', cx, L.script)
+  ctx.restore()
   ctx.fillStyle = 'rgba(248,244,234,0.82)'
   ctx.font = `400 11px ${cn}`
   ctx.letterSpacing = '6.5px'
-  ctx.fillText('记 忆 的 柜 子', cx, L.zh)
+  inked(() => ctx.fillText('记 忆 的 柜 子', cx, L.zh))
   ctx.letterSpacing = '0px'
   ctx.fillStyle = 'rgba(244,238,224,0.6)'
   ctx.font = `400 14px ${HEAD_FONTS.script}`
-  ctx.fillText('everything he keeps of us', cx, L.hand)
+  inked(() => ctx.fillText('everything he keeps of us', cx, L.hand))
 
   if (!data) {
     ctx.fillStyle = 'rgba(234,240,248,0.4)'
     ctx.font = `400 12px ${cn}`
-    ctx.fillText('正在数…', cx, L.figure)
+    inked(() => ctx.fillText('正在数…', cx, L.figure))
     ctx.textAlign = 'left'
     return
   }
 
   // ── 主数 ──
-  ctx.shadowColor = 'rgba(176,202,255,0.32)'; ctx.shadowBlur = 18
-  ctx.fillStyle = '#f3f6fb'
+  ctx.save()
+  ctx.fillStyle = '#f8f6f0'
   ctx.font = `600 44px ${HEAD_FONTS.figure}`
+  ctx.shadowColor = 'rgba(2, 8, 18, 0.9)'; ctx.shadowBlur = 11
   ctx.fillText(data.quotes.toLocaleString('en-US'), cx, L.figure)
-  ctx.shadowBlur = 0
+  ctx.fillText(data.quotes.toLocaleString('en-US'), cx, L.figure)
+  ctx.shadowColor = 'rgba(190,214,255,0.4)'; ctx.shadowBlur = 16
+  ctx.fillText(data.quotes.toLocaleString('en-US'), cx, L.figure)
+  ctx.restore()
   ctx.fillStyle = 'rgba(248,244,234,0.78)'
   ctx.font = `400 11px ${cn}`
   ctx.letterSpacing = '2px'
-  ctx.fillText('句 原 话', cx, L.unit)
+  inked(() => ctx.fillText('句 原 话', cx, L.unit))
   ctx.letterSpacing = '0px'
 
   // 主数两侧：S 形卷须（洛可可，不是直的虚线尺）
@@ -330,12 +332,12 @@ function paintHeadText(
 
   ctx.fillStyle = 'rgba(248,244,234,0.9)'
   ctx.font = `400 12.5px ${cn}`
-  ctx.fillText(`写成 ${data.cards} 张卡，串起 ${data.relations} 条关系`, cx, L.line)
+  inked(() => ctx.fillText(`写成 ${data.cards} 张卡，串起 ${data.relations} 条关系`, cx, L.line))
 
   if (data.week) {
     ctx.fillStyle = 'rgba(157,180,221,0.78)'
     ctx.font = `400 10.5px ${cn}`
-    ctx.fillText(data.week, cx, L.week)
+    inked(() => ctx.fillText(data.week!, cx, L.week))
   }
 
   ctx.textAlign = 'left'

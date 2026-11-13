@@ -313,8 +313,12 @@ const subTitle = computed(() => sub.value === 'inbox' ? '沉淀信箱' : sub.val
   position: relative; z-index: 2; height: 100%; overflow-y: auto; -webkit-overflow-scrolling: touch;
   padding: 0 16px 28px;
   font-family: var(--app-font, "Noto Serif SC", "Songti SC", serif);
-  /* 底图很花：所有字都带一层暗影，边缘才咬得住（她：看不太清文字） */
-  text-shadow: 0 1px 3px rgba(2, 8, 18, 0.75), 0 0 10px rgba(2, 8, 18, 0.4);
+  /* 透光之后字要看得清，只能靠**字自己的描边**，不能靠压暗底图（她：太闷了）。
+     三层：贴边的硬描边 + 中景 + 一层散开的暗雾，压在亮底图上也咬得住。 */
+  text-shadow:
+    0 0 2px rgba(2, 8, 18, 0.95),
+    0 1px 4px rgba(2, 8, 18, 0.85),
+    0 0 14px rgba(2, 8, 18, 0.6);
 }
 
 .head { position: relative; margin: 0 -16px 16px; padding: calc(env(safe-area-inset-top, 0px) + 46px) 16px 0; }
@@ -338,9 +342,7 @@ const subTitle = computed(() => sub.value === 'inbox' ? '沉淀信箱' : sub.val
 .plate {
   position: relative; margin: 10px 2px 0; padding: 18px 16px 16px; text-align: center;
   border: 1px solid var(--hair);
-  background:
-    radial-gradient(86% 62% at 50% 52%, rgba(5, 14, 30, 0.82), rgba(5, 14, 30, 0.55) 58%, rgba(5, 14, 30, 0.16) 84%, transparent),
-    linear-gradient(180deg, rgba(8, 20, 40, 0.3), rgba(8, 20, 40, 0.12));
+  background: linear-gradient(180deg, rgba(240, 233, 216, 0.06), rgba(240, 233, 216, 0.02));
 }
 .plate::before { content: ""; position: absolute; inset: 4px; border: 1px solid var(--hair-2); pointer-events: none; }
 .plate::after {
@@ -359,11 +361,13 @@ h1 { font-family: "Pinyon Script", cursive; font-weight: 400; font-size: 36px; l
 .drawer-face {
   position: relative; border: 1px solid var(--hair); overflow: hidden; isolation: isolate;
   background:
-    repeating-linear-gradient(118deg, rgba(240, 233, 216, 0.025) 0 1px, transparent 1px 7px),
-    linear-gradient(180deg, rgba(10, 26, 50, 0.5), rgba(8, 20, 40, 0.62));
-  /* 她：磨砂玻璃颜色太偏灰、太压抑。所以底色带一点蓝（和水同族，不是中性灰），
-     不透明度从 0.72 降到 0.56 —— 她说下面这些框的透明度本来就还行。 */
-  backdrop-filter: blur(6px);
+    repeating-linear-gradient(118deg, rgba(240, 233, 216, 0.03) 0 1px, transparent 1px 7px),
+    linear-gradient(180deg, rgba(240, 233, 216, 0.08), rgba(240, 233, 216, 0.03));
+  /* 她 2026-11-13：「你可以是磨砂的，但是透光性我觉得是要保证的。太闷太闷了。
+     你把透光性先改成原版吧，我宁愿看不清，然后慢慢调。」
+     所以回到**提亮的薄膜**（不是压暗的厚底）：磨砂还在，光全透得过来。
+     字看不清用描边阴影解决（见 .scroll 的 text-shadow），不靠压暗底图。 */
+  backdrop-filter: blur(9px);
   box-shadow:
     inset 0 1px 0 rgba(233, 238, 246, 0.16),
     inset 0 -1px 0 rgba(8, 18, 34, 0.3),

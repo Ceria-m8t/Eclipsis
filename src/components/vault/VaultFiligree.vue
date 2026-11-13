@@ -26,14 +26,9 @@ defineProps<{ name: string }>()
       <!-- 内侧分叉的小卷草 -->
       <path d="M30 70c-6 2-9 8-8 15 4-4 9-5 13-2-1-6-2-10-5-13Z" stroke-width=".7" opacity=".6" />
       <path d="M52 44c5-4 11-4 15 0-4 3-8 4-12 2" stroke-width=".7" opacity=".55" />
-      <!-- 垂饰：链珠 + 坠子 -->
-      <path d="M70 18v10" stroke-width=".6" opacity=".5" />
-      <path d="M70 34v8" stroke-width=".6" opacity=".45" />
-      <path d="M70 48c-3 3-3 7 0 10 3-3 3-7 0-10Z" stroke-width=".7" opacity=".55" />
     </g>
     <g fill="currentColor">
-      <circle cx="70" cy="31" r="1.3" opacity=".7" />
-      <circle cx="70" cy="45" r="1" opacity=".6" />
+      <circle cx="70" cy="18" r="1.3" opacity=".7" />
       <circle cx="26" cy="86" r="1.1" opacity=".55" />
     </g>
     <!-- 星芒 -->
@@ -50,22 +45,16 @@ defineProps<{ name: string }>()
             stroke-width="1" />
       <path d="M14 52c12-16 30-24 48-20" stroke-width=".7" opacity=".55" />
       <path d="M40 30c-3-6-2-11 2-15 3 5 3 10-2 15Z" stroke-width=".7" opacity=".6" />
-      <!-- 左垂饰 -->
-      <path d="M26 56v7M26 68v5" stroke-width=".6" opacity=".45" />
-      <path d="M26 76c-2.5 2.5-2.5 6 0 8.5 2.5-2.5 2.5-6 0-8.5Z" stroke-width=".65" opacity=".5" />
       <!-- 右卷叶（小一号，不对称） -->
       <path d="M312 40c-12-17-30-25-47-20-9 3-13 10-10 17 3 6 10 7 14 2 2-3 1-7-2-9"
             stroke-width="1" />
       <path d="M306 48c-10-14-26-21-41-18" stroke-width=".7" opacity=".5" />
       <path d="M284 28c3-5 2-10-1-13-3 4-3 9 1 13Z" stroke-width=".7" opacity=".55" />
-      <path d="M296 52v6M296 62v4" stroke-width=".6" opacity=".4" />
       <!-- 中间向上的棕叶 -->
       <path d="M160 26c-4-8-3-15 0-21 3 6 4 13 0 21Z" stroke-width=".85" opacity=".7" />
       <path d="M146 30c-5-4-8-9-8-15M174 30c5-4 8-9 8-15" stroke-width=".6" opacity=".4" />
     </g>
     <g fill="currentColor">
-      <circle cx="26" cy="65.5" r="1.1" opacity=".6" />
-      <circle cx="296" cy="59.5" r="1" opacity=".55" />
       <circle cx="70" cy="40" r="1.5" opacity=".7" />
       <circle cx="255" cy="38" r="1.2" opacity=".6" />
     </g>
@@ -98,14 +87,11 @@ defineProps<{ name: string }>()
       <path d="M236 18c-18-13-40-15-57-6-8 4-10 11-6 16 4 4 10 3 12-2 1-3-1-6-4-6" stroke-width=".9" />
       <path d="M40 10c-3-5-2-9 1-12 3 4 3 8-1 12Z" stroke-width=".65" opacity=".6" />
       <path d="M198 11c3-4 2-8-1-11-3 4-2 8 1 11Z" stroke-width=".65" opacity=".55" />
-      <path d="M78 26v6M162 26v5" stroke-width=".55" opacity=".4" />
     </g>
     <g fill="currentColor">
       <circle cx="112" cy="20" r="1.6" opacity=".8" />
       <circle cx="120" cy="20" r="1.6" opacity=".8" />
       <circle cx="128" cy="20" r="1.6" opacity=".8" />
-      <circle cx="78" cy="34" r="1.1" opacity=".55" />
-      <circle cx="162" cy="33" r="1" opacity=".5" />
     </g>
   </svg>
 
