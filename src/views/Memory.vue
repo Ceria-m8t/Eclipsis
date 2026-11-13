@@ -50,7 +50,13 @@ const OBJ: Record<string, string> = {
  *   public/assets/rooms/basement/memory-water.jpg
  * 和房间底图同一套规矩（/assets/rooms/<房间>/...，nginx 那边缓存 30 天，换图要改文件名）。
  */
-const BG_URL = '/assets/rooms/basement/memory-water.jpg'
+const BG_PATH = '/assets/rooms/basement/memory-water.jpg'
+/**
+ * ⚠ nginx 给 /assets/ 加了 30 天 immutable 缓存，同名换图手机不会重新下载。
+ * 所以带一个按小时变的查询串：她在底图试衣间换完图，重开 App 就能看到新的。
+ * （房间底图那边的做法是改文件名，但这张要反复试，不能每次改名字。）
+ */
+const BG_URL = `${BG_PATH}?v=${Math.floor(Date.now() / 36e5)}`
 /** 底图在不在（不在就用兜底，不要显示破图） */
 const bg = ref('')
 /** 头部那张水下画面用的底图（画进 canvas 的那一份） */
