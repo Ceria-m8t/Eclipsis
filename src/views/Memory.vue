@@ -118,9 +118,16 @@ function loadBg(): Promise<void> {
 }
 
 const router = useRouter()
+/**
+ * 退出键：**固定回地下室**（这个柜子的来处），不走浏览历史。
+ *
+ * 她 2026-11-13 报的：原来用 `router.back()` 退浏览历史的上一条，
+ * 而她从这里切去聊天、再从底栏切回来之后，历史里上一条就是聊天页 ——
+ * 点退出就回聊天，再点又回来，**退不出去**。
+ * 地下室是它唯一的入口，直接回那里不会有歧义。
+ */
 function goBack() {
-  if (window.history.state?.back) router.back()
-  else router.push('/basement')
+  router.push('/basement')
 }
 const data = ref<Panel | null>(null)
 const error = ref('')
@@ -209,8 +216,9 @@ const todayNone = computed(() => (data.value?.daily.at(-1)?.n ?? 0) === 0)
 
 function open(c: Cell) {
   if (!c.to) return
-  if (c.to === 'galaxy') router.push('/galaxy')
-  else if (c.to === 'find') router.push('/galaxy?find=1')
+  // 带上 from：星空那边点退出会回这里，不会掉到天台去
+  if (c.to === 'galaxy') router.push('/galaxy?from=/memory')
+  else if (c.to === 'find') router.push('/galaxy?find=1&from=/memory')
   else sub.value = c.to as any
 }
 const subTitle = computed(() => sub.value === 'inbox' ? '沉淀信箱' : sub.value === 'review' ? '等你看一眼' : '记忆卡')

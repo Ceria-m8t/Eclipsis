@@ -10,12 +10,19 @@ import { loadGalaxy, loadGraph, loadTree, loadVersion, loadSource, loadDays, sea
 import { mountRidge, hasWebGL2, type Mounted, type Pick, type View } from '../galaxy/bridge'
 
 const router = useRouter()
-/** 回上一页；直接打开这个地址（没有上一页）时回 /rooftop */
-function goBack() {
-  if (window.history.state?.back) router.back()
-  else router.push('/rooftop')
-}
 const route = useRoute()
+/**
+ * 退出键：**固定回天台**（星空的来处），不走浏览历史。
+ * 和记忆面板同一个 bug（她 2026-11-13 在记忆面板上发现的）：
+ * 走 `router.back()` 时，从这里切去聊天再切回来之后，历史里上一条是聊天页 →
+ * 点退出回聊天、再点又回来，退不出去。
+ * ⚠ 注意：记忆卡能跳到这一页（/galaxy?find=1），那条路径上她点退出应该回记忆面板 ——
+ * 所以带 `from` 参数时按它回去（见 backTo）。
+ */
+function goBack() {
+  const from = route.query.from
+  router.push(typeof from === 'string' && from.startsWith('/') ? from : '/rooftop')
+}
 const stage = ref<HTMLElement | null>(null)
 const snap = shallowRef<GSnapshot | null>(null)
 const graph = shallowRef<GGraph | null>(null)
