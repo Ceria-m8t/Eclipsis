@@ -107,13 +107,19 @@ void main() {
   float soft = e * e * e * (0.10 * ul + 0.05 * lr);
   col = mix(col, vec3(1.0), clamp((glint + soft) * uShine, 0.0, 0.8));
 
-  // 厚玻璃的棱：内壁往里缩一点再来一道窄亮线（像切割过的玻璃砖，看得出这一圈有厚度）
+  // 反光（她：想要的不是棱，是反光；整圈的高斯环看起来是圆的）：
+  // ① 贴着内壁、只在朝光那一侧一道利的高光：角度和径向都收窄，两头自然断掉，不绕成一圈
+  // ② 一道斜着扫过平面的宽反光，像窗户映在玻璃面上（只在平的中心区，不碰斜面）
   if (uThick > 0.001) {
-    float inner = max(bw * 0.42, 1.5);
-    float edge = exp(-pow((dist - inner) / max(1.0, inner * 0.45), 2.0));
-    float lit = 0.35 + 0.65 * clamp(ul + lr * 0.7, 0.0, 1.0);
-    col = mix(col, vec3(1.0), clamp(edge * lit * uThick * 0.5 * uShine, 0.0, 0.55));
-    float back = exp(-pow(angDiff(ang, 2.0) / 1.5, 2.0)) * e * e;
+    float inner = max(bw * 0.34, 1.2);
+    float band = exp(-pow((dist - inner) / max(0.8, inner * 0.24), 2.0));
+    float lobe = exp(-pow(angDiff(ang, -2.36) / 0.36, 2.0));
+    col = mix(col, vec3(1.0), clamp(band * lobe * uThick * 0.8 * uShine, 0.0, 0.72));
+    vec2 dir = normalize(vec2(0.62, -0.78));
+    float along = dot(lp, dir) / max(8.0, min(hb.x, hb.y));
+    float sheen = exp(-pow((along - 0.5) / 0.4, 2.0)) * t;
+    col = mix(col, vec3(1.0), clamp(sheen * uThick * 0.13 * uShine, 0.0, 0.2));
+    float back = exp(-pow(angDiff(ang, 2.0) / 1.4, 2.0)) * e * e;
     col *= 1.0 - clamp(back * uThick * 0.1, 0.0, 0.12);
   }
   // 背后很亮时，不亮的那几段换成深色细线，白底上才有边
