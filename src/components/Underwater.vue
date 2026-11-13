@@ -31,6 +31,12 @@ withDefaults(defineProps<{
   posY?: string
 }>(), { src: '', depth: 'deep', gain: 1, posY: 'center' })
 
+/**
+ * 排查用：localStorage['eclipsis-uw-raw']='1' → **只画底图**，所有覆盖层都不画。
+ * 用来回答「我看到的和我的图有没有关系」这个问题，不用再靠猜。
+ */
+const raw = (() => { try { return localStorage.getItem('eclipsis-uw-raw') === '1' } catch { return false } })()
+
 /** 浮尘 / 气泡 */
 const motes = Array.from({ length: 26 }, (_, i) => ({
   left: Math.random() * 100,
@@ -52,7 +58,7 @@ const beams = [
 </script>
 
 <template>
-  <div class="uw" :class="[depth, src ? 'has-img' : 'no-img']" aria-hidden="true"
+  <div class="uw" :class="[depth, src ? 'has-img' : 'no-img', { raw }]" aria-hidden="true"
        :style="{ '--gain': gain, '--pos-y': posY }">
     <template v-if="src">
       <!-- ① 底图自己呼吸：光在变 -->
@@ -87,6 +93,9 @@ const beams = [
 
 <style scoped>
 .uw { position: absolute; inset: 0; overflow: hidden; pointer-events: none; background: #091426; }
+/* 只看底图：覆盖层全不画（排查用） */
+.uw.raw .plate.shine, .uw.raw .caustic, .uw.raw .motes { display: none; }
+.uw.raw .plate:not(.shine) { animation: none; filter: none; }
 
 /* ── 底图那套 ── */
 .plate {

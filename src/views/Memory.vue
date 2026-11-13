@@ -306,11 +306,13 @@ const subTitle = computed(() => sub.value === 'inbox' ? '沉淀信箱' : sub.val
 .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 /* 题头铜牌（只在水面跑不起来时出现） */
+/* ⚠ 题头盖着整个头部，所以**不加毛玻璃**：
+   blur+saturate(150%) 会把底图的蓝抽爆（她看到的浅蓝一片就是这个，量到蓝 155 → 240），
+   鱼群也被 blur 糊掉。只留描边和一层极淡的膜，底图原样透上来。 */
 .plate {
   position: relative; margin: 10px 2px 0; padding: 16px 16px 14px; text-align: center;
   border: 1px solid var(--hair);
-  background: linear-gradient(180deg, rgba(233, 238, 246, 0.075), rgba(233, 238, 246, 0.02));
-  backdrop-filter: blur(9px) saturate(150%);
+  background: linear-gradient(180deg, rgba(9, 20, 38, 0.18), rgba(9, 20, 38, 0.06));
 }
 .plate::before { content: ""; position: absolute; inset: 4px; border: 1px solid var(--hair-2); pointer-events: none; }
 .plate::after {
@@ -328,9 +330,10 @@ h1 { font-family: "Pinyon Script", cursive; font-weight: 400; font-size: 36px; l
 .drawer-face {
   position: relative; border: 1px solid var(--hair); overflow: hidden; isolation: isolate;
   background:
-    repeating-linear-gradient(118deg, rgba(233, 238, 246, 0.028) 0 1px, transparent 1px 7px),
-    linear-gradient(180deg, rgba(233, 238, 246, 0.095), rgba(233, 238, 246, 0.026));
-  backdrop-filter: blur(11px) saturate(160%);
+    repeating-linear-gradient(118deg, rgba(233, 238, 246, 0.03) 0 1px, transparent 1px 7px),
+    linear-gradient(180deg, rgba(9, 20, 38, 0.3), rgba(9, 20, 38, 0.46));
+  /* 不要 saturate：底图是蓝的，加饱和会把它抽成荧光蓝。模糊也减半，底图的鱼还看得出来 */
+  backdrop-filter: blur(5px);
   box-shadow:
     inset 0 1px 0 rgba(233, 238, 246, 0.16),
     inset 0 -1px 0 rgba(8, 18, 34, 0.3),
