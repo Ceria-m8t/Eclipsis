@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { keyboardOpen } from '../viewport'
 import { pageBackdrop, pageDark } from '../theme'
@@ -31,10 +31,31 @@ const tabs = [
   { key: 'settings', icon: 'settings', label: '设置', to: '/settings' },
 ] as const
 
+/**
+ * 「家」这一栏上次停在哪一页。
+ *
+ * 她 2026-11-13：「我在这个界面切回到聊天界面，再切回到家的界面的时候，
+ * 就没有保持在这个界面了，而是在家的默认主界面。」
+ * 根因不是页面缓存 —— 是「家」这个按钮**写死跳 /living-room**。
+ * 现在记住离开前的那一页（地下室、记忆面板、星空、书架……），点「家」回到那里。
+ */
+const lastHome = ref(localStorage.getItem('eclipsis-last-home') || '/living-room')
+watch(() => route.fullPath, p => {
+  if (tab.value === 'home') {
+    lastHome.value = p
+    try { localStorage.setItem('eclipsis-last-home', p) } catch { /* 隐私模式写不进就算了 */ }
+  }
+}, { immediate: true })
+
 function go(t: (typeof tabs)[number]) {
-  if (tab.value !== t.key) router.push(t.to)
+  if (tab.value !== t.key) {
+    router.push(t.key === 'home' ? lastHome.value : t.to)
+    return
+  }
   // 已经在设置的某一项里：再点「设置」回到目录
-  else if (t.key === 'settings' && route.path !== '/settings') router.push('/settings')
+  if (t.key === 'settings' && route.path !== '/settings') router.push('/settings')
+  // 已经在「家」这一栏里：再点「家」回客厅（给她一条回主界面的路）
+  else if (t.key === 'home' && route.path !== '/living-room') router.push('/living-room')
 }
 </script>
 
