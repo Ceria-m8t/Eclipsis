@@ -8,6 +8,16 @@ import Icon from '../components/Icon.vue'
 const router = useRouter()
 const route = useRoute()
 
+/**
+ * KeepAlive 的 key：只给要留着的那几页固定 key（聊天、记忆面板），
+ * 其余页面用完整路径 —— 路径一变就是新组件，自然被挤出缓存（max: 3）。
+ */
+const keepKey = computed(() => {
+  if (route.path.startsWith('/chat')) return 'keep:chat'
+  if (route.path.startsWith('/memory')) return 'keep:memory'
+  return route.fullPath
+})
+
 // 当前属于哪个标签：聊天、设置（含提示词编辑），其余都算"家"
 const tab = computed(() => {
   if (route.path.startsWith('/chat')) return 'chat'
@@ -38,10 +48,15 @@ function go(t: (typeof tabs)[number]) {
     <div class="shell-main">
       <!-- 聊天页切走时不销毁：他正在回的那一轮接着收，切回来还在（以前一切走就把这一轮停掉了） -->
       <RouterView v-slot="{ Component }">
-        <!-- Memory 也留着：她在地下室看着，切去聊天再切回来要还在这一页
-             （她 2026-11-13：「切回到家的界面的时候，就没有保持在这个界面了」） -->
-        <KeepAlive :include="['Chat', 'Memory']">
-          <component :is="Component" />
+        <!--
+          聊天页和记忆面板都留着不销毁。
+          ⚠ 用 `:key` 固定成路由名，再让 KeepAlive 无条件缓存这两个 ——
+          `include` 匹配的是**组件名**，而这些是异步组件（`() => import(...)`），
+          KeepAlive 看到的是包装器、拿不到名字，所以 include 对它们无效
+          （她 2026-11-13：「切回到家的界面的时候，就没有保持在这个界面了」）。
+        -->
+        <KeepAlive :max="3">
+          <component :is="Component" :key="keepKey" />
         </KeepAlive>
       </RouterView>
     </div>
@@ -165,9 +180,14 @@ function go(t: (typeof tabs)[number]) {
 }
 /* 深色页声明 dark 配色：PWA 全屏下 iOS 不再按浅色方案补偿 */
 .shell-dark { color-scheme: dark; }
-/* ⚠ 底栏是半透明的，它底下露出来的是 **body 的浅灰 #eef0f5** —— 她看到的「底栏还是灰的」就是它。
-   深色页给外壳自己垫一层深底，盖住 body 那层浅色。 */
+/*
+ * ⚠ 底栏是半透明的，它底下露出来的是 **.shell-bg 那一层**（absolute 铺满整个外壳、
+ * 画的是浅色的 --page-bg）。我前几版分别试过改底栏自己的半透明色、给外壳垫深底、
+ * 加 ::after 补背景，都没用，因为浅色那一层压在最上面。
+ * 现在直接让深色页的 .shell-bg 变成深底，底栏透出来的就是深色了。
+ */
 .shell-dark { background: #050d1c; }
+.shell-dark .shell-bg { background: #050d1c !important; }
 /*
  * 深色页：页面高度**不动**（撑高会改变底图 cover 的取景，她因此看到两种颜色），
  * 底图那一层自己往下多铺出底栏那么高（见 Underwater.vue 的 .uw），底栏的玻璃就透出同一张图。
