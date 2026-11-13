@@ -20,7 +20,7 @@ import { useRouter } from 'vue-router'
 import MemoryPanel from '../components/MemoryPanel.vue'
 import Underwater from '../components/Underwater.vue'
 import Orn from '../components/vault/VaultOrnaments.vue'
-import Roc from '../components/vault/VaultRococo.vue'
+import Fg from '../components/vault/VaultFiligree.vue'
 import { Pond, pondSupported } from '../liquid/pond'
 import { startGlobalPond, stopGlobalPond } from '../liquid/pond-global'
 import { pageDark } from '../theme'
@@ -192,8 +192,8 @@ const subTitle = computed(() => sub.value === 'inbox' ? '沉淀信箱' : sub.val
     <Underwater :src="bg" depth="shallow" />
     <!-- 整页四角：洛可可涡卷角花（不是直角刻线——那是新古典，方向正好相反） -->
     <div class="edge">
-      <Roc name="corner" class="cnr tl" /><Roc name="corner" class="cnr tr" />
-      <Roc name="corner" class="cnr bl" /><Roc name="corner" class="cnr br" />
+      <Fg name="corner" class="cnr tl" /><Fg name="corner" class="cnr tr" />
+      <Fg name="corner" class="cnr bl" /><Fg name="corner" class="cnr br" />
     </div>
 
     <div class="scroll" ref="scrollEl">
@@ -202,9 +202,9 @@ const subTitle = computed(() => sub.value === 'inbox' ? '沉淀信箱' : sub.val
         <p v-if="water" class="sr-only">{{ headText(headData) }}</p>
         <!-- 水面跑不起来：同样内容的 DOM 题头（铜牌 + 日蚀 + 四角花饰） -->
         <div v-else class="plate">
-          <Roc name="corner" class="cnr tl" /><Roc name="corner" class="cnr tr" />
+          <Fg name="corner" class="cnr tl" /><Fg name="corner" class="cnr tr" />
           <p class="eyebrow">E C L I P S I S &nbsp;·&nbsp; 未</p>
-          <Roc name="crown" />
+          <Fg name="crest" class="crest" />
           <h1>Remember</h1>
           <p class="zh">记 忆 的 柜 子</p>
           <template v-if="data">
@@ -230,8 +230,8 @@ const subTitle = computed(() => sub.value === 'inbox' ? '沉淀信箱' : sub.val
         <!-- 分区题：刻线 + 书名号 -->
         <section v-for="s in data.sections" :key="s.title">
           <div class="sec">
-            <Roc name="shell" class="shell" /><b>{{ s.title }}</b>
-            <Roc name="curl" class="curl" /><em>{{ s.en }}</em><hr>
+            <Fg name="sprig" class="sprig" /><b>{{ s.title }}</b>
+            <Fg name="rule" class="rule" /><em>{{ s.en }}</em><hr>
           </div>
           <!-- 器物抽屉：一行一件（她：不是等大方格） -->
           <div class="drawers">
@@ -239,13 +239,13 @@ const subTitle = computed(() => sub.value === 'inbox' ? '沉淀信箱' : sub.val
                     :class="{ empty: c.todo, tappable: !!c.to }" @click="open(c)">
               <span class="edge-l"></span>
               <span class="idx">{{ roman(i + 1) }}</span>
-              <span class="obj"><Roc name="bracket" class="bracket" /><Orn :name="OBJ[c.key] || 'cards'" /></span>
+              <span class="obj"><Fg name="bracket" class="bracket" /><Orn :name="OBJ[c.key] || 'cards'" /></span>
               <span class="txt">
                 <b>{{ c.name }}</b>
                 <span class="cen">{{ c.en }}</span>
                 <u v-if="c.note">{{ c.note }}</u>
               </span>
-              <span v-if="c.todo" class="seal"><Roc name="seal" /><b>未</b></span>
+              <span v-if="c.todo" class="seal"><Fg name="seal" /><b>未</b></span>
               <span class="val"><em>{{ c.n.toLocaleString() }}</em><i v-if="c.unit">{{ c.unit }}</i></span>
               <span class="pull"><s></s><s></s></span>
             </button>
@@ -254,7 +254,7 @@ const subTitle = computed(() => sub.value === 'inbox' ? '沉淀信箱' : sub.val
 
         <!-- 在运转吗：不占格子 -->
         <section>
-          <div class="sec"><Roc name="shell" class="shell" /><b>在 运 转 吗</b><Roc name="curl" class="curl" /><em>Pulse of it</em><hr></div>
+          <div class="sec"><Fg name="sprig" class="sprig" /><b>在 运 转 吗</b><Fg name="rule" class="rule" /><em>Pulse of it</em><hr></div>
           <ul class="health drawer-face">
             <li v-for="h in data.health" :key="h.label">
               <i :class="{ bad: !h.ok }"></i><b>{{ h.label }}</b><span>{{ h.value }}</span>
@@ -262,7 +262,7 @@ const subTitle = computed(() => sub.value === 'inbox' ? '沉淀信箱' : sub.val
           </ul>
         </section>
 
-        <div class="tailpiece"><Roc name="tail" /></div>
+        <div class="tailpiece"><Fg name="tail" /></div>
         <p class="foot muted">心潮和脉的柜子还没做。记忆只有他能写，你能划掉、能贴便条——这里没有替他改写的按钮。</p>
       </template>
 
@@ -332,18 +332,23 @@ const subTitle = computed(() => sub.value === 'inbox' ? '沉淀信箱' : sub.val
 /* ⚠ 题头盖着整个头部，所以**不加毛玻璃**：
    blur+saturate(150%) 会把底图的蓝抽爆（她看到的浅蓝一片就是这个，量到蓝 155 → 240），
    鱼群也被 blur 糊掉。只留描边和一层极淡的膜，底图原样透上来。 */
+/* 她：「我原先指的文字看不清，其实主要指标题栏那里」。
+   所以标题这一块给它一片**实在的暗底**（中间最深、往外化开），字才咬得住；
+   边缘仍然淡出，不会在底图上切出一个硬方块。 */
 .plate {
-  position: relative; margin: 10px 2px 0; padding: 16px 16px 14px; text-align: center;
+  position: relative; margin: 10px 2px 0; padding: 18px 16px 16px; text-align: center;
   border: 1px solid var(--hair);
-  /* 中间深、四周淡：字那一片压得住，边缘又不切断底图 */
-  background: radial-gradient(120% 90% at 50% 46%, rgba(6, 16, 32, 0.6), rgba(6, 16, 32, 0.14) 78%, transparent);
+  background:
+    radial-gradient(86% 62% at 50% 52%, rgba(5, 14, 30, 0.82), rgba(5, 14, 30, 0.55) 58%, rgba(5, 14, 30, 0.16) 84%, transparent),
+    linear-gradient(180deg, rgba(8, 20, 40, 0.3), rgba(8, 20, 40, 0.12));
 }
 .plate::before { content: ""; position: absolute; inset: 4px; border: 1px solid var(--hair-2); pointer-events: none; }
 .plate::after {
   content: ""; position: absolute; left: 10%; right: 10%; top: -1px; height: 1px;
   background: linear-gradient(90deg, transparent, var(--iris-a) 35%, var(--iris-b) 65%, transparent);
 }
-.plate .cnr { width: 34px; height: 34px; color: var(--mist); opacity: 0.6; }
+.plate .cnr { width: 40px; height: 40px; color: var(--mist); opacity: 0.55; }
+.crest { width: 100%; max-width: 300px; height: auto; margin: 2px auto 0; color: var(--mist); opacity: 0.8; }
 .eyebrow { margin: 0 0 8px; font-size: 8px; letter-spacing: 4.8px; color: var(--moon-3); }
 h1 { font-family: "Pinyon Script", cursive; font-weight: 400; font-size: 36px; line-height: 1; margin: 6px 0 0; color: #f3f6fb; text-shadow: 0 0 20px rgba(176, 202, 255, 0.3); }
 .zh { margin: 7px 0 0; font-size: 11px; letter-spacing: 6.5px; color: var(--moon-2); }
@@ -354,11 +359,11 @@ h1 { font-family: "Pinyon Script", cursive; font-weight: 400; font-size: 36px; l
 .drawer-face {
   position: relative; border: 1px solid var(--hair); overflow: hidden; isolation: isolate;
   background:
-    repeating-linear-gradient(118deg, rgba(233, 238, 246, 0.022) 0 1px, transparent 1px 7px),
-    linear-gradient(180deg, rgba(6, 16, 32, 0.66), rgba(6, 16, 32, 0.78));
-  /* 底图很花，字要看得清就必须有自己的底：压到七成不透明 + 轻模糊，底图只做隐约的质感。
-     不加 saturate（底图是蓝的，加饱和会抽成荧光蓝）。 */
-  backdrop-filter: blur(7px);
+    repeating-linear-gradient(118deg, rgba(240, 233, 216, 0.025) 0 1px, transparent 1px 7px),
+    linear-gradient(180deg, rgba(10, 26, 50, 0.5), rgba(8, 20, 40, 0.62));
+  /* 她：磨砂玻璃颜色太偏灰、太压抑。所以底色带一点蓝（和水同族，不是中性灰），
+     不透明度从 0.72 降到 0.56 —— 她说下面这些框的透明度本来就还行。 */
+  backdrop-filter: blur(6px);
   box-shadow:
     inset 0 1px 0 rgba(233, 238, 246, 0.16),
     inset 0 -1px 0 rgba(8, 18, 34, 0.3),
@@ -386,8 +391,8 @@ h1 { font-family: "Pinyon Script", cursive; font-weight: 400; font-size: 36px; l
 .sec { display: flex; align-items: center; gap: 8px; margin: 20px 2px 9px; }
 .sec b { font-size: 12px; font-weight: 600; letter-spacing: 3.4px; white-space: nowrap; color: #eaf0f8; }
 .sec em { font-style: normal; font-size: 8px; letter-spacing: 2.4px; color: var(--moon-3); white-space: nowrap; }
-.sec .shell { width: 22px; height: 17px; flex: none; color: var(--mist); opacity: 0.8; }
-.sec .curl { width: 28px; height: 13px; flex: none; color: var(--mist); opacity: 0.6; }
+.sec .sprig { width: 30px; height: 16px; flex: none; color: var(--mist); opacity: 0.85; }
+.sec .rule { flex: 1; min-width: 40px; height: 10px; color: var(--mist); opacity: 0.6; }
 .sec hr { flex: 1; border: none; border-top: 1px solid var(--hair); border-bottom: 1px solid var(--hair-2); height: 3px; margin: 0; }
 
 /* 器物抽屉：一行一件 */
@@ -450,7 +455,7 @@ h1 { font-family: "Pinyon Script", cursive; font-weight: 400; font-size: 36px; l
 .health span { color: var(--moon-3); }
 
 .tailpiece { display: flex; justify-content: center; margin: 22px 0 6px; color: var(--mist); opacity: 0.6; }
-.tailpiece :deep(svg) { width: 200px; height: auto; }
+.tailpiece :deep(svg) { width: 210px; height: auto; }
 .muted { color: var(--moon-3); font-size: 12px; }
 .foot { margin: 10px 0 0; line-height: 1.7; }
 .load { text-align: center; padding: 40px 0; }

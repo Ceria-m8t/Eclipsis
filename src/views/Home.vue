@@ -45,7 +45,10 @@ function go(t: (typeof tabs)[number]) {
     </div>
 
     <!-- 键盘弹起时收起底栏，把空间留给输入框 -->
-    <nav v-show="!keyboardOpen" class="tabbar" :class="{ dark: pageDark }" data-glass aria-label="主导航">
+    <!-- 深色页（地下室）：底栏退出全站玻璃（liq-skip），否则玻璃会去采外壳那层浅色渐变 → 白条。
+         她 2026-11-13：「底栏为什么一直是白色的？我希望它一直是透的。」 -->
+    <nav v-show="!keyboardOpen" class="tabbar" :class="pageDark ? 'dark liq-skip' : ''"
+         :data-glass="pageDark ? undefined : ''" aria-label="主导航">
       <button
         v-for="t in tabs"
         :key="t.key"
@@ -143,9 +146,10 @@ function go(t: (typeof tabs)[number]) {
 }
 /* 深色页（地下室）：底栏不要白条，透出页面自己的背景 */
 .tabbar.dark {
-  background: rgba(9, 20, 38, 0.3);
-  -webkit-backdrop-filter: blur(22px);
-  backdrop-filter: blur(22px);
+  /* !important：--tabbar-bg 是 applyTheme 写在 :root 上的白色，基类那行会拿到它 */
+  background: rgba(10, 22, 42, 0.42) !important;
+  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(20px);
   border-top: 0.5px solid rgba(197, 214, 245, 0.2);
   box-shadow:
     inset 0 1px 0 rgba(197, 214, 245, 0.14),

@@ -99,6 +99,16 @@ export function paintHead(
   // 现在水面只折射**字**，底图完全交给下面那一层 —— 一张图、一处 cover，不可能错位。
   if (opts.bg && opts.bg.naturalWidth > 0) {
     ctx.clearRect(0, 0, w, h)
+    // 她：「文字看不清主要指标题栏那里」。给题头一片实在的暗底（中间最深、往外化开），
+    // 字才咬得住底图；边缘淡出，不在底图上切出硬方块。
+    const cx0 = w / 2, cy0 = (L.script + L.figure) / 2
+    const vg = ctx.createRadialGradient(cx0, cy0, 0, cx0, cy0, Math.max(w, h) * 0.62)
+    vg.addColorStop(0, 'rgba(5, 14, 30, 0.8)')
+    vg.addColorStop(0.46, 'rgba(5, 14, 30, 0.56)')
+    vg.addColorStop(0.78, 'rgba(5, 14, 30, 0.18)')
+    vg.addColorStop(1, 'rgba(5, 14, 30, 0)')
+    ctx.fillStyle = vg
+    ctx.fillRect(0, 0, w, h)
     paintHeadText(ctx, w, data, L, cn)
     return
   }
@@ -168,7 +178,7 @@ function paintHeadText(
   const cx = w / 2
 
   // ── 题头：ECLIPSIS · 未 ──
-  ctx.fillStyle = 'rgba(234,240,248,0.34)'
+  ctx.fillStyle = 'rgba(244,238,224,0.46)'
   ctx.font = `400 8px ${cn}`
   ctx.letterSpacing = '4.8px'
   ctx.fillText('E C L I P S I S   ·   未', cx, L.kicker)
@@ -190,72 +200,80 @@ function paintHeadText(
   ctx.strokeStyle = 'rgba(255,217,233,0.85)'; ctx.lineWidth = 1.1
   ctx.beginPath(); ctx.arc(cx, L.eclipse, r, -Math.PI / 2, Math.PI / 2); ctx.stroke()
 
-  // ── 洛可可：卷叶涡饰（rocaille）──
-  // 她看完第一版说「旁边两个是蜗牛壳吗」——我画成了单圈螺线，那确实是蜗牛。
-  // 真正的洛可可涡卷是**贝壳状的卷叶**：一条 C 形主脊 + 外缘翻卷的叶瓣 + 内侧几道叶脉，
-  // 末端才收成一个小卷心；而且左右**不对称**（洛可可不讲镜像）。
-  const leaf = (dir: -1 | 1, scale: number) => {
-    const x0 = cx + dir * 46, y0 = L.eclipse
-    const P = (px: number, py: number): [number, number] => [x0 + dir * px * scale, y0 + py * scale]
-
-    ctx.strokeStyle = 'rgba(214, 230, 252, 0.6)'
-    ctx.lineWidth = 1.15
+  // ── 洛可可卷叶（照她 2026-11-13 发的参考图描的）──
+  // 她第一次看说「旁边两个是蜗牛壳吗」——那版是单圈螺线，确实是蜗牛。
+  // 参考图里的四条特征：①C 形主脊 + 外缘翻卷的叶瓣 + 末端小尖 ②必有垂珠坠饰
+  // ③星芒点缀 ④线细、留白多。左右不对称。
+  const leaf = (dir: -1 | 1, k: number) => {
+    const x0 = cx + dir * 44, y0 = L.eclipse
+    const P = (px: number, py: number): [number, number] => [x0 + dir * px * k, y0 + py * k]
     ctx.lineCap = 'round'
 
-    // 主脊：从日蚀旁起手，向外上扬再向下回卷
+    // 主脊
+    ctx.strokeStyle = 'rgba(236, 226, 200, 0.62)'
+    ctx.lineWidth = 1.05
     ctx.beginPath()
-    ctx.moveTo(...P(0, 6))
-    ctx.bezierCurveTo(...P(22, -12), ...P(52, -16), ...P(66, -2))
-    ctx.bezierCurveTo(...P(78, 10), ...P(70, 26), ...P(55, 26))
-    ctx.bezierCurveTo(...P(44, 26), ...P(40, 17), ...P(46, 12))
-    ctx.bezierCurveTo(...P(50, 9), ...P(56, 11), ...P(56, 16))
+    ctx.moveTo(...P(0, 8))
+    ctx.bezierCurveTo(...P(20, -10), ...P(48, -18), ...P(64, -8))
+    ctx.bezierCurveTo(...P(76, 0), ...P(76, 14), ...P(64, 18))
+    ctx.bezierCurveTo(...P(55, 21), ...P(49, 15), ...P(53, 10))
     ctx.stroke()
 
-    // 外缘翻卷的叶瓣（比主脊细一号，稍微错开，制造厚度）
-    ctx.strokeStyle = 'rgba(214, 230, 252, 0.4)'
-    ctx.lineWidth = 0.85
+    // 外缘翻出的叶瓣
+    ctx.strokeStyle = 'rgba(236, 226, 200, 0.4)'
+    ctx.lineWidth = 0.75
     ctx.beginPath()
-    ctx.moveTo(...P(4, 1))
-    ctx.bezierCurveTo(...P(26, -20), ...P(58, -24), ...P(72, -8))
+    ctx.moveTo(...P(5, 3))
+    ctx.bezierCurveTo(...P(24, -17), ...P(52, -25), ...P(70, -14))
     ctx.stroke()
 
-    // 叶脉：三道短弧
-    ctx.strokeStyle = 'rgba(214, 230, 252, 0.26)'
-    ctx.lineWidth = 0.7
-    for (const [a, b, c, d] of [[18, -6, 26, -14], [34, -8, 42, -17], [50, -6, 57, -14]] as const) {
-      ctx.beginPath()
-      ctx.moveTo(...P(a, b))
-      ctx.quadraticCurveTo(...P((a + c) / 2 + 2, (b + d) / 2 - 3), ...P(c, d))
-      ctx.stroke()
-    }
+    // 内侧分叉的小卷草（参考图里每一枚都有）
+    ctx.strokeStyle = 'rgba(236, 226, 200, 0.34)'
+    ctx.lineWidth = 0.65
+    ctx.beginPath()
+    ctx.moveTo(...P(22, -2))
+    ctx.bezierCurveTo(...P(18, -10), ...P(22, -16), ...P(28, -16))
+    ctx.bezierCurveTo(...P(24, -12), ...P(24, -7), ...P(28, -4))
+    ctx.stroke()
 
     // 卷心
-    ctx.fillStyle = 'rgba(226, 240, 255, 0.72)'
+    ctx.fillStyle = 'rgba(244, 238, 222, 0.78)'
     ctx.beginPath()
-    const [hx, hy] = P(56, 16)
-    ctx.arc(hx, hy, 1.7, 0, Math.PI * 2)
+    const [hx, hy] = P(53, 10)
+    ctx.arc(hx, hy, 1.6, 0, Math.PI * 2)
     ctx.fill()
 
-    // 垂下来的花彩（swag）：一道弧 + 两条坠饰
-    ctx.strokeStyle = 'rgba(214, 230, 252, 0.26)'
-    ctx.lineWidth = 0.8
-    ctx.beginPath()
-    ctx.moveTo(...P(10, 24))
-    ctx.quadraticCurveTo(...P(38, 46), ...P(64, 32))
-    ctx.stroke()
-    for (const [px, py] of [[26, 38], [48, 40]] as const) {
-      ctx.beginPath()
-      ctx.moveTo(...P(px, py))
-      ctx.quadraticCurveTo(...P(px + 2, py + 7), ...P(px - 1, py + 11))
-      ctx.stroke()
+    // 垂珠坠饰：链 + 两颗珠 + 一枚坠子
+    ctx.strokeStyle = 'rgba(236, 226, 200, 0.3)'
+    ctx.lineWidth = 0.6
+    const [bx, by] = P(16, 22)
+    ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(bx, by + 9 * k); ctx.stroke()
+    ctx.beginPath(); ctx.moveTo(bx, by + 13 * k); ctx.lineTo(bx, by + 20 * k); ctx.stroke()
+    ctx.fillStyle = 'rgba(240, 232, 212, 0.6)'
+    for (const dy of [11, 21.5]) {
+      ctx.beginPath(); ctx.arc(bx, by + dy * k, 1.15, 0, Math.PI * 2); ctx.fill()
     }
+    ctx.strokeStyle = 'rgba(236, 226, 200, 0.34)'
+    ctx.beginPath()
+    ctx.moveTo(bx, by + 25 * k)
+    ctx.bezierCurveTo(bx - 2.6 * k, by + 28 * k, bx - 2.6 * k, by + 32 * k, bx, by + 34 * k)
+    ctx.bezierCurveTo(bx + 2.6 * k, by + 32 * k, bx + 2.6 * k, by + 28 * k, bx, by + 25 * k)
+    ctx.stroke()
+
+    // 星芒
+    ctx.strokeStyle = 'rgba(240, 232, 212, 0.42)'
+    ctx.lineWidth = 0.55
+    const [sx, sy] = P(72, -20)
+    ctx.beginPath()
+    ctx.moveTo(sx - 3.4, sy); ctx.lineTo(sx + 3.4, sy)
+    ctx.moveTo(sx, sy - 3.4); ctx.lineTo(sx, sy + 3.4)
+    ctx.stroke()
   }
-  // 左大右小：不对称
-  leaf(-1, 1.06)
-  leaf(1, 0.84)
+  leaf(-1, 1.04)
+  leaf(1, 0.82)
 
   // 日蚀顶上的棕叶饰
-  ctx.strokeStyle = 'rgba(214, 230, 252, 0.46)'
+  ctx.strokeStyle = 'rgba(236, 226, 200, 0.46)'
   ctx.lineWidth = 0.9
   ctx.beginPath()
   ctx.moveTo(cx, L.eclipse - r - 4)
@@ -269,12 +287,12 @@ function paintHeadText(
   ctx.font = `400 40px ${HEAD_FONTS.script}`
   ctx.fillText('Remember', cx, L.script)
   ctx.shadowBlur = 0
-  ctx.fillStyle = 'rgba(234,240,248,0.62)'
+  ctx.fillStyle = 'rgba(248,244,234,0.82)'
   ctx.font = `400 11px ${cn}`
   ctx.letterSpacing = '6.5px'
   ctx.fillText('记 忆 的 柜 子', cx, L.zh)
   ctx.letterSpacing = '0px'
-  ctx.fillStyle = 'rgba(233,238,246,0.5)'
+  ctx.fillStyle = 'rgba(244,238,224,0.6)'
   ctx.font = `400 14px ${HEAD_FONTS.script}`
   ctx.fillText('everything he keeps of us', cx, L.hand)
 
@@ -292,7 +310,7 @@ function paintHeadText(
   ctx.font = `600 44px ${HEAD_FONTS.figure}`
   ctx.fillText(data.quotes.toLocaleString('en-US'), cx, L.figure)
   ctx.shadowBlur = 0
-  ctx.fillStyle = 'rgba(234,240,248,0.6)'
+  ctx.fillStyle = 'rgba(248,244,234,0.78)'
   ctx.font = `400 11px ${cn}`
   ctx.letterSpacing = '2px'
   ctx.fillText('句 原 话', cx, L.unit)
@@ -310,7 +328,7 @@ function paintHeadText(
     ctx.fillStyle = 'rgba(234,240,248,0.4)'; ctx.fill()
   }
 
-  ctx.fillStyle = 'rgba(234,240,248,0.72)'
+  ctx.fillStyle = 'rgba(248,244,234,0.9)'
   ctx.font = `400 12.5px ${cn}`
   ctx.fillText(`写成 ${data.cards} 张卡，串起 ${data.relations} 条关系`, cx, L.line)
 
