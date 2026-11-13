@@ -62,11 +62,26 @@ const bg = ref('')
 /** 头部那张水下画面用的底图（画进 canvas 的那一份） */
 let bgImg: HTMLImageElement | null = null
 
+/** 底图没加载成功的原因（看得见，别再静默退回） */
+const bgFail = ref('')
+
 function loadBg(): Promise<void> {
   return new Promise(resolve => {
     const img = new Image()
-    img.onload = () => { bg.value = BG_URL; bgImg = img; resolve() }
-    img.onerror = () => resolve()      // 没放图：静默退回兜底
+    img.onload = () => {
+      if (img.naturalWidth < 2) {       // 拿到的不是图（比如 nginx 回了 index.html）
+        bgFail.value = '底图地址返回的不是图片'
+        return resolve()
+      }
+      bg.value = BG_URL; bgImg = img; resolve()
+    }
+    img.onerror = () => {
+      // ⚠ 原来这里是 `resolve()` 一声不响退回兜底。
+      // 2026-11-13 她为此白看了五六轮：页面上明明是我那套 CSS 渐变，
+      // 可我一直以为底图在用，改了一堆无关的东西。**失败要看得见。**
+      bgFail.value = '底图加载失败：' + BG_URL
+      resolve()
+    }
     img.src = BG_URL
   })
 }
@@ -248,6 +263,7 @@ const subTitle = computed(() => sub.value === 'inbox' ? '沉淀信箱' : sub.val
         <p class="foot muted">心潮和脉的柜子还没做。记忆只有他能写，你能划掉、能贴便条——这里没有替他改写的按钮。</p>
       </template>
 
+      <p v-if="bgFail" class="err">{{ bgFail }}</p>
       <p v-else-if="error" class="err">{{ error }}</p>
       <p v-else-if="!water" class="muted load">正在数…</p>
     </div>
