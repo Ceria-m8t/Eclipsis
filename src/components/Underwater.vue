@@ -23,7 +23,13 @@ withDefaults(defineProps<{
   depth?: 'shallow' | 'deep'
   /** 底图亮度微调 0.6–1.4，默认 1 */
   gain?: number
-}>(), { src: '', depth: 'deep', gain: 1 })
+  /**
+   * 取图的位置（CSS background-position 的纵向值）。
+   * ⚠ 她那张 1151×2500 的鱼群图贴顶时，页面只显示到图的上半部分——鱼最密的那一段在下面，
+   * 所以她说「并没有把鱼加载在我这张图上面」。'center' 能把鱼群带进画面。
+   */
+  posY?: string
+}>(), { src: '', depth: 'deep', gain: 1, posY: 'center' })
 
 /** 浮尘 / 气泡 */
 const motes = Array.from({ length: 26 }, (_, i) => ({
@@ -47,7 +53,7 @@ const beams = [
 
 <template>
   <div class="uw" :class="[depth, src ? 'has-img' : 'no-img']" aria-hidden="true"
-       :style="{ '--gain': gain }">
+       :style="{ '--gain': gain, '--pos-y': posY }">
     <template v-if="src">
       <!-- ① 底图自己呼吸：光在变 -->
       <div class="plate" :style="{ backgroundImage: `url(${src})` }"></div>
@@ -85,18 +91,19 @@ const beams = [
 /* ── 底图那套 ── */
 .plate {
   position: absolute; inset: -4%;              /* 留出余量给推移，不露边 */
-  background-size: cover; background-position: center top;
+  background-size: cover; background-position: center var(--pos-y, center);
   will-change: transform, filter;
 }
 /* ① 呼吸：极慢缩放 + 推移，亮度/饱和度跟着起伏 */
+/* 呼吸：只做很慢的缩放推移 + 极轻的亮度起伏（±3%），**不动原图的调子** */
 .plate:not(.shine) {
-  filter: brightness(var(--gain)) saturate(1.02);
+  filter: brightness(var(--gain));
   animation: breathe 26s ease-in-out infinite alternate;
 }
 @keyframes breathe {
-  0% { transform: scale(1.02) translate3d(0, 0, 0); filter: brightness(calc(var(--gain) * 0.94)) saturate(1); }
-  50% { filter: brightness(calc(var(--gain) * 1.06)) saturate(1.06); }
-  100% { transform: scale(1.07) translate3d(-1.2%, 0.8%, 0); filter: brightness(calc(var(--gain) * 1.02)) saturate(1.03); }
+  0% { transform: scale(1.02) translate3d(0, 0, 0); filter: brightness(calc(var(--gain) * 0.98)); }
+  50% { filter: brightness(calc(var(--gain) * 1.03)); }
+  100% { transform: scale(1.07) translate3d(-1.2%, 0.8%, 0); filter: brightness(var(--gain)); }
 }
 
 /*
@@ -104,26 +111,34 @@ const beams = [
  *    再用 screen 叠回去。两层错着相位慢慢推移 → 亮的地方忽明忽暗。
  *    这是真实感的来源：闪的是底图里真正亮的那些像素，不是我画的一条渐变。
  */
+/*
+ * ⚠ 力度要很小：**底图是主角，这一层只是让它的光会呼吸**。
+ * 第一版 brightness(1.5) contrast(2.6) + opacity .5/.34 把整张图抬亮了 1.29 倍，
+ * 她那张鱼群图的中间调全被推成白、鱼都糊掉了，她的话是「并没有把鱼加载在我这张图上面」
+ * —— 其实图换对了，是被我洗白到认不出来。
+ * 现在：contrast 拉到 9 + brightness 压到 0.42，等于**只留最亮的那一小撮像素**
+ * （水面亮斑和光束芯），中间调一律变黑 → screen 叠上去等于不动。opacity 也砍到 1/3。
+ */
 .plate.shine {
   mix-blend-mode: screen;
-  filter: brightness(1.5) contrast(2.6) saturate(0.85) blur(2px);
-  mask-image: linear-gradient(180deg, #000 0%, rgba(0, 0, 0, 0.55) 46%, transparent 86%);
+  filter: brightness(0.42) contrast(9) saturate(0.9) blur(3px);
+  mask-image: linear-gradient(180deg, #000 0%, rgba(0, 0, 0, 0.5) 44%, transparent 82%);
 }
-.plate.shine.a { animation: shineA 17s ease-in-out infinite alternate; opacity: 0.5; }
-.plate.shine.b { animation: shineB 23s ease-in-out infinite alternate-reverse; opacity: 0.34; }
+.plate.shine.a { animation: shineA 17s ease-in-out infinite alternate; }
+.plate.shine.b { animation: shineB 23s ease-in-out infinite alternate-reverse; }
 @keyframes shineA {
-  0% { transform: scale(1.04) translate3d(-1%, 0, 0); opacity: 0.28; }
-  45% { opacity: 0.6; }
-  100% { transform: scale(1.1) translate3d(1.6%, 1%, 0); opacity: 0.4; }
+  0% { transform: scale(1.04) translate3d(-1%, 0, 0); opacity: 0.1; }
+  45% { opacity: 0.22; }
+  100% { transform: scale(1.1) translate3d(1.6%, 1%, 0); opacity: 0.14; }
 }
 @keyframes shineB {
-  0% { transform: scale(1.08) translate3d(1.4%, 0.6%, 0) ; opacity: 0.2; }
-  60% { opacity: 0.46; }
-  100% { transform: scale(1.03) translate3d(-1.2%, 0, 0); opacity: 0.3; }
+  0% { transform: scale(1.08) translate3d(1.4%, 0.6%, 0); opacity: 0.07; }
+  60% { opacity: 0.17; }
+  100% { transform: scale(1.03) translate3d(-1.2%, 0, 0); opacity: 0.11; }
 }
 
 /* ③ 焦散扰动 */
-.caustic { position: absolute; inset: 0; mix-blend-mode: screen; opacity: 0.5; }
+.caustic { position: absolute; inset: 0; mix-blend-mode: screen; opacity: 0.22; }
 .caustic i {
   position: absolute; left: -20%; right: -20%; top: -10%; height: 62%;
   background:
@@ -180,13 +195,13 @@ const beams = [
 }
 
 /* 浅水（头部那一段）：光更多 */
-.uw.shallow .plate.shine.a { opacity: 0.62; }
-.uw.shallow .caustic { opacity: 0.68; }
+
+.uw.shallow .caustic { opacity: 0.3; }
 
 /* 她在系统里开了「减少动态效果」：画面还在，但不动 */
 @media (prefers-reduced-motion: reduce) {
   .plate, .plate.shine, .caustic i, .shafts i, .motes i { animation: none !important; }
-  .plate.shine.a { opacity: 0.42; }
-  .plate.shine.b { opacity: 0.26; }
+  .plate.shine.a { opacity: 0.16; }
+  .plate.shine.b { opacity: 0.1; }
 }
 </style>

@@ -135,9 +135,11 @@ void main(){
   float hy = h(uv + vec2(0., px.y)) - h(uv - vec2(0., px.y));
   vec2 n = vec2(hx, hy);
 
-  // 折射：字跟着晃
+  // 折射：字跟着晃。带上 alpha —— 画布是透明的，底图由底下那层透上来（见 memory-head.ts）
   vec2 q = uv + breathe - n * ${POND.distort};
-  vec3 col = texture(page, vec2(q.x, 1.0 - q.y)).rgb;
+  vec4 src = texture(page, vec2(q.x, 1.0 - q.y));
+  vec3 col = src.rgb;
+  float a = src.a;
 
   // 焦散：波峰处把光聚一点（很淡）
   float lap = h(uv + vec2(px.x, 0.)) + h(uv - vec2(px.x, 0.))
@@ -149,7 +151,12 @@ void main(){
   float spec = pow(clamp(dot(nrm, normalize(vec3(-0.4, 0.72, 0.56))), 0., 1.), 16.0);
   col += mix(vec3(0.72, 0.84, 1.0), vec3(1.0, 0.84, 0.92), 0.4) * spec * ${POND.spec};
 
-  o = vec4(col, 1.0);
+  // ⚠ 透明处（没有字的地方）**只在真有波的时候**才给一点光。
+  // 不设这个门槛的话，焦散和高光会把整块头部染白，底图的细节全没了
+  // （量到头部细节掉到 6.56，而卡片区是 10.8）。
+  float wave = smoothstep(0.004, 0.02, length(n));
+  float light = (clamp(-lap * 8.0, 0.0, 1.0) * ${POND.caustic} + spec * ${POND.spec}) * wave;
+  o = vec4(col, max(a, light));
 }`
 
 /**
@@ -336,10 +343,9 @@ export class Pond {
   // ── 内部 ──
 
   private init() {
-    const alpha = (this.opts.mode || 'refract') === 'overlay'
-    const gl = this.canvas.getContext('webgl2', alpha
-      ? { alpha: true, premultipliedAlpha: true, antialias: false }
-      : { alpha: false, antialias: false })
+    // 两种模式都要透明底：
+    // overlay 只画波（压在页面上）；refract 在有底图时只折射**字**，底图由底下那层透上来。
+    const gl = this.canvas.getContext('webgl2', { alpha: true, premultipliedAlpha: true, antialias: false })
     if (!gl) return
     if (!gl.getExtension('EXT_color_buffer_half_float') && !gl.getExtension('EXT_color_buffer_float')) return
     this.gl = gl
@@ -356,7 +362,9 @@ export class Pond {
       names.reduce<Record<string, WebGLUniformLocation | null>>((m, n) => { m[n] = gl.getUniformLocation(p, n); return m }, {})
     this.uS = u(this.simP, ['cur', 'prev', 'px', 'damp', 'drops[0]', 'nDrops'])
     this.uD = u(this.drawP, ['height', 'page', 'px', 't'])
-    if (this.mode === 'overlay') { gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE) }   // 只加光，见 OVERLAY_FS
+    gl.enable(gl.BLEND)
+    if (this.mode === 'overlay') gl.blendFunc(gl.ONE, gl.ONE)                 // 只加光，见 OVERLAY_FS
+    else gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA)                         // premultiplied：透明处露出底图
 
     this.fb = [this.makeFbo(), this.makeFbo(), this.makeFbo()]
     this.pageTex = gl.createTexture()
@@ -399,6 +407,7 @@ export class Pond {
   private uploadPage() {
     const gl = this.gl!
     gl.bindTexture(gl.TEXTURE_2D, this.pageTex)
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true)
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.src)
     for (const k of [gl.TEXTURE_MIN_FILTER, gl.TEXTURE_MAG_FILTER]) gl.texParameteri(gl.TEXTURE_2D, k, gl.LINEAR)
     for (const k of [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T]) gl.texParameteri(gl.TEXTURE_2D, k, gl.CLAMP_TO_EDGE)
@@ -496,9 +505,9 @@ export class Pond {
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, null)
     gl.viewport(0, 0, this.canvas.width, this.canvas.height)
-    if (this.mode === 'overlay') gl.clearColor(0, 0, 0, 0)
     bind(this.drawP)
-    if (this.mode === 'overlay') gl.clear(gl.COLOR_BUFFER_BIT)
+    gl.clearColor(0, 0, 0, 0)
+    gl.clear(gl.COLOR_BUFFER_BIT)
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.fb[1]!.tex); gl.uniform1i(this.uD.height!, 0)
     if (this.mode === 'refract') { gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.pageTex); gl.uniform1i(this.uD.page!, 1) }
     gl.uniform2f(this.uD.px!, 1 / POND.sim, 1 / POND.sim)

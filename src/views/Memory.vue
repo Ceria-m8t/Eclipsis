@@ -104,10 +104,20 @@ function safeTop(): number {
 }
 
 function paint(ctx: CanvasRenderingContext2D, w: number, h: number, t = 0) {
-  paintHead(ctx, w, h, headData.value, { layout: headLayout(safeTop()), cn: cnFamily(), t, bg: bgImg })
+  paintHead(ctx, w, h, headData.value, {
+    layout: headLayout(safeTop()), cn: cnFamily(), t, bg: bgImg,
+    pageH: pageEl.value?.clientHeight || window.innerHeight,   // 和底下那层取同一块图，接缝才连得上
+  })
 }
 
 async function startWater() {
+  // ⚠ 有底图时**不起水面**（她 2026-11-13）。
+  // 原因：水面是「把一块自己画的内容送进 WebGL 再折射」，而底图模式下头部不画底图了
+  // （两层各 cover 一次同一张图，接缝必然错位），折射的源就只剩文字；
+  // 透明处越折射越白，量到头部细节从 9.5 掉到 6.6，她的鱼群就是这么没的。
+  // 底图本身的动效由 Underwater.vue 给（呼吸 + 亮部闪动 + 焦散 + 浮尘），够了。
+  // 要让字也跟着晃，得先把底图也画进那张离屏画布并和下层严格对齐 —— 以后再说。
+  if (bg.value) return
   if (pond || !pondSupported()) return
   await nextTick()
   const host = headEl.value, scroller = scrollEl.value, page = pageEl.value
