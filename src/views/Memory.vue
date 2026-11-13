@@ -44,6 +44,27 @@ const OBJ: Record<string, string> = {
   quotes: 'quote', review: 'eye', inbox: 'inbox', dropped: 'archive', digest: 'moon',
 }
 
+/**
+ * 底图（她 2026-11-13 定：「我们要不要直接放实际底图上去」——CSS 渐变画不出真实光束，
+ * 再怎么调都是塑料条）。放到这个路径就自动生效，没有就退回纯 CSS 的兜底：
+ *   public/assets/rooms/basement/memory-water.jpg
+ * 和房间底图同一套规矩（/assets/rooms/<房间>/...，nginx 那边缓存 30 天，换图要改文件名）。
+ */
+const BG_URL = '/assets/rooms/basement/memory-water.jpg'
+/** 底图在不在（不在就用兜底，不要显示破图） */
+const bg = ref('')
+/** 头部那张水下画面用的底图（画进 canvas 的那一份） */
+let bgImg: HTMLImageElement | null = null
+
+function loadBg(): Promise<void> {
+  return new Promise(resolve => {
+    const img = new Image()
+    img.onload = () => { bg.value = BG_URL; bgImg = img; resolve() }
+    img.onerror = () => resolve()      // 没放图：静默退回兜底
+    img.src = BG_URL
+  })
+}
+
 const router = useRouter()
 function goBack() {
   if (window.history.state?.back) router.back()
@@ -77,7 +98,7 @@ function safeTop(): number {
 }
 
 function paint(ctx: CanvasRenderingContext2D, w: number, h: number, t = 0) {
-  paintHead(ctx, w, h, headData.value, { layout: headLayout(safeTop()), cn: cnFamily(), t })
+  paintHead(ctx, w, h, headData.value, { layout: headLayout(safeTop()), cn: cnFamily(), t, bg: bgImg })
 }
 
 async function startWater() {
@@ -103,6 +124,7 @@ async function startWater() {
 }
 
 onMounted(async () => {
+  await loadBg()          // 先知道有没有底图，再起水面（头部那张画面要用它）
   void startWater()
   try {
     const r = await fetch('/api/eclipsis/memory/panel', { cache: 'no-store' })
@@ -133,7 +155,7 @@ const subTitle = computed(() => sub.value === 'inbox' ? '沉淀信箱' : sub.val
 <template>
   <div class="mem-page shell-page" ref="pageEl">
     <!-- 水下：光从上面射进来，会动（水面亮边 / 四道光柱 / 焦散 / 浮尘） -->
-    <Underwater depth="shallow" />
+    <Underwater :src="bg" depth="shallow" />
     <!-- 整页四角：洛可可涡卷角花（不是直角刻线——那是新古典，方向正好相反） -->
     <div class="edge">
       <Roc name="corner" class="cnr tl" /><Roc name="corner" class="cnr tr" />

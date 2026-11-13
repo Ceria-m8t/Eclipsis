@@ -86,13 +86,19 @@ export function paintHead(
   w: number,
   h: number,
   data: HeadData | null,
-  opts: { layout?: HeadLayout; cn?: string; t?: number } = {},
+  opts: { layout?: HeadLayout; cn?: string; t?: number; bg?: HTMLImageElement | null } = {},
 ): void {
   const L = opts.layout || headLayout(0)
   const cn = opts.cn || '"Noto Serif SC", serif'
   const t = opts.t ?? 0
 
-  // ── 底：光从上面来（和 Underwater.vue 同一套，这里是画进水下画面的那一份）──
+  // ── 底：有底图就用底图（她定的），没有才用渐变那套 ──
+  if (opts.bg && opts.bg.naturalWidth > 0) {
+    paintPlate(ctx, w, h, opts.bg, t)
+    paintHeadText(ctx, w, data, L, cn)
+    return
+  }
+
   const g = ctx.createLinearGradient(0, 0, 0, h)
   g.addColorStop(0, '#2f5d8e')      // 顶上：透进来的天光
   g.addColorStop(0.22, '#1e4470')
@@ -139,6 +145,20 @@ export function paintHead(
   }
   ctx.restore()
 
+  paintHeadText(ctx, w, data, L, cn)
+}
+
+/**
+ * 题头的字和花饰（两条分支共用：有底图走底图，没底图走渐变）。
+ * 洛可可那几笔（不对称涡卷 + 花彩 + 棕叶饰）也在这里，所以换不换底图都有。
+ */
+function paintHeadText(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  data: HeadData | null,
+  L: HeadLayout,
+  cn: string,
+): void {
   ctx.textBaseline = 'alphabetic'
   ctx.textAlign = 'center'
   const cx = w / 2
@@ -261,6 +281,39 @@ export function paintHead(
   }
 
   ctx.textAlign = 'left'
+}
+
+/**
+ * 底图那一份（她定的做法）：cover 铺满 + 极慢呼吸 + 把亮部再叠一层做闪动。
+ * 和 Underwater.vue 同一套手法 —— 闪的是底图里真正亮的像素，不是画的渐变。
+ */
+function paintPlate(ctx: CanvasRenderingContext2D, w: number, h: number, img: HTMLImageElement, t: number): void {
+  // 呼吸：极慢缩放 + 推移
+  const k = 1.04 + 0.03 * (0.5 + 0.5 * Math.sin(t * 0.24))
+  const dx = Math.sin(t * 0.18) * w * 0.012
+  const dy = Math.cos(t * 0.15) * h * 0.01
+  const s = Math.max((w * k) / img.naturalWidth, (h * k) / img.naturalHeight)
+  const dw = img.naturalWidth * s, dh = img.naturalHeight * s
+  const ox = (w - dw) / 2 + dx, oy = (h - dh) / 2 + dy
+
+  ctx.save()
+  ctx.filter = `brightness(${(0.96 + 0.08 * (0.5 + 0.5 * Math.sin(t * 0.21))).toFixed(3)})`
+  ctx.drawImage(img, ox, oy, dw, dh)
+  ctx.filter = 'none'
+
+  // 亮部闪动：同一张图提亮提对比再 screen 叠回去，和底层错着相位
+  const flare = 0.22 + 0.26 * (0.5 + 0.5 * Math.sin(t * 0.42 + 1.1))
+  ctx.globalCompositeOperation = 'screen'
+  ctx.globalAlpha = flare
+  ctx.filter = 'brightness(1.45) contrast(2.4) blur(2px)'
+  const k2 = k * 1.03
+  const s2 = Math.max((w * k2) / img.naturalWidth, (h * k2) / img.naturalHeight)
+  const dw2 = img.naturalWidth * s2, dh2 = img.naturalHeight * s2
+  ctx.drawImage(img, (w - dw2) / 2 - dx * 1.4, (h - dh2) / 2 - dy, dw2, dh2)
+  ctx.restore()
+  ctx.globalAlpha = 1
+  ctx.globalCompositeOperation = 'source-over'
+  ctx.filter = 'none'
 }
 
 /** 读屏软件读的是这一份（画布里的字它看不见）。 */

@@ -132,10 +132,38 @@ describe('全局那一层默认关着（她手机上出现椭圆弧和透镜斑�
   })
 })
 
+describe('底图（她定：CSS 渐变画不出真实光束，直接放实际底图）', () => {
+  it('有底图就画图，不再画那套渐变光束（她说像塑料条）', () => {
+    const img = { naturalWidth: 1200, naturalHeight: 1600 } as HTMLImageElement
+    const probe = paintProbe({ quotes: 1, cards: 1, relations: 1 }, img)
+    expect(probe.drawn).toBeGreaterThan(0)          // 画了底图
+    expect(probe.gradients.linear).toBe(0)          // 没有那套渐变底和光束
+  })
+
+  it('没底图才用渐变兜底（不显示破图）', () => {
+    const probe = paintProbe({ quotes: 1, cards: 1, relations: 1 })
+    expect(probe.drawn).toBe(0)
+    expect(probe.gradients.linear).toBeGreaterThan(0)
+  })
+
+  it('两条分支的字一样（换不换底图，她看到的内容不变）', () => {
+    const img = { naturalWidth: 800, naturalHeight: 600 } as HTMLImageElement
+    const a = paintProbe({ quotes: 8859, cards: 206, relations: 150 }, img).texts.join('|')
+    const b = paintProbe({ quotes: 8859, cards: 206, relations: 150 }).texts.join('|')
+    expect(a).toBe(b)
+    expect(a).toContain('8,859')
+  })
+})
+
 /** happy-dom 没有真的 2D 上下文，自己记一份调用（只要能看出画了什么字、用了什么字体） */
-function paintProbe(data: { quotes: number; cards: number; relations: number } | null) {
+function paintProbe(
+  data: { quotes: number; cards: number; relations: number; week?: string } | null,
+  bg?: HTMLImageElement,
+) {
   const texts: string[] = []
   const fonts: string[] = []
+  const gradients = { linear: 0, radial: 0 }
+  let drawn = 0
   const grad = { addColorStop() {} }
   const ctx = {
     canvas: { width: 390, height: 300 },
@@ -143,12 +171,15 @@ function paintProbe(data: { quotes: number; cards: number; relations: number } |
     get font() { return fonts.at(-1) || '' },
     fillStyle: '', strokeStyle: '', lineWidth: 1, textAlign: 'left', textBaseline: 'alphabetic',
     letterSpacing: '0px', shadowColor: '', shadowBlur: 0,
-    createLinearGradient: () => grad, createRadialGradient: () => grad,
+    createLinearGradient: () => { gradients.linear++; return grad },
+    createRadialGradient: () => { gradients.radial++; return grad },
+    drawImage() { drawn++ },
+    globalAlpha: 1, globalCompositeOperation: 'source-over', filter: 'none',
     fillRect() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, clearRect() {},
     save() {}, restore() {}, arc() {}, closePath() {}, fill() {}, setLineDash() {},
     bezierCurveTo() {}, quadraticCurveTo() {},
     fillText(t: string) { texts.push(t) },
   } as unknown as CanvasRenderingContext2D
-  paintHead(ctx, 390, headLayout(0).height, data, { cn: '"Noto Serif SC", serif' })
-  return { texts, fonts }
+  paintHead(ctx, 390, headLayout(0).height, data, { cn: '"Noto Serif SC", serif', bg })
+  return { texts, fonts, gradients, drawn }
 }
