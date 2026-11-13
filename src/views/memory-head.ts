@@ -92,42 +92,48 @@ export function paintHead(
   const cn = opts.cn || '"Noto Serif SC", serif'
   const t = opts.t ?? 0
 
-  // ── 底：光从上面来 ──
+  // ── 底：光从上面来（和 Underwater.vue 同一套，这里是画进水下画面的那一份）──
   const g = ctx.createLinearGradient(0, 0, 0, h)
-  g.addColorStop(0, '#36618f')      // 顶上：透进来的天光
-  g.addColorStop(0.3, '#24456f')
-  g.addColorStop(0.62, '#172e52')
-  g.addColorStop(1, '#101f3a')      // 往下才沉成深蓝
+  g.addColorStop(0, '#2f5d8e')      // 顶上：透进来的天光
+  g.addColorStop(0.22, '#1e4470')
+  g.addColorStop(0.5, '#142f55')
+  g.addColorStop(1, '#0c1e3a')      // 往下才沉成深蓝
   ctx.fillStyle = g
   ctx.fillRect(0, 0, w, h)
 
-  // 水面那一条：顶上最亮
-  const sf = ctx.createLinearGradient(0, 0, 0, h * 0.5)
-  sf.addColorStop(0, 'rgba(226, 240, 255, 0.46)')
-  sf.addColorStop(0.28, 'rgba(188, 218, 252, 0.14)')
-  sf.addColorStop(1, 'rgba(188, 218, 252, 0)')
+  // 水面那块亮斑：光的来处（她参考图里光是从一点进来的，不是凭空出现的竖条）
+  const src = { x: w * 0.48, y: -h * 0.06 }
+  const sf = ctx.createRadialGradient(src.x, src.y, 0, src.x, src.y, h * 0.62)
+  sf.addColorStop(0, 'rgba(236, 248, 255, 0.8)')
+  sf.addColorStop(0.3, 'rgba(198, 228, 255, 0.26)')
+  sf.addColorStop(1, 'rgba(198, 228, 255, 0)')
   ctx.fillStyle = sf
-  ctx.fillRect(0, 0, w, h * 0.5)
+  ctx.fillRect(0, 0, w, h)
 
-  // 四道光柱（和 Underwater 的那四道同源，这里是画在水下画面里的那一份）
+  // 光束：从那块亮斑**扇形放射**下来，上窄下宽，各自错相位地闪
   ctx.save()
-  for (const [x, wid, a, tilt, ph] of [
-    [w * 0.04, w * 0.34, 0.3, 0.17, 0],
-    [w * 0.3, w * 0.26, 0.24, 0.09, 1.3],
-    [w * 0.58, w * 0.4, 0.18, -0.1, 2.1],
-    [w * 0.86, w * 0.3, 0.22, -0.19, 3.4],
+  for (const [deg, wid, a, ph] of [
+    [-27, 0.09, 0.5, 0], [-17, 0.15, 0.68, 1.1], [-9, 0.07, 0.42, 2.3], [-2, 0.19, 0.78, 0.5],
+    [6, 0.11, 0.55, 3.1], [14, 0.23, 0.46, 1.8], [23, 0.08, 0.38, 4.2], [31, 0.13, 0.3, 2.7],
   ] as const) {
-    const sway = Math.sin(t * 0.12 + ph) * w * 0.03
-    const rg = ctx.createLinearGradient(x + sway, 0, x + sway + tilt * h, h)
-    rg.addColorStop(0, `rgba(198, 220, 255, ${a})`)
-    rg.addColorStop(0.58, `rgba(198, 220, 255, ${a * 0.1})`)
-    rg.addColorStop(1, 'rgba(198, 220, 255, 0)')
+    const flare = 0.55 + 0.45 * (0.5 + 0.5 * Math.sin(t * 0.6 + ph))   // 闪
+    const rad = ((deg + Math.sin(t * 0.22 + ph) * 2.5) * Math.PI) / 180
+    const len = h * 1.5
+    const topW = w * wid * 0.3, botW = w * wid * 1.5
+    const ex = src.x + Math.sin(rad) * len, ey = src.y + Math.cos(rad) * len
+    const rg = ctx.createLinearGradient(src.x, src.y, ex, ey)
+    rg.addColorStop(0, `rgba(226, 244, 255, ${a * flare * 0.95})`)
+    rg.addColorStop(0.22, `rgba(198, 228, 255, ${a * flare * 0.5})`)
+    rg.addColorStop(0.52, `rgba(170, 208, 248, ${a * flare * 0.18})`)
+    rg.addColorStop(0.82, 'rgba(170, 208, 248, 0)')
     ctx.fillStyle = rg
+    // 垂直于光束方向撑开宽度
+    const nx = Math.cos(rad), ny = -Math.sin(rad)
     ctx.beginPath()
-    ctx.moveTo(x + sway - wid / 2, 0)
-    ctx.lineTo(x + sway + wid / 2, 0)
-    ctx.lineTo(x + sway + wid / 2 + tilt * h, h)
-    ctx.lineTo(x + sway - wid / 2 + tilt * h, h)
+    ctx.moveTo(src.x - nx * topW, src.y - ny * topW)
+    ctx.lineTo(src.x + nx * topW, src.y + ny * topW)
+    ctx.lineTo(ex + nx * botW, ey + ny * botW)
+    ctx.lineTo(ex - nx * botW, ey - ny * botW)
     ctx.closePath()
     ctx.fill()
   }

@@ -205,8 +205,8 @@ export interface PondOptions {
    * overlay = 只画波本身压在内容上面（整页那一层，DOM 照常能点）。默认 refract。
    */
   mode?: 'refract' | 'overlay'
-  /** refract 模式：把要泡进水里的那块内容画进离屏画布（CSS 像素坐标，不用管 DPR） */
-  paint?: (ctx: CanvasRenderingContext2D, w: number, h: number) => void
+  /** refract 模式：把要泡进水里的那块内容画进离屏画布（CSS 像素坐标，不用管 DPR；t = 秒，给会动的光用） */
+  paint?: (ctx: CanvasRenderingContext2D, w: number, h: number, t: number) => void
   /** 在哪一层听手指（默认 host；头部在滚动区里时传滚动容器，免得抢走滑动） */
   touch?: HTMLElement
   /** WebGL 彻底用不了（上下文丢了拿不回来）时通知外面退回 DOM 版 */
@@ -227,6 +227,7 @@ export class Pond {
   private pageTex: WebGLTexture | null = null
   private drops: Array<[number, number, number]> = []
   private raf = 0
+  private paintTimer = 0
   private hot = 0
   private settle = 0
   private t0 = 0
@@ -278,6 +279,21 @@ export class Pond {
     this.layout()
   }
 
+  /**
+   * 让水下那张画面自己活起来（光束闪动）：按 fps 重画 paint。
+   * 为什么不每帧：paint 是 2D canvas 画的，每帧重画整块很费；光束很慢，8fps 足够。
+   * 她要的「海底光束的动态感」—— 静止的光再亮也是死的。
+   */
+  animatePaint(fps = 8): void {
+    if (this.paintTimer || this.mode !== 'refract' || !this.opts.paint) return
+    const step = () => {
+      if (this.dead) return
+      if (!document.hidden && this.onScreen) this.repaint()
+      this.paintTimer = window.setTimeout(step, 1000 / fps)
+    }
+    this.paintTimer = window.setTimeout(step, 1000 / fps)
+  }
+
   /** 内容变了（取到数、字体加载完、尺寸变了）重画一次水下的画面 */
   repaint(): void {
     if (this.mode === 'overlay') return      // 这一层不画水下的画面，只画波
@@ -286,7 +302,7 @@ export class Pond {
     this.src.height = Math.max(1, Math.round(this.h * this.dpr))
     this.sctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0)
     this.sctx.clearRect(0, 0, this.w, this.h)
-    this.opts.paint!(this.sctx, this.w, this.h)
+    this.opts.paint!(this.sctx, this.w, this.h, (performance.now() - this.t0) / 1000)
     this.uploadPage()
     this.hot = Math.max(this.hot, 2)   // 至少再出一帧，把新画面推上屏
     this.start()
@@ -295,6 +311,7 @@ export class Pond {
   destroy(): void {
     this.dead = true
     cancelAnimationFrame(this.raf)
+    if (this.paintTimer) { clearTimeout(this.paintTimer); this.paintTimer = 0 }
     this.ro.disconnect()
     this.io.disconnect()
     const t = this.opts.touch || this.opts.host

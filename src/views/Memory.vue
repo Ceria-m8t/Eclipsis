@@ -76,8 +76,8 @@ function safeTop(): number {
   return parseFloat(getComputedStyle(el).getPropertyValue('padding-top')) || 0
 }
 
-function paint(ctx: CanvasRenderingContext2D, w: number, h: number) {
-  paintHead(ctx, w, h, headData.value, { layout: headLayout(safeTop()), cn: cnFamily() })
+function paint(ctx: CanvasRenderingContext2D, w: number, h: number, t = 0) {
+  paintHead(ctx, w, h, headData.value, { layout: headLayout(safeTop()), cn: cnFamily(), t })
 }
 
 async function startWater() {
@@ -98,6 +98,8 @@ async function startWater() {
     await document.fonts.ready
   } catch { /* 字体加载不了就用系统字，不影响水面 */ }
   pond?.repaint()
+  // 水下那张画面自己活起来：光束闪动（她要的「海底光束的动态感」）
+  pond?.animatePaint()
 }
 
 onMounted(async () => {
@@ -115,6 +117,10 @@ onBeforeUnmount(() => { pond?.destroy(); pond = null; stopGlobalPond() })
 const maxDaily = computed(() => Math.max(1, ...(data.value?.daily ?? []).map(d => d.n)))
 const todayNone = computed(() => (data.value?.daily.at(-1)?.n ?? 0) === 0)
 
+/** 抽屉编号用罗马数字（参考图里那种 No. VII / Pl. VI 的标号感） */
+const ROMAN = ['', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII']
+function roman(n: number): string { return ROMAN[n] || String(n) }
+
 function open(c: Cell) {
   if (!c.to) return
   if (c.to === 'galaxy') router.push('/galaxy')
@@ -127,7 +133,7 @@ const subTitle = computed(() => sub.value === 'inbox' ? '沉淀信箱' : sub.val
 <template>
   <div class="mem-page shell-page" ref="pageEl">
     <!-- 水下：光从上面射进来，会动（水面亮边 / 四道光柱 / 焦散 / 浮尘） -->
-    <Underwater />
+    <Underwater depth="shallow" />
     <!-- 整页四角：洛可可涡卷角花（不是直角刻线——那是新古典，方向正好相反） -->
     <div class="edge">
       <Roc name="corner" class="cnr tl" /><Roc name="corner" class="cnr tr" />
@@ -173,8 +179,10 @@ const subTitle = computed(() => sub.value === 'inbox' ? '沉淀信箱' : sub.val
           </div>
           <!-- 器物抽屉：一行一件（她：不是等大方格） -->
           <div class="drawers">
-            <button v-for="c in s.cells" :key="c.key" class="drawer drawer-face"
+            <button v-for="(c, i) in s.cells" :key="c.key" class="drawer drawer-face"
                     :class="{ empty: c.todo, tappable: !!c.to }" @click="open(c)">
+              <span class="edge-l"></span>
+              <span class="idx">{{ roman(i + 1) }}</span>
               <span class="obj"><Roc name="bracket" class="bracket" /><Orn :name="OBJ[c.key] || 'cards'" /></span>
               <span class="txt">
                 <b>{{ c.name }}</b>
@@ -278,14 +286,29 @@ h1 { font-family: "Pinyon Script", cursive; font-weight: 400; font-size: 36px; l
 .big { margin: 14px 0 0; font-family: "Cormorant Garamond", serif; font-size: 42px; line-height: 1; color: #f3f6fb; text-shadow: 0 0 18px rgba(176, 202, 255, 0.32); }
 .sub { margin: 4px 0 0; font-size: 12px; color: var(--moon-2); }
 
-/* 抽屉面：刻线玻璃 + 顶沿虹彩 + 内沿细框 */
+/* 抽屉面：刻线玻璃 + 顶沿虹彩 + 二重内框 + 极细斜纹底（繁复的密度靠层数，不靠加重颜色） */
 .drawer-face {
   position: relative; border: 1px solid var(--hair); overflow: hidden; isolation: isolate;
-  background: linear-gradient(180deg, rgba(233, 238, 246, 0.085), rgba(233, 238, 246, 0.024));
+  background:
+    repeating-linear-gradient(118deg, rgba(233, 238, 246, 0.028) 0 1px, transparent 1px 7px),
+    linear-gradient(180deg, rgba(233, 238, 246, 0.095), rgba(233, 238, 246, 0.026));
   backdrop-filter: blur(11px) saturate(160%);
-  box-shadow: inset 0 1px 0 rgba(233, 238, 246, 0.13), 0 10px 26px -20px #000;
+  box-shadow:
+    inset 0 1px 0 rgba(233, 238, 246, 0.16),
+    inset 0 -1px 0 rgba(8, 18, 34, 0.3),
+    0 10px 26px -20px #000;
 }
-.drawer-face::after { content: ""; position: absolute; inset: 3px; border: 1px solid var(--hair-2); pointer-events: none; }
+/* 二重内框：外细内虚 */
+.drawer-face::after {
+  content: ""; position: absolute; inset: 3px; pointer-events: none;
+  border: 1px solid var(--hair-2);
+  box-shadow: inset 0 0 0 2.5px rgba(8, 18, 34, 0.12), inset 0 0 0 3.5px rgba(233, 238, 246, 0.05);
+}
+/* 顶沿一道虹彩：我们玻璃那道色散 */
+.drawer-face::before {
+  content: ""; position: absolute; left: 8%; right: 8%; top: 0; height: 1px; pointer-events: none;
+  background: linear-gradient(90deg, transparent, var(--iris-a) 32%, var(--iris-b) 68%, transparent);
+}
 
 .spark { padding: 11px 13px; margin-bottom: 18px; }
 .spark-head { display: flex; justify-content: space-between; font-size: 12.5px; color: var(--moon-2); }
@@ -308,8 +331,9 @@ h1 { font-family: "Pinyon Script", cursive; font-weight: 400; font-size: 36px; l
   text-align: left; font-family: inherit; color: inherit;
   transition: transform 0.22s cubic-bezier(.34, 1.56, .64, 1), background 0.22s;
 }
-.drawer::before {
-  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 1px;
+/* 抽屉左沿一道竖虹彩（横的那道在 .drawer-face::before） */
+.drawer .edge-l {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 1px;
   background: linear-gradient(180deg, transparent, var(--iris-a) 45%, var(--iris-b) 70%, transparent);
 }
 .drawer.tappable:active { transform: scale(0.985); background: linear-gradient(180deg, rgba(233, 238, 246, 0.12), rgba(233, 238, 246, 0.04)); }
@@ -321,7 +345,12 @@ h1 { font-family: "Pinyon Script", cursive; font-weight: 400; font-size: 36px; l
 }
 .obj .bracket { position: absolute; inset: 0; width: 40px; height: 40px; color: rgba(197, 214, 245, 0.5); }
 .obj :deep(svg.orn) { width: 20px; height: 20px; }
-.txt { flex: 1; min-width: 0; }
+/* 小字标号：压在抽屉左上角 */
+.idx {
+  position: absolute; left: 7px; top: 5px; font-family: "Cormorant Garamond", serif;
+  font-size: 8.5px; letter-spacing: 1.6px; color: rgba(197, 214, 245, 0.42);
+}
+.txt { flex: 1; min-width: 0; padding-left: 2px; }
 .txt b { display: block; font-size: 13.5px; font-weight: 600; letter-spacing: 0.6px; }
 .txt .cen { display: block; font-size: 8px; letter-spacing: 2.3px; color: var(--moon-3); margin-top: 2px; }
 .txt u { display: block; text-decoration: none; font-size: 10.5px; color: var(--moon-2); margin-top: 4px; line-height: 1.55; }
