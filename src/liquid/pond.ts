@@ -1,0 +1,425 @@
+// 水面（她 2026-11-13 看完 art/mockups/pond2.html 说「应该可以了」的那一版参数）。
+//
+// 做法：把一块内容先画进离屏画布 → 当成「水下的画面」送进 WebGL2 → 高度场折射它。
+// 为什么不用 SVG 置换滤镜：iPhone Safari 上基本不工作（第一版她什么都看不到）。
+// 为什么只盖住头部一块、不盖整页：底下那些格子要能点、能滚、要跟着她在设置里换的字体，
+// 整页塞进 WebGL 就全废了（样式稿里整页进水是作弊——那一页没有一个能点的东西）。
+//
+// 水面**不自己动**（她说那张截图是截到了点下去那一瞬间）：没人碰就只有一点点看不见的呼吸，
+// 安静一会儿之后连 rAF 都停掉，最后一帧留在屏幕上 —— 水面上还留着手指划过的形状。
+//
+// ⚠ 改参数之前看 交接-2026-11-13 第 7 条：**波方程有稳定上限**。
+// 传播系数 > 0.5 且每帧推多步会自激（她两次看到「一大团」）。要更快只能加密网格 + 多推步数。
+// 步数变了阻尼要跟着补（dampFor）。
+
+export const POND = {
+  sim: 768,          // 高度场网格；格子更细 → 同样步数里波走过的屏幕距离更远
+  steps: 4,          // 每帧推几步
+  prop: 0.42,        // 传播系数（≤ 0.5，再大就自激）
+  damp: 0.9985,      // 阻尼（4 步用的值，见 dampFor）
+  cap: 0.7,          // 幅度封顶，不许长成一大块
+  press: 0.2,        // 按下去的力度
+  drag: 0.29,        // 划动的力度
+  distort: 0.14,     // 折射强度（字跟着晃的幅度）
+  caustic: 0.1,      // 焦散
+  spec: 0.13,        // 粉蓝色散高光
+  blur: 0.9,         // 高度场取样的九点模糊半径（px），形状软下来，不出现清晰同心环
+  strokeGap: 5,      // 两次触摸采样之间每隔几 px 补一个落点（连成一道，不是一串圈）
+  strokeMax: 24,     // 一次补点上限
+  batch: 8,          // 一帧最多落几个点，而且**同一步一起落**
+  quietFrames: 260,  // 最后一次碰过之后再推这么多帧就停（约 4 秒）
+  edgeSoak: 0.06,    // 贴边这一圈额外吃掉一点，免得小块水面被回弹塞满
+} as const
+
+/** 传播系数的稳定上限。高于它一定爆，别试。 */
+export const PROP_MAX = 0.5
+
+/** 这套参数稳不稳。写在代码里是因为我已经踩爆过两次。 */
+export function stable(prop: number = POND.prop, steps: number = POND.steps): boolean {
+  return prop > 0 && prop <= PROP_MAX && Number.isInteger(steps) && steps >= 1
+}
+
+/**
+ * 步数变了，阻尼要跟着补，否则手感会变（她的说法是「平得变快了」）。
+ * 每帧推 steps 步 ≈ 每步衰减 base^(baseSteps/steps)。
+ */
+export function dampFor(steps: number, base = 0.9955, baseSteps = 2): number {
+  return Math.pow(base, baseSteps / steps)
+}
+
+/** 两次触摸采样之间补点：划得快也是**连着的一道**柔痕。返回不含起点。 */
+export function strokePoints(
+  x0: number, y0: number, x1: number, y1: number,
+  gap: number = POND.strokeGap, max: number = POND.strokeMax,
+): Array<[number, number]> {
+  const d = Math.hypot(x1 - x0, y1 - y0)
+  const n = Math.min(max, Math.max(1, Math.round(d / gap)))
+  const out: Array<[number, number]> = []
+  for (let i = 1; i <= n; i++) {
+    const t = i / n
+    out.push([x0 + (x1 - x0) * t, y0 + (y1 - y0) * t])
+  }
+  return out
+}
+
+/** 一帧里的落点太多就隔着取，保留两头（一笔的起止不能丢），顺序不变。 */
+export function pickBatch<T>(list: T[], max: number = POND.batch): T[] {
+  if (list.length <= max) return list.slice()
+  const out: T[] = []
+  for (let i = 0; i < max; i++) out.push(list[Math.round((i * (list.length - 1)) / (max - 1))]!)
+  return out
+}
+
+/** 跑不跑得起来（没 WebGL2 或没半浮点就退回不带水的版本）。 */
+export function pondSupported(): boolean {
+  try {
+    const c = document.createElement('canvas')
+    const gl = c.getContext('webgl2', { alpha: false, antialias: false })
+    if (!gl) return false
+    const ok = !!(gl.getExtension('EXT_color_buffer_half_float') || gl.getExtension('EXT_color_buffer_float'))
+    gl.getExtension('WEBGL_lose_context')?.loseContext()
+    return ok
+  } catch {
+    return false
+  }
+}
+
+const VS = `#version 300 es
+in vec2 p; out vec2 uv;
+void main(){ uv = p * 0.5 + 0.5; gl_Position = vec4(p, 0., 1.); }`
+
+const SIM_FS = `#version 300 es
+precision highp float; in vec2 uv; out vec4 o;
+uniform sampler2D cur, prev; uniform vec2 px; uniform float damp;
+uniform vec3 drops[${POND.batch}]; uniform int nDrops;   // xy 位置、z 力度
+void main(){
+  float c = texture(cur, uv).r, q = texture(prev, uv).r;
+  float l = texture(cur, uv + vec2(px.x, 0.)).r + texture(cur, uv - vec2(px.x, 0.)).r
+          + texture(cur, uv + vec2(0., px.y)).r + texture(cur, uv - vec2(0., px.y)).r - 4. * c;
+  float n = (2. * c - q + ${POND.prop} * l) * damp;
+  // 一笔里的所有落点同一步按下去：划得快也是一道，而且不会把模拟推爆
+  for (int i = 0; i < ${POND.batch}; i++) {
+    if (i >= nDrops) break;
+    float d = distance(uv, drops[i].xy);
+    n -= drops[i].z * exp(-d * d * 900.);
+  }
+  // 贴边这一圈多吃掉一点：整屏的时候无所谓，一块头部这么小，回弹会攒成一片乱纹
+  float e = min(min(uv.x, 1. - uv.x), min(uv.y, 1. - uv.y));
+  n *= mix(0.982, 1.0, clamp(e / ${POND.edgeSoak}, 0., 1.));
+  o = vec4(clamp(n, -${POND.cap}, ${POND.cap}), 0., 0., 1.);
+}`
+
+const DRAW_FS = `#version 300 es
+precision highp float; in vec2 uv; out vec4 o;
+uniform sampler2D height, page; uniform vec2 px; uniform float t;
+// 糊一点再用：波的形状软下来，不会出现清晰的同心环
+float h(vec2 q){
+  float s = texture(height, q).r * 0.28;
+  s += (texture(height, q + vec2( px.x * ${POND.blur}, 0.)).r + texture(height, q + vec2(-px.x * ${POND.blur}, 0.)).r
+      + texture(height, q + vec2(0.,  px.y * ${POND.blur})).r + texture(height, q + vec2(0., -px.y * ${POND.blur})).r) * 0.135;
+  s += (texture(height, q + px * ${POND.blur}).r + texture(height, q - px * ${POND.blur}).r
+      + texture(height, q + vec2(px.x, -px.y) * ${POND.blur}).r + texture(height, q + vec2(-px.x, px.y) * ${POND.blur}).r) * 0.0445;
+  return s;
+}
+void main(){
+  // 水面本身不流，只有一点点极慢的呼吸，几乎看不见
+  vec2 breathe = vec2(sin(uv.y * 7.0 + t * 0.12), cos(uv.x * 6.0 - t * 0.1)) * 0.0012;
+
+  float hx = h(uv + vec2(px.x, 0.)) - h(uv - vec2(px.x, 0.));
+  float hy = h(uv + vec2(0., px.y)) - h(uv - vec2(0., px.y));
+  vec2 n = vec2(hx, hy);
+
+  // 折射：字跟着晃
+  vec2 q = uv + breathe - n * ${POND.distort};
+  vec3 col = texture(page, vec2(q.x, 1.0 - q.y)).rgb;
+
+  // 焦散：波峰处把光聚一点（很淡）
+  float lap = h(uv + vec2(px.x, 0.)) + h(uv - vec2(px.x, 0.))
+            + h(uv + vec2(0., px.y)) + h(uv - vec2(0., px.y)) - 4. * h(uv);
+  col += vec3(0.62, 0.76, 1.0) * clamp(-lap * 8.0, 0.0, 1.0) * ${POND.caustic};
+
+  // 高光：极细一条边，粉蓝色散（和我们的液态玻璃一致）
+  vec3 nrm = normalize(vec3(n * 16.0, 1.0));
+  float spec = pow(clamp(dot(nrm, normalize(vec3(-0.4, 0.72, 0.56))), 0., 1.), 16.0);
+  col += mix(vec3(0.72, 0.84, 1.0), vec3(1.0, 0.84, 0.92), 0.4) * spec * ${POND.spec};
+
+  o = vec4(col, 1.0);
+}`
+
+export interface PondOptions {
+  /** 水面盖住它（画布插在它里面，跟着内容一起滚） */
+  host: HTMLElement
+  /** 把要泡进水里的那块内容画进离屏画布（CSS 像素坐标，不用管 DPR） */
+  paint: (ctx: CanvasRenderingContext2D, w: number, h: number) => void
+  /** 在哪一层听手指（默认 host；头部在滚动区里时传滚动容器，免得抢走滑动） */
+  touch?: HTMLElement
+  /** WebGL 彻底用不了（上下文丢了拿不回来）时通知外面退回 DOM 版 */
+  onLost?: () => void
+}
+
+export class Pond {
+  readonly canvas: HTMLCanvasElement
+  private src = document.createElement('canvas')
+  private sctx: CanvasRenderingContext2D | null
+  private gl: WebGL2RenderingContext | null = null
+  private simP: WebGLProgram | null = null
+  private drawP: WebGLProgram | null = null
+  private uS: Record<string, WebGLUniformLocation | null> = {}
+  private uD: Record<string, WebGLUniformLocation | null> = {}
+  private quad: WebGLBuffer | null = null
+  private fb: Array<{ tex: WebGLTexture; f: WebGLFramebuffer }> = []
+  private pageTex: WebGLTexture | null = null
+  private drops: Array<[number, number, number]> = []
+  private raf = 0
+  private hot = 0
+  private t0 = 0
+  private w = 0
+  private h = 0
+  private dpr = 1
+  private drawing = false
+  private lx = 0
+  private ly = 0
+  private dead = false
+  private ro: ResizeObserver
+  private io: IntersectionObserver
+  private onScreen = true
+  private opts: PondOptions
+
+  constructor(opts: PondOptions) {
+    this.opts = opts
+    this.dpr = Math.min(window.devicePixelRatio || 1, 2)
+    const c = document.createElement('canvas')
+    c.className = 'pond-canvas'
+    c.setAttribute('aria-hidden', 'true')
+    Object.assign(c.style, { position: 'absolute', inset: '0', width: '100%', height: '100%', display: 'block', pointerEvents: 'none' })
+    this.canvas = c
+    this.src.width = this.src.height = 1
+    this.sctx = this.src.getContext('2d')
+    opts.host.insertBefore(c, opts.host.firstChild)
+
+    this.init()
+
+    this.ro = new ResizeObserver(() => this.layout())
+    this.ro.observe(opts.host)
+    this.io = new IntersectionObserver(es => {
+      this.onScreen = es.some(e => e.isIntersecting)
+      if (this.onScreen && this.hot > 0) this.start()
+    }, { rootMargin: '80px 0px' })
+    this.io.observe(opts.host)
+
+    const t = opts.touch || opts.host
+    t.addEventListener('pointerdown', this.onDown, { passive: true })
+    t.addEventListener('pointermove', this.onMove, { passive: true })
+    for (const e of ['pointerup', 'pointercancel', 'pointerleave'] as const) {
+      t.addEventListener(e, this.onUp, { passive: true })
+    }
+    document.addEventListener('visibilitychange', this.onVis)
+    c.addEventListener('webglcontextlost', this.onCtxLost as EventListener)
+
+    this.layout()
+  }
+
+  /** 内容变了（取到数、字体加载完、尺寸变了）重画一次水下的画面 */
+  repaint(): void {
+    if (this.dead || !this.gl || !this.sctx || this.w <= 0 || this.h <= 0) return
+    this.src.width = Math.max(1, Math.round(this.w * this.dpr))
+    this.src.height = Math.max(1, Math.round(this.h * this.dpr))
+    this.sctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0)
+    this.sctx.clearRect(0, 0, this.w, this.h)
+    this.opts.paint(this.sctx, this.w, this.h)
+    this.uploadPage()
+    this.hot = Math.max(this.hot, 2)   // 至少再出一帧，把新画面推上屏
+    this.start()
+  }
+
+  destroy(): void {
+    this.dead = true
+    cancelAnimationFrame(this.raf)
+    this.ro.disconnect()
+    this.io.disconnect()
+    const t = this.opts.touch || this.opts.host
+    t.removeEventListener('pointerdown', this.onDown)
+    t.removeEventListener('pointermove', this.onMove)
+    for (const e of ['pointerup', 'pointercancel', 'pointerleave'] as const) t.removeEventListener(e, this.onUp)
+    document.removeEventListener('visibilitychange', this.onVis)
+    this.canvas.removeEventListener('webglcontextlost', this.onCtxLost as EventListener)
+    const gl = this.gl
+    if (gl) {
+      for (const b of this.fb) { gl.deleteTexture(b.tex); gl.deleteFramebuffer(b.f) }
+      if (this.pageTex) gl.deleteTexture(this.pageTex)
+      if (this.quad) gl.deleteBuffer(this.quad)
+      if (this.simP) gl.deleteProgram(this.simP)
+      if (this.drawP) gl.deleteProgram(this.drawP)
+      gl.getExtension('WEBGL_lose_context')?.loseContext()
+    }
+    this.gl = null
+    this.canvas.remove()
+  }
+
+  // ── 内部 ──
+
+  private init() {
+    const gl = this.canvas.getContext('webgl2', { alpha: false, antialias: false })
+    if (!gl) return
+    if (!gl.getExtension('EXT_color_buffer_half_float') && !gl.getExtension('EXT_color_buffer_float')) return
+    this.gl = gl
+
+    this.quad = gl.createBuffer()
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.quad)
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW)
+
+    this.simP = this.program(SIM_FS)
+    this.drawP = this.program(DRAW_FS)
+    if (!this.simP || !this.drawP) { this.gl = null; return }
+
+    const u = (p: WebGLProgram, names: string[]) =>
+      names.reduce<Record<string, WebGLUniformLocation | null>>((m, n) => { m[n] = gl.getUniformLocation(p, n); return m }, {})
+    this.uS = u(this.simP, ['cur', 'prev', 'px', 'damp', 'drops[0]', 'nDrops'])
+    this.uD = u(this.drawP, ['height', 'page', 'px', 't'])
+
+    this.fb = [this.makeFbo(), this.makeFbo(), this.makeFbo()]
+    this.pageTex = gl.createTexture()
+    this.t0 = performance.now()
+  }
+
+  private program(fs: string): WebGLProgram | null {
+    const gl = this.gl!
+    const sh = (src: string, type: number) => {
+      const s = gl.createShader(type)!
+      gl.shaderSource(s, src); gl.compileShader(s)
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) console.warn('[pond] shader', gl.getShaderInfoLog(s))
+      return s
+    }
+    const p = gl.createProgram()!
+    gl.attachShader(p, sh(VS, gl.VERTEX_SHADER))
+    gl.attachShader(p, sh(fs, gl.FRAGMENT_SHADER))
+    gl.bindAttribLocation(p, 0, 'p')
+    gl.linkProgram(p)
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) { console.warn('[pond] link', gl.getProgramInfoLog(p)); return null }
+    return p
+  }
+
+  private makeFbo() {
+    const gl = this.gl!
+    const tex = gl.createTexture()!
+    gl.bindTexture(gl.TEXTURE_2D, tex)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R16F, POND.sim, POND.sim, 0, gl.RED, gl.HALF_FLOAT, null)
+    for (const k of [gl.TEXTURE_MIN_FILTER, gl.TEXTURE_MAG_FILTER]) gl.texParameteri(gl.TEXTURE_2D, k, gl.LINEAR)
+    for (const k of [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T]) gl.texParameteri(gl.TEXTURE_2D, k, gl.CLAMP_TO_EDGE)
+    const f = gl.createFramebuffer()!
+    gl.bindFramebuffer(gl.FRAMEBUFFER, f)
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0)
+    gl.clearColor(0, 0, 0, 1)
+    gl.clear(gl.COLOR_BUFFER_BIT)
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    return { tex, f }
+  }
+
+  private uploadPage() {
+    const gl = this.gl!
+    gl.bindTexture(gl.TEXTURE_2D, this.pageTex)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.src)
+    for (const k of [gl.TEXTURE_MIN_FILTER, gl.TEXTURE_MAG_FILTER]) gl.texParameteri(gl.TEXTURE_2D, k, gl.LINEAR)
+    for (const k of [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T]) gl.texParameteri(gl.TEXTURE_2D, k, gl.CLAMP_TO_EDGE)
+  }
+
+  private layout() {
+    if (this.dead || !this.gl) return
+    const r = this.opts.host.getBoundingClientRect()
+    const w = Math.round(r.width), h = Math.round(r.height)
+    if (w <= 0 || h <= 0) return
+    if (w === this.w && h === this.h) return
+    this.w = w; this.h = h
+    this.canvas.width = Math.round(w * this.dpr)
+    this.canvas.height = Math.round(h * this.dpr)
+    this.repaint()
+  }
+
+  private push(cx: number, cy: number, strength: number) {
+    const r = this.opts.host.getBoundingClientRect()
+    if (r.width <= 0 || r.height <= 0) return
+    const x = (cx - r.left) / r.width
+    const y = (cy - r.top) / r.height
+    if (x < 0 || x > 1 || y < 0 || y > 1) return      // 碰的是底下的格子，不是水面
+    this.drops.push([x, 1 - y, strength])
+    this.hot = POND.quietFrames
+    this.start()
+  }
+
+  private onDown = (e: PointerEvent) => {
+    this.drawing = true
+    this.lx = e.clientX; this.ly = e.clientY
+    this.push(e.clientX, e.clientY, POND.press)
+  }
+
+  private onMove = (e: PointerEvent) => {
+    if (!this.drawing) return
+    if (Math.hypot(e.clientX - this.lx, e.clientY - this.ly) < 2) return
+    for (const [x, y] of strokePoints(this.lx, this.ly, e.clientX, e.clientY)) this.push(x, y, POND.drag)
+    this.lx = e.clientX; this.ly = e.clientY
+  }
+
+  private onUp = () => { this.drawing = false }
+
+  private onVis = () => {
+    if (document.hidden) cancelAnimationFrame(this.raf), (this.raf = 0)
+    else if (this.hot > 0) this.start()
+  }
+
+  private onCtxLost = (e: Event) => {
+    e.preventDefault()
+    cancelAnimationFrame(this.raf); this.raf = 0
+    this.gl = null
+    this.opts.onLost?.()
+  }
+
+  private start() {
+    if (this.dead || this.raf || !this.gl || document.hidden || !this.onScreen) return
+    this.raf = requestAnimationFrame(this.frame)
+  }
+
+  private frame = (now: number) => {
+    this.raf = 0
+    const gl = this.gl
+    if (this.dead || !gl || !this.simP || !this.drawP) return
+
+    // 这一帧手指走过的点：最多 batch 个（多了隔着取），同一步一起落
+    const batch = pickBatch(this.drops.splice(0, 64))
+    const flat = new Float32Array(POND.batch * 3)
+    batch.forEach((d, i) => { flat[i * 3] = d[0]; flat[i * 3 + 1] = d[1]; flat[i * 3 + 2] = d[2] })
+
+    const bind = (p: WebGLProgram) => {
+      gl.useProgram(p)
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.quad)
+      gl.enableVertexAttribArray(0)
+      gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0)
+    }
+
+    for (let step = 0; step < POND.steps; step++) {
+      const [A, B, C] = this.fb as [typeof this.fb[0], typeof this.fb[0], typeof this.fb[0]]
+      gl.bindFramebuffer(gl.FRAMEBUFFER, C.f)
+      gl.viewport(0, 0, POND.sim, POND.sim)
+      bind(this.simP)
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, B.tex); gl.uniform1i(this.uS.cur!, 0)
+      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, A.tex); gl.uniform1i(this.uS.prev!, 1)
+      gl.uniform2f(this.uS.px!, 1 / POND.sim, 1 / POND.sim)
+      gl.uniform1f(this.uS.damp!, POND.damp)
+      gl.uniform3fv(this.uS['drops[0]']!, flat)
+      gl.uniform1i(this.uS.nDrops!, step === 0 ? batch.length : 0)
+      gl.drawArrays(gl.TRIANGLES, 0, 3)
+      this.fb = [B, C, A]
+    }
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    gl.viewport(0, 0, this.canvas.width, this.canvas.height)
+    bind(this.drawP)
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.fb[1]!.tex); gl.uniform1i(this.uD.height!, 0)
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.pageTex); gl.uniform1i(this.uD.page!, 1)
+    gl.uniform2f(this.uD.px!, 1 / POND.sim, 1 / POND.sim)
+    gl.uniform1f(this.uD.t!, (now - this.t0) / 1000)
+    gl.drawArrays(gl.TRIANGLES, 0, 3)
+
+    // 安静下来就停：水面本来就不自己动，最后一帧留着（手指划过的形状还在）
+    if (this.drops.length > 0 || --this.hot > 0) this.start()
+  }
+}
