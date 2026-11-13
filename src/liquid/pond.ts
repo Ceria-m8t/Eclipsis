@@ -27,7 +27,10 @@ export const POND = {
   strokeGap: 5,      // 两次触摸采样之间每隔几 px 补一个落点（连成一道，不是一串圈）
   strokeMax: 24,     // 一次补点上限
   batch: 8,          // 一帧最多落几个点，而且**同一步一起落**
-  quietFrames: 260,  // 最后一次碰过之后再推这么多帧就停（约 4 秒）
+  quietFrames: 260,  // 最后一次碰过之后再推这么多帧（约 4 秒）就进收尾
+  floor: 0.0025,     // 高度场地板：小于这个值直接归零，不留残波
+  settleFrames: 150, // 收尾：阻尼加重地再推这么多帧，把波压平再停
+  settleDamp: 0.955, // 收尾用的阻尼（比平时重得多）
   edgeSoak: 0.06,    // 贴边这一圈额外吃掉一点，免得小块水面被回弹塞满
 } as const
 
@@ -106,6 +109,9 @@ void main(){
   // 贴边这一圈多吃掉一点：整屏的时候无所谓，一块头部这么小，回弹会攒成一片乱纹
   float e = min(min(uv.x, 1. - uv.x), min(uv.y, 1. - uv.y));
   n *= mix(0.982, 1.0, clamp(e / ${POND.edgeSoak}, 0., 1.));
+  // 地板：小到看不见就直接归零。没有这一条，残波会一直在，
+  // 停止绘制那一刻就把干涉条纹冻在屏幕上（她 2026-11-13 看到整页同心圆）。
+  if (abs(n) < ${POND.floor}) n = 0.;
   o = vec4(clamp(n, -${POND.cap}, ${POND.cap}), 0., 0., 1.);
 }`
 
@@ -154,21 +160,30 @@ void main(){
 const OVERLAY_FS = `#version 300 es
 precision highp float; in vec2 uv; out vec4 o;
 uniform sampler2D height; uniform vec2 px; uniform float t;
-float h(vec2 q){ return texture(height, q).r; }
+// 和折射那一版一样先糊一道：不糊的话细纹比屏幕像素还细，整页铺开就是摩尔纹
+float h(vec2 q){
+  float s = texture(height, q).r * 0.28;
+  s += (texture(height, q + vec2( px.x * 1.4, 0.)).r + texture(height, q + vec2(-px.x * 1.4, 0.)).r
+      + texture(height, q + vec2(0.,  px.y * 1.4)).r + texture(height, q + vec2(0., -px.y * 1.4)).r) * 0.135;
+  s += (texture(height, q + px * 1.4).r + texture(height, q - px * 1.4).r
+      + texture(height, q + vec2(px.x, -px.y) * 1.4).r + texture(height, q + vec2(-px.x, px.y) * 1.4).r) * 0.0445;
+  return s;
+}
 void main(){
   float hx = h(uv + vec2(px.x, 0.)) - h(uv - vec2(px.x, 0.));
   float hy = h(uv + vec2(0., px.y)) - h(uv - vec2(0., px.y));
   vec2 n = vec2(hx, hy);
   float slope = length(n);
-  if (slope < 0.00035) { o = vec4(0.); return; }      // 平的地方完全透明
+  // 死区放宽：只有明显的波才有光，细碎残波一律当平的
+  if (slope < 0.0022) { o = vec4(0.); return; }
 
-  vec3 nrm = normalize(vec3(n * 55.0, 1.0));
+  vec3 nrm = normalize(vec3(n * 18.0, 1.0));
   // 光从上面来（她要的：我们在水面之下，光从上面射进来）
   float spec = pow(clamp(dot(nrm, normalize(vec3(-0.30, 0.78, 0.55))), 0., 1.), 26.0);
 
   float lap = h(uv + vec2(px.x, 0.)) + h(uv - vec2(px.x, 0.))
             + h(uv + vec2(0., px.y)) + h(uv - vec2(0., px.y)) - 4. * h(uv);
-  float caustic = clamp(-lap * 22.0, 0., 1.);
+  float caustic = clamp(-lap * 10.0, 0., 1.);
 
   // 色散：斜率方向上冷暖分开（和我们液态玻璃那道粉蓝一致）
   vec2 dir = n / max(slope, 1e-5);
@@ -213,6 +228,7 @@ export class Pond {
   private drops: Array<[number, number, number]> = []
   private raf = 0
   private hot = 0
+  private settle = 0
   private t0 = 0
   private w = 0
   private h = 0
@@ -246,7 +262,7 @@ export class Pond {
     this.ro.observe(opts.host)
     this.io = new IntersectionObserver(es => {
       this.onScreen = es.some(e => e.isIntersecting)
-      if (this.onScreen && this.hot > 0) this.start()
+      if (this.onScreen && (this.hot > 0 || this.settle > 0)) this.start()
     }, { rootMargin: '80px 0px' })
     this.io.observe(opts.host)
 
@@ -412,7 +428,7 @@ export class Pond {
 
   private onVis = () => {
     if (document.hidden) cancelAnimationFrame(this.raf), (this.raf = 0)
-    else if (this.hot > 0) this.start()
+    else if (this.hot > 0 || this.settle > 0) this.start()
   }
 
   private onCtxLost = (e: Event) => {
@@ -452,7 +468,9 @@ export class Pond {
       gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, B.tex); gl.uniform1i(this.uS.cur!, 0)
       gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, A.tex); gl.uniform1i(this.uS.prev!, 1)
       gl.uniform2f(this.uS.px!, 1 / POND.sim, 1 / POND.sim)
-      gl.uniform1f(this.uS.damp!, POND.damp)
+      // 收尾阶段用重阻尼：**停下来的那一帧必须是平的**。
+      // 不这么做就会把没散完的波冻在屏幕上（整页铺开时就是一片同心干涉纹）。
+      gl.uniform1f(this.uS.damp!, this.hot > 0 ? POND.damp : POND.settleDamp)
       gl.uniform3fv(this.uS['drops[0]']!, flat)
       gl.uniform1i(this.uS.nDrops!, step === 0 ? batch.length : 0)
       gl.drawArrays(gl.TRIANGLES, 0, 3)
@@ -470,7 +488,10 @@ export class Pond {
     gl.uniform1f(this.uD.t!, (now - this.t0) / 1000)
     gl.drawArrays(gl.TRIANGLES, 0, 3)
 
-    // 安静下来就停：水面本来就不自己动，最后一帧留着（手指划过的形状还在）
-    if (this.drops.length > 0 || --this.hot > 0) this.start()
+    // 安静下来先收尾、再停：水面本来就不自己动，但**停住的那一帧得是平的**。
+    // hot 走完进 settle（重阻尼压平），settle 也走完才真的停。
+    if (this.drops.length > 0) { this.start(); return }
+    if (this.hot > 0) { this.hot--; this.settle = POND.settleFrames; this.start(); return }
+    if (this.settle > 0) { this.settle--; this.start() }
   }
 }

@@ -11,6 +11,14 @@ describe('水面的参数（她 2026-11-13 定的那一版）', () => {
     expect(stable(0.42, 50)).toBe(true)  // 步数本身不爆，爆的是「一个落点算一步」那种推法
   })
 
+  it('停下来那一帧必须是平的：有地板 + 收尾重阻尼（她看到整页同心干涉纹就是没有这两条）', () => {
+    expect(POND.floor).toBeGreaterThan(0)          // 小到看不见就归零，不留残波
+    expect(POND.settleFrames).toBeGreaterThan(0)   // 安静之后还要压平再停
+    expect(POND.settleDamp).toBeLessThan(POND.damp)// 收尾的阻尼必须比平时重
+    // 收尾那段够把波压到看不见：0.955^150 远小于地板
+    expect(Math.pow(POND.settleDamp, POND.settleFrames)).toBeLessThan(POND.floor)
+  })
+
   it('幅度封顶、阻尼小于 1：不许长成一大块、也不许永远不平', () => {
     expect(POND.cap).toBeGreaterThan(0)
     expect(POND.damp).toBeLessThan(1)
