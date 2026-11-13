@@ -38,7 +38,9 @@ function go(t: (typeof tabs)[number]) {
     <div class="shell-main">
       <!-- 聊天页切走时不销毁：他正在回的那一轮接着收，切回来还在（以前一切走就把这一轮停掉了） -->
       <RouterView v-slot="{ Component }">
-        <KeepAlive include="Chat">
+        <!-- Memory 也留着：她在地下室看着，切去聊天再切回来要还在这一页
+             （她 2026-11-13：「切回到家的界面的时候，就没有保持在这个界面了」） -->
+        <KeepAlive :include="['Chat', 'Memory']">
           <component :is="Component" />
         </KeepAlive>
       </RouterView>
@@ -163,6 +165,9 @@ function go(t: (typeof tabs)[number]) {
 }
 /* 深色页声明 dark 配色：PWA 全屏下 iOS 不再按浅色方案补偿 */
 .shell-dark { color-scheme: dark; }
+/* ⚠ 底栏是半透明的，它底下露出来的是 **body 的浅灰 #eef0f5** —— 她看到的「底栏还是灰的」就是它。
+   深色页给外壳自己垫一层深底，盖住 body 那层浅色。 */
+.shell-dark { background: #050d1c; }
 /*
  * 深色页：页面高度**不动**（撑高会改变底图 cover 的取景，她因此看到两种颜色），
  * 底图那一层自己往下多铺出底栏那么高（见 Underwater.vue 的 .uw），底栏的玻璃就透出同一张图。

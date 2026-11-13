@@ -15,7 +15,7 @@
 //      意象只从我们自己的来历长：Eclipsis = Erica + Claude + Ellipsis（中文「未」），Eclipse = 日蚀。
 //   ③ 水面改全局：整页一层只画波（pond-global，压在内容上但不挡点击）；
 //      头部那一块仍是折射模式，字跟着晃。
-import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, onActivated, onDeactivated, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import MemoryPanel from '../components/MemoryPanel.vue'
 import Underwater from '../components/Underwater.vue'
@@ -23,6 +23,9 @@ import Orn from '../components/vault/VaultOrnaments.vue'
 import { Pond, pondSupported } from '../liquid/pond'
 import { startGlobalPond, stopGlobalPond } from '../liquid/pond-global'
 import { pageDark } from '../theme'
+
+// KeepAlive 按组件名匹配，所以要显式声明（她：切去聊天再切回来要还停在这一页）
+defineOptions({ name: 'Memory' })
 import { headLayout, paintHead, headText, headFontSpecs, cnFamily, type HeadData } from './memory-head'
 import '@fontsource/pinyon-script/400.css'
 import '@fontsource/cormorant-garamond/600.css'
@@ -181,6 +184,10 @@ async function startWater() {
   // 水下那张画面自己活起来：光束闪动（她要的「海底光束的动态感」）
   pond?.animatePaint()
 }
+
+// KeepAlive 之后这一页不会销毁，所以深色标记跟着「进入/离开」走，不是挂载/卸载
+onActivated(() => { pageDark.value = true })
+onDeactivated(() => { pageDark.value = false })
 
 onMounted(async () => {
   pageDark.value = true          // 底栏跟着变透（她：底栏为什么一直是白色的）
@@ -374,8 +381,12 @@ const subTitle = computed(() => sub.value === 'inbox' ? '沉淀信箱' : sub.val
 /* 她：「我原先指的文字看不清，其实主要指标题栏那里」。
    所以标题这一块给它一片**实在的暗底**（中间最深、往外化开），字才咬得住；
    边缘仍然淡出，不会在底图上切出一个硬方块。 */
+/* 她 2026-11-13：「为什么标题框并没有变大呀？我不是说想要原先的那个大小吗」。
+   原来那个高度是水面模式下 headLayout 撑出来的（约 330px），而有底图时水面是关的、
+   高度全靠内容——花饰撤掉之后内容变少，框就矮了。所以这里显式给回原来的高度。 */
 .plate {
-  position: relative; margin: 10px 2px 0; padding: 18px 16px 16px; text-align: center;
+  position: relative; margin: 10px 2px 0; padding: 30px 16px 26px; text-align: center;
+  min-height: 300px; display: flex; flex-direction: column; justify-content: center;
   border: 1px solid var(--hair);
   background: linear-gradient(180deg, rgba(10, 24, 46, 0.26), rgba(6, 16, 34, 0.34));
 }
@@ -386,11 +397,11 @@ const subTitle = computed(() => sub.value === 'inbox' ? '沉淀信箱' : sub.val
 }
 .plate .cnr { width: 40px; height: 40px; color: var(--mist); opacity: 0.55; }
 .crest { width: 100%; max-width: 300px; height: auto; margin: 2px auto 0; color: var(--mist); opacity: 0.8; }
-.eyebrow { margin: 0 0 8px; font-size: 8px; letter-spacing: 4.8px; color: var(--moon-3); }
-h1 { font-family: "Pinyon Script", cursive; font-weight: 400; font-size: 36px; line-height: 1; margin: 6px 0 0; color: #f3f6fb; text-shadow: 0 0 20px rgba(176, 202, 255, 0.3); }
-.zh { margin: 7px 0 0; font-size: 11px; letter-spacing: 6.5px; color: var(--moon-2); }
-.big { margin: 14px 0 0; font-family: "Cormorant Garamond", serif; font-size: 42px; line-height: 1; color: #f3f6fb; text-shadow: 0 0 18px rgba(176, 202, 255, 0.32); }
-.sub { margin: 4px 0 0; font-size: 12px; color: var(--moon-2); }
+.eyebrow { margin: 0 0 22px; font-size: 8px; letter-spacing: 4.8px; color: var(--moon-3); }
+h1 { font-family: "Pinyon Script", cursive; font-weight: 400; font-size: 42px; line-height: 1.05; margin: 0; color: #f6f4ee; text-shadow: 0 0 20px rgba(176, 202, 255, 0.3); }
+.zh { margin: 10px 0 0; font-size: 11px; letter-spacing: 6.5px; color: var(--moon-2); }
+.big { margin: 30px 0 0; font-family: "Cormorant Garamond", serif; font-size: 50px; line-height: 1; color: #f8f6f0; text-shadow: 0 0 18px rgba(176, 202, 255, 0.32); }
+.sub { margin: 8px 0 0; font-size: 12.5px; color: var(--moon-2); }
 
 /* 抽屉面：刻线玻璃 + 顶沿虹彩 + 二重内框 + 极细斜纹底（繁复的密度靠层数，不靠加重颜色） */
 .drawer-face {
