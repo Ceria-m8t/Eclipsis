@@ -174,8 +174,12 @@ void main(){
   vec2 dir = n / max(slope, 1e-5);
   vec3 tint = mix(vec3(0.66, 0.80, 1.0), vec3(1.0, 0.80, 0.90), clamp(0.5 + dir.x * 0.5, 0., 1.));
 
-  float a = clamp(spec * 0.85 + caustic * 0.30 + slope * 9.0, 0., 0.55);
-  o = vec4(tint * (spec * 0.95 + caustic * 0.55) * a, a);   // premultiplied
+  // ⚠ 这一层**只能加光，不能变暗**（她 2026-11-13 在手机上看到一圈黑）。
+  // 原来的写法把 slope 也算进 alpha：斜率大的地方 a 很高而颜色接近 0，
+  // premultiplied 混合下就等于往页面上抹一层黑 —— 波一大就是一个黑圈。
+  // 现在用 additive（ONE, ONE）：输出就是加上去的光，alpha 不参与遮挡。
+  float light = spec * 0.95 + caustic * 0.55;
+  o = vec4(tint * light * 0.5, 0.);
 }`
 
 export interface PondOptions {
@@ -319,7 +323,7 @@ export class Pond {
       names.reduce<Record<string, WebGLUniformLocation | null>>((m, n) => { m[n] = gl.getUniformLocation(p, n); return m }, {})
     this.uS = u(this.simP, ['cur', 'prev', 'px', 'damp', 'drops[0]', 'nDrops'])
     this.uD = u(this.drawP, ['height', 'page', 'px', 't'])
-    if (this.mode === 'overlay') { gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA) }
+    if (this.mode === 'overlay') { gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE) }   // 只加光，见 OVERLAY_FS
 
     this.fb = [this.makeFbo(), this.makeFbo(), this.makeFbo()]
     this.pageTex = gl.createTexture()

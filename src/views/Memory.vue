@@ -20,6 +20,7 @@ import { useRouter } from 'vue-router'
 import MemoryPanel from '../components/MemoryPanel.vue'
 import Underwater from '../components/Underwater.vue'
 import Orn from '../components/vault/VaultOrnaments.vue'
+import Roc from '../components/vault/VaultRococo.vue'
 import { Pond, pondSupported } from '../liquid/pond'
 import { startGlobalPond, stopGlobalPond } from '../liquid/pond-global'
 import { headLayout, paintHead, headText, headFontSpecs, cnFamily, type HeadData } from './memory-head'
@@ -127,8 +128,11 @@ const subTitle = computed(() => sub.value === 'inbox' ? '沉淀信箱' : sub.val
   <div class="mem-page shell-page" ref="pageEl">
     <!-- 水下：光从上面射进来，会动（水面亮边 / 四道光柱 / 焦散 / 浮尘） -->
     <Underwater />
-    <!-- 整页外沿：刻版四角 -->
-    <div class="edge"><span></span><span></span><span></span><span></span></div>
+    <!-- 整页四角：洛可可涡卷角花（不是直角刻线——那是新古典，方向正好相反） -->
+    <div class="edge">
+      <Roc name="corner" class="cnr tl" /><Roc name="corner" class="cnr tr" />
+      <Roc name="corner" class="cnr bl" /><Roc name="corner" class="cnr br" />
+    </div>
 
     <div class="scroll" ref="scrollEl">
       <header class="head" ref="headEl" :class="{ water }" :style="water ? { height: headH + 'px' } : undefined">
@@ -136,12 +140,9 @@ const subTitle = computed(() => sub.value === 'inbox' ? '沉淀信箱' : sub.val
         <p v-if="water" class="sr-only">{{ headText(headData) }}</p>
         <!-- 水面跑不起来：同样内容的 DOM 题头（铜牌 + 日蚀 + 四角花饰） -->
         <div v-else class="plate">
-          <Orn name="fleur" class="fleur tl" />
-          <Orn name="fleur" class="fleur tr" />
-          <Orn name="fleur" class="fleur bl" />
-          <Orn name="fleur" class="fleur br" />
+          <Roc name="corner" class="cnr tl" /><Roc name="corner" class="cnr tr" />
           <p class="eyebrow">E C L I P S I S &nbsp;·&nbsp; 未</p>
-          <Orn name="eclipse" />
+          <Roc name="crown" />
           <h1>Remember</h1>
           <p class="zh">记 忆 的 柜 子</p>
           <template v-if="data">
@@ -167,20 +168,20 @@ const subTitle = computed(() => sub.value === 'inbox' ? '沉淀信箱' : sub.val
         <!-- 分区题：刻线 + 书名号 -->
         <section v-for="s in data.sections" :key="s.title">
           <div class="sec">
-            <span class="br">❮</span><b>{{ s.title }}</b><span class="br">❯</span>
-            <em>{{ s.en }}</em><hr>
+            <Roc name="shell" class="shell" /><b>{{ s.title }}</b>
+            <Roc name="curl" class="curl" /><em>{{ s.en }}</em><hr>
           </div>
           <!-- 器物抽屉：一行一件（她：不是等大方格） -->
           <div class="drawers">
             <button v-for="c in s.cells" :key="c.key" class="drawer drawer-face"
                     :class="{ empty: c.todo, tappable: !!c.to }" @click="open(c)">
-              <span class="obj"><i></i><i></i><Orn :name="OBJ[c.key] || 'cards'" /></span>
+              <span class="obj"><Roc name="bracket" class="bracket" /><Orn :name="OBJ[c.key] || 'cards'" /></span>
               <span class="txt">
                 <b>{{ c.name }}</b>
                 <span class="cen">{{ c.en }}</span>
                 <u v-if="c.note">{{ c.note }}</u>
               </span>
-              <span v-if="c.todo" class="seal">未</span>
+              <span v-if="c.todo" class="seal"><Roc name="seal" /><b>未</b></span>
               <span class="val"><em>{{ c.n.toLocaleString() }}</em><i v-if="c.unit">{{ c.unit }}</i></span>
               <span class="pull"><s></s><s></s></span>
             </button>
@@ -189,7 +190,7 @@ const subTitle = computed(() => sub.value === 'inbox' ? '沉淀信箱' : sub.val
 
         <!-- 在运转吗：不占格子 -->
         <section>
-          <div class="sec"><span class="br">❮</span><b>在 运 转 吗</b><span class="br">❯</span><em>Pulse of it</em><hr></div>
+          <div class="sec"><Roc name="shell" class="shell" /><b>在 运 转 吗</b><Roc name="curl" class="curl" /><em>Pulse of it</em><hr></div>
           <ul class="health drawer-face">
             <li v-for="h in data.health" :key="h.label">
               <i :class="{ bad: !h.ok }"></i><b>{{ h.label }}</b><span>{{ h.value }}</span>
@@ -197,7 +198,7 @@ const subTitle = computed(() => sub.value === 'inbox' ? '沉淀信箱' : sub.val
           </ul>
         </section>
 
-        <div class="tailpiece"><Orn name="tail" /></div>
+        <div class="tailpiece"><Roc name="tail" /></div>
         <p class="foot muted">心潮和脉的柜子还没做。记忆只有他能写，你能划掉、能贴便条——这里没有替他改写的按钮。</p>
       </template>
 
@@ -233,13 +234,13 @@ const subTitle = computed(() => sub.value === 'inbox' ? '沉淀信箱' : sub.val
   position: absolute; inset: 0; overflow: hidden; color: var(--moon);
 }
 
-/* 整页外沿：刻版四角 */
-.edge { position: absolute; inset: 7px; z-index: 3; pointer-events: none; }
-.edge span { position: absolute; width: 15px; height: 15px; border: 1px solid rgba(233, 238, 246, 0.22); }
-.edge span:nth-child(1) { left: 0; top: 0; border-right: 0; border-bottom: 0; }
-.edge span:nth-child(2) { right: 0; top: 0; border-left: 0; border-bottom: 0; }
-.edge span:nth-child(3) { left: 0; bottom: 0; border-right: 0; border-top: 0; }
-.edge span:nth-child(4) { right: 0; bottom: 0; border-left: 0; border-top: 0; }
+/* 整页四角：洛可可涡卷角花 */
+.edge { position: absolute; inset: 6px; z-index: 3; pointer-events: none; }
+.cnr { position: absolute; width: 46px; height: 46px; color: rgba(197, 214, 245, 0.42); }
+.cnr.tl { left: 0; top: 0; }
+.cnr.tr { right: 0; top: 0; transform: scaleX(-1); }
+.cnr.bl { left: 0; bottom: 0; transform: scaleY(-1); }
+.cnr.br { right: 0; bottom: 0; transform: scale(-1); }
 
 .scroll {
   position: relative; z-index: 2; height: 100%; overflow-y: auto; -webkit-overflow-scrolling: touch;
@@ -270,11 +271,7 @@ const subTitle = computed(() => sub.value === 'inbox' ? '沉淀信箱' : sub.val
   content: ""; position: absolute; left: 10%; right: 10%; top: -1px; height: 1px;
   background: linear-gradient(90deg, transparent, var(--iris-a) 35%, var(--iris-b) 65%, transparent);
 }
-.fleur { position: absolute; width: 17px; height: 17px; color: var(--mist); opacity: 0.85; }
-.fleur.tl { left: 6px; top: 6px; }
-.fleur.tr { right: 6px; top: 6px; transform: scaleX(-1); }
-.fleur.bl { left: 6px; bottom: 6px; transform: scaleY(-1); }
-.fleur.br { right: 6px; bottom: 6px; transform: scale(-1); }
+.plate .cnr { width: 34px; height: 34px; color: var(--mist); opacity: 0.6; }
 .eyebrow { margin: 0 0 8px; font-size: 8px; letter-spacing: 4.8px; color: var(--moon-3); }
 h1 { font-family: "Pinyon Script", cursive; font-weight: 400; font-size: 36px; line-height: 1; margin: 6px 0 0; color: #f3f6fb; text-shadow: 0 0 20px rgba(176, 202, 255, 0.3); }
 .zh { margin: 7px 0 0; font-size: 11px; letter-spacing: 6.5px; color: var(--moon-2); }
@@ -300,7 +297,8 @@ h1 { font-family: "Pinyon Script", cursive; font-weight: 400; font-size: 36px; l
 .sec { display: flex; align-items: center; gap: 8px; margin: 20px 2px 9px; }
 .sec b { font-size: 12px; font-weight: 600; letter-spacing: 3.4px; white-space: nowrap; color: #eaf0f8; }
 .sec em { font-style: normal; font-size: 8px; letter-spacing: 2.4px; color: var(--moon-3); white-space: nowrap; }
-.sec .br { color: var(--mist); font-size: 9px; opacity: 0.8; }
+.sec .shell { width: 22px; height: 17px; flex: none; color: var(--mist); opacity: 0.8; }
+.sec .curl { width: 28px; height: 13px; flex: none; color: var(--mist); opacity: 0.6; }
 .sec hr { flex: 1; border: none; border-top: 1px solid var(--hair); border-bottom: 1px solid var(--hair-2); height: 3px; margin: 0; }
 
 /* 器物抽屉：一行一件 */
@@ -315,15 +313,14 @@ h1 { font-family: "Pinyon Script", cursive; font-weight: 400; font-size: 36px; l
   background: linear-gradient(180deg, transparent, var(--iris-a) 45%, var(--iris-b) 70%, transparent);
 }
 .drawer.tappable:active { transform: scale(0.985); background: linear-gradient(180deg, rgba(233, 238, 246, 0.12), rgba(233, 238, 246, 0.04)); }
+/* 器物坐在涡卷托架里（洛可可：曲线托着物件，不是方框圈着） */
 .obj {
-  position: relative; width: 36px; height: 36px; flex: none; display: grid; place-items: center;
-  border: 1px solid rgba(233, 238, 246, 0.14); color: #d2e2ff;
-  background: radial-gradient(74% 74% at 38% 26%, rgba(157, 180, 221, 0.2), transparent 72%);
+  position: relative; width: 40px; height: 40px; flex: none; display: grid; place-items: center;
+  color: #d2e2ff;
+  background: radial-gradient(70% 70% at 40% 28%, rgba(157, 180, 221, 0.22), transparent 74%);
 }
-.obj :deep(svg) { width: 21px; height: 21px; }
-.obj i { position: absolute; width: 4px; height: 4px; border: 1px solid rgba(233, 238, 246, 0.3); border-radius: 50%; }
-.obj i:nth-child(1) { left: -2.5px; top: -2.5px; }
-.obj i:nth-child(2) { right: -2.5px; bottom: -2.5px; }
+.obj .bracket { position: absolute; inset: 0; width: 40px; height: 40px; color: rgba(197, 214, 245, 0.5); }
+.obj :deep(svg.orn) { width: 20px; height: 20px; }
 .txt { flex: 1; min-width: 0; }
 .txt b { display: block; font-size: 13.5px; font-weight: 600; letter-spacing: 0.6px; }
 .txt .cen { display: block; font-size: 8px; letter-spacing: 2.3px; color: var(--moon-3); margin-top: 2px; }
@@ -340,12 +337,14 @@ h1 { font-family: "Pinyon Script", cursive; font-weight: 400; font-size: 36px; l
 .drawer.empty .obj { border-style: dashed; opacity: 0.5; }
 .drawer.empty .txt b { color: var(--moon-2); }
 .drawer.empty .val em { color: var(--moon-3); font-size: 17px; }
+/* 空抽屉盖一枚「未」字火漆印，外圈是扇贝边（rocaille 本义就是贝壳饰） */
 .seal {
-  position: absolute; right: 44px; top: 50%; transform: translateY(-50%) rotate(-11deg);
-  width: 30px; height: 30px; display: grid; place-items: center; border-radius: 50%;
-  border: 1px solid rgba(157, 180, 221, 0.45); color: rgba(197, 214, 245, 0.75); font-size: 15px; opacity: 0.85;
+  position: absolute; right: 42px; top: 50%; transform: translateY(-50%) rotate(-11deg);
+  width: 34px; height: 34px; display: grid; place-items: center;
+  color: rgba(197, 214, 245, 0.72); opacity: 0.9;
 }
-.seal::before { content: ""; position: absolute; inset: 2.5px; border: 1px dotted rgba(157, 180, 221, 0.35); border-radius: 50%; }
+.seal :deep(svg) { position: absolute; inset: 0; width: 34px; height: 34px; }
+.seal b { font-weight: 400; font-size: 14px; }
 
 .health { list-style: none; margin: 0; padding: 4px 13px; }
 .health li { display: flex; align-items: center; gap: 8px; padding: 9px 0; border-bottom: 1px solid var(--hair-2); font-size: 12.5px; }
@@ -355,7 +354,8 @@ h1 { font-family: "Pinyon Script", cursive; font-weight: 400; font-size: 36px; l
 .health b { font-weight: 600; color: var(--moon-2); min-width: 68px; }
 .health span { color: var(--moon-3); }
 
-.tailpiece { display: flex; justify-content: center; margin: 22px 0 6px; color: var(--mist); opacity: 0.55; }
+.tailpiece { display: flex; justify-content: center; margin: 22px 0 6px; color: var(--mist); opacity: 0.6; }
+.tailpiece :deep(svg) { width: 200px; height: auto; }
 .muted { color: var(--moon-3); font-size: 12px; }
 .foot { margin: 10px 0 0; line-height: 1.7; }
 .load { text-align: center; padding: 40px 0; }

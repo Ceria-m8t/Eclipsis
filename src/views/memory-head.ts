@@ -160,6 +160,43 @@ export function paintHead(
   ctx.strokeStyle = 'rgba(255,217,233,0.85)'; ctx.lineWidth = 1.1
   ctx.beginPath(); ctx.arc(cx, L.eclipse, r, -Math.PI / 2, Math.PI / 2); ctx.stroke()
 
+  // ── 洛可可：不对称的 C 形涡卷 + 花彩垂饰 + 扇贝（她要的「深海洛可可」）──
+  // 左右故意不一样：洛可可不讲镜像对称。
+  ctx.strokeStyle = 'rgba(197,214,245,0.5)'
+  ctx.lineWidth = 1
+  // 左涡卷（大）
+  ctx.beginPath()
+  ctx.moveTo(cx - 118, L.eclipse + 22)
+  ctx.bezierCurveTo(cx - 118, L.eclipse - 6, cx - 96, L.eclipse - 20, cx - 68, L.eclipse - 20)
+  ctx.bezierCurveTo(cx - 50, L.eclipse - 20, cx - 42, L.eclipse - 8, cx - 46, L.eclipse + 2)
+  ctx.bezierCurveTo(cx - 50, L.eclipse + 10, cx - 60, L.eclipse + 10, cx - 61, L.eclipse + 3)
+  ctx.stroke()
+  ctx.beginPath(); ctx.arc(cx - 58, L.eclipse + 1, 1.8, 0, Math.PI * 2)
+  ctx.fillStyle = 'rgba(197,214,245,0.7)'; ctx.fill()
+  // 右涡卷（小，形状不同）
+  ctx.beginPath()
+  ctx.moveTo(cx + 112, L.eclipse + 16)
+  ctx.bezierCurveTo(cx + 112, L.eclipse - 4, cx + 94, L.eclipse - 16, cx + 72, L.eclipse - 16)
+  ctx.bezierCurveTo(cx + 58, L.eclipse - 16, cx + 52, L.eclipse - 6, cx + 56, L.eclipse + 2)
+  ctx.stroke()
+  // 两道花彩垂饰（swag）
+  ctx.strokeStyle = 'rgba(197,214,245,0.3)'
+  ctx.beginPath()
+  ctx.moveTo(cx - 112, L.eclipse + 30)
+  ctx.quadraticCurveTo(cx - 70, L.eclipse + 52, cx - 30, L.eclipse + 36)
+  ctx.stroke()
+  ctx.beginPath()
+  ctx.moveTo(cx + 106, L.eclipse + 26)
+  ctx.quadraticCurveTo(cx + 68, L.eclipse + 48, cx + 32, L.eclipse + 34)
+  ctx.stroke()
+  // 日蚀顶上的棕叶饰
+  ctx.strokeStyle = 'rgba(197,214,245,0.42)'
+  ctx.beginPath()
+  ctx.moveTo(cx, L.eclipse - r - 4)
+  ctx.bezierCurveTo(cx - 5, L.eclipse - r - 13, cx - 4, L.eclipse - r - 20, cx, L.eclipse - r - 25)
+  ctx.bezierCurveTo(cx + 4, L.eclipse - r - 20, cx + 5, L.eclipse - r - 13, cx, L.eclipse - r - 4)
+  ctx.stroke()
+
   // 标题：花体英文（固定字体）+ 中文 + 一行手写
   ctx.shadowColor = 'rgba(176,204,255,0.4)'; ctx.shadowBlur = 22
   ctx.fillStyle = '#f3f6fb'
@@ -195,16 +232,17 @@ export function paintHead(
   ctx.fillText('句 原 话', cx, L.unit)
   ctx.letterSpacing = '0px'
 
-  // 两侧一道虚线尺（繁复那套里的「账页」感）
-  ctx.strokeStyle = 'rgba(234,240,248,0.18)'; ctx.lineWidth = 1
-  ctx.setLineDash([1, 5])
+  // 主数两侧：S 形卷须（洛可可，不是直的虚线尺）
+  ctx.strokeStyle = 'rgba(234,240,248,0.26)'; ctx.lineWidth = 0.9
   for (const dir of [-1, 1]) {
+    const x0 = cx + dir * 52, y = L.unit - 5
     ctx.beginPath()
-    ctx.moveTo(cx + dir * 52, L.unit - 4)
-    ctx.lineTo(cx + dir * 128, L.unit - 4)
+    ctx.moveTo(x0, y)
+    ctx.bezierCurveTo(x0 + dir * 26, y - 7, x0 + dir * 42, y + 7, x0 + dir * 66, y)
     ctx.stroke()
+    ctx.beginPath(); ctx.arc(x0 + dir * 70, y, 1.5, 0, Math.PI * 2)
+    ctx.fillStyle = 'rgba(234,240,248,0.4)'; ctx.fill()
   }
-  ctx.setLineDash([])
 
   ctx.fillStyle = 'rgba(234,240,248,0.72)'
   ctx.font = `400 12.5px ${cn}`

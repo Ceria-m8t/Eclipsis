@@ -125,6 +125,7 @@ function paintProbe(data: { quotes: number; cards: number; relations: number } |
     createLinearGradient: () => grad, createRadialGradient: () => grad,
     fillRect() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, clearRect() {},
     save() {}, restore() {}, arc() {}, closePath() {}, fill() {}, setLineDash() {},
+    bezierCurveTo() {}, quadraticCurveTo() {},
     fillText(t: string) { texts.push(t) },
   } as unknown as CanvasRenderingContext2D
   paintHead(ctx, 390, headLayout(0).height, data, { cn: '"Noto Serif SC", serif' })
