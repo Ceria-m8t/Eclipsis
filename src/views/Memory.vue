@@ -130,7 +130,7 @@ const subTitle = computed(() => sub.value === 'inbox' ? '沉淀信箱' : sub.val
 .scroll {
   position: relative; height: 100%; overflow-y: auto; -webkit-overflow-scrolling: touch;
   padding: calc(env(safe-area-inset-top, 0px) + 46px) 18px 28px;
-  font-family: "Noto Serif SC", "Songti SC", serif;
+  font-family: var(--app-font, "Noto Serif SC", "Songti SC", serif);
 }
 .head { position: relative; margin-bottom: 18px; }
 .back {
@@ -185,7 +185,7 @@ section { margin-bottom: 20px; }
   width: 100%; max-height: 86%; display: flex; flex-direction: column;
   background: #f6f3ea; border-radius: 20px 20px 0 0; border-top: 1px solid rgba(77, 83, 60, 0.12);
 }
-.sheet-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 6px; font-family: "Noto Serif SC", serif; }
+.sheet-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 6px; font-family: var(--app-font, "Noto Serif SC", serif); }
 .sheet-head b { font-size: 15px; color: #3a4130; }
 .x { border: none; background: none; font-size: 24px; color: rgba(60, 67, 48, 0.45); }
 .sheet-body { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 0 14px calc(16px + env(safe-area-inset-bottom, 0px)); }

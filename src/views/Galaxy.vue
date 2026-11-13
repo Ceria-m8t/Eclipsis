@@ -410,7 +410,7 @@ async function sendNote() {
   padding: 18px 18px calc(18px + env(safe-area-inset-bottom, 0px));
   background: rgba(8, 12, 26, 0.88); -webkit-backdrop-filter: blur(22px) saturate(160%); backdrop-filter: blur(22px) saturate(160%);
   border-top: 1px solid rgba(205, 216, 238, 0.18); border-radius: 20px 20px 0 0; color: #e8eef8;
-  font-family: "Noto Serif SC", "Songti SC", serif;
+  font-family: var(--app-font, "Noto Serif SC", "Songti SC", serif);
 }
 .card.tall { max-height: 92%; }
 .x { position: absolute; right: 12px; top: 8px; border: none; background: none; color: rgba(205, 216, 238, 0.6); font-size: 24px; }

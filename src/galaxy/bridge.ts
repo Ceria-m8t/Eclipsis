@@ -10,7 +10,10 @@ export type Pick = { kind: 'star' } | { kind: 'belt' } | { kind: 'planet'; id: s
 
 export interface Mounted { render(view: View, snap: GSnapshot, graph: GGraph | null): void; unmount(): void }
 
-const FONT = '"Noto Serif SC", "Songti SC", serif'
+// 星系里的标签也跟着她换的全局字体（前端 style.css 把它放在 --app-font）
+const FONT = (typeof getComputedStyle === 'function'
+  ? getComputedStyle(document.documentElement).getPropertyValue('--app-font').trim()
+  : '') || '"Noto Serif SC", "Songti SC", serif'
 
 export function mountRidge(el: HTMLElement, onPick: (p: Pick) => void): Mounted {
   const root: Root = createRoot(el)
