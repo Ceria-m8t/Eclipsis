@@ -146,11 +146,48 @@ void main(){
   o = vec4(col, 1.0);
 }`
 
+/**
+ * 全局那一层用的着色器：**只画波本身**，平的地方完全透明。
+ * 为什么不折射：整页是 DOM，没法送进 WebGL。所以这一层画的是水面的高光、焦散和色散，
+ * 压在内容上面（pointer-events: none），平静时看不出有东西。字跟着晃只在头部那一块做得到。
+ */
+const OVERLAY_FS = `#version 300 es
+precision highp float; in vec2 uv; out vec4 o;
+uniform sampler2D height; uniform vec2 px; uniform float t;
+float h(vec2 q){ return texture(height, q).r; }
+void main(){
+  float hx = h(uv + vec2(px.x, 0.)) - h(uv - vec2(px.x, 0.));
+  float hy = h(uv + vec2(0., px.y)) - h(uv - vec2(0., px.y));
+  vec2 n = vec2(hx, hy);
+  float slope = length(n);
+  if (slope < 0.00035) { o = vec4(0.); return; }      // 平的地方完全透明
+
+  vec3 nrm = normalize(vec3(n * 55.0, 1.0));
+  // 光从上面来（她要的：我们在水面之下，光从上面射进来）
+  float spec = pow(clamp(dot(nrm, normalize(vec3(-0.30, 0.78, 0.55))), 0., 1.), 26.0);
+
+  float lap = h(uv + vec2(px.x, 0.)) + h(uv - vec2(px.x, 0.))
+            + h(uv + vec2(0., px.y)) + h(uv - vec2(0., px.y)) - 4. * h(uv);
+  float caustic = clamp(-lap * 22.0, 0., 1.);
+
+  // 色散：斜率方向上冷暖分开（和我们液态玻璃那道粉蓝一致）
+  vec2 dir = n / max(slope, 1e-5);
+  vec3 tint = mix(vec3(0.66, 0.80, 1.0), vec3(1.0, 0.80, 0.90), clamp(0.5 + dir.x * 0.5, 0., 1.));
+
+  float a = clamp(spec * 0.85 + caustic * 0.30 + slope * 9.0, 0., 0.55);
+  o = vec4(tint * (spec * 0.95 + caustic * 0.55) * a, a);   // premultiplied
+}`
+
 export interface PondOptions {
   /** 水面盖住它（画布插在它里面，跟着内容一起滚） */
   host: HTMLElement
-  /** 把要泡进水里的那块内容画进离屏画布（CSS 像素坐标，不用管 DPR） */
-  paint: (ctx: CanvasRenderingContext2D, w: number, h: number) => void
+  /**
+   * refract = 把 paint 画的那块内容当水下的画面折射（字跟着晃，只能用在自己画的内容上）；
+   * overlay = 只画波本身压在内容上面（整页那一层，DOM 照常能点）。默认 refract。
+   */
+  mode?: 'refract' | 'overlay'
+  /** refract 模式：把要泡进水里的那块内容画进离屏画布（CSS 像素坐标，不用管 DPR） */
+  paint?: (ctx: CanvasRenderingContext2D, w: number, h: number) => void
   /** 在哪一层听手指（默认 host；头部在滚动区里时传滚动容器，免得抢走滑动） */
   touch?: HTMLElement
   /** WebGL 彻底用不了（上下文丢了拿不回来）时通知外面退回 DOM 版 */
@@ -184,10 +221,12 @@ export class Pond {
   private io: IntersectionObserver
   private onScreen = true
   private opts: PondOptions
+  private mode: 'refract' | 'overlay' = 'refract'
 
   constructor(opts: PondOptions) {
     this.opts = opts
     this.dpr = Math.min(window.devicePixelRatio || 1, 2)
+    this.mode = opts.mode || 'refract'
     const c = document.createElement('canvas')
     c.className = 'pond-canvas'
     c.setAttribute('aria-hidden', 'true')
@@ -221,12 +260,13 @@ export class Pond {
 
   /** 内容变了（取到数、字体加载完、尺寸变了）重画一次水下的画面 */
   repaint(): void {
-    if (this.dead || !this.gl || !this.sctx || this.w <= 0 || this.h <= 0) return
+    if (this.mode === 'overlay') return      // 这一层不画水下的画面，只画波
+    if (this.dead || !this.gl || !this.sctx || !this.opts.paint || this.w <= 0 || this.h <= 0) return
     this.src.width = Math.max(1, Math.round(this.w * this.dpr))
     this.src.height = Math.max(1, Math.round(this.h * this.dpr))
     this.sctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0)
     this.sctx.clearRect(0, 0, this.w, this.h)
-    this.opts.paint(this.sctx, this.w, this.h)
+    this.opts.paint!(this.sctx, this.w, this.h)
     this.uploadPage()
     this.hot = Math.max(this.hot, 2)   // 至少再出一帧，把新画面推上屏
     this.start()
@@ -259,7 +299,10 @@ export class Pond {
   // ── 内部 ──
 
   private init() {
-    const gl = this.canvas.getContext('webgl2', { alpha: false, antialias: false })
+    const alpha = (this.opts.mode || 'refract') === 'overlay'
+    const gl = this.canvas.getContext('webgl2', alpha
+      ? { alpha: true, premultipliedAlpha: true, antialias: false }
+      : { alpha: false, antialias: false })
     if (!gl) return
     if (!gl.getExtension('EXT_color_buffer_half_float') && !gl.getExtension('EXT_color_buffer_float')) return
     this.gl = gl
@@ -269,13 +312,14 @@ export class Pond {
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW)
 
     this.simP = this.program(SIM_FS)
-    this.drawP = this.program(DRAW_FS)
+    this.drawP = this.program(this.mode === 'overlay' ? OVERLAY_FS : DRAW_FS)
     if (!this.simP || !this.drawP) { this.gl = null; return }
 
     const u = (p: WebGLProgram, names: string[]) =>
       names.reduce<Record<string, WebGLUniformLocation | null>>((m, n) => { m[n] = gl.getUniformLocation(p, n); return m }, {})
     this.uS = u(this.simP, ['cur', 'prev', 'px', 'damp', 'drops[0]', 'nDrops'])
     this.uD = u(this.drawP, ['height', 'page', 'px', 't'])
+    if (this.mode === 'overlay') { gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA) }
 
     this.fb = [this.makeFbo(), this.makeFbo(), this.makeFbo()]
     this.pageTex = gl.createTexture()
@@ -332,7 +376,8 @@ export class Pond {
     this.w = w; this.h = h
     this.canvas.width = Math.round(w * this.dpr)
     this.canvas.height = Math.round(h * this.dpr)
-    this.repaint()
+    if (this.mode === 'overlay') { this.hot = Math.max(this.hot, 2); this.start() }
+    else this.repaint()
   }
 
   private push(cx: number, cy: number, strength: number) {
@@ -412,9 +457,11 @@ export class Pond {
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, null)
     gl.viewport(0, 0, this.canvas.width, this.canvas.height)
+    if (this.mode === 'overlay') gl.clearColor(0, 0, 0, 0)
     bind(this.drawP)
+    if (this.mode === 'overlay') gl.clear(gl.COLOR_BUFFER_BIT)
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.fb[1]!.tex); gl.uniform1i(this.uD.height!, 0)
-    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.pageTex); gl.uniform1i(this.uD.page!, 1)
+    if (this.mode === 'refract') { gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.pageTex); gl.uniform1i(this.uD.page!, 1) }
     gl.uniform2f(this.uD.px!, 1 / POND.sim, 1 / POND.sim)
     gl.uniform1f(this.uD.t!, (now - this.t0) / 1000)
     gl.drawArrays(gl.TRIANGLES, 0, 3)

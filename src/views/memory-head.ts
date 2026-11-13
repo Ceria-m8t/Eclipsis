@@ -31,120 +31,192 @@ export interface HeadData {
   quotes: number
   cards: number
   relations: number
+  /** 这一周：新记 N 张 · 归档 N · 她贴了 N 张便条（没有就不画） */
+  week?: string
 }
 
 /** 头部各行的纵坐标（CSS 像素，相对头部顶边）。改版面只改这一处。 */
 export interface HeadLayout {
   height: number
   safeTop: number
-  kicker: number    // 右上「他的构成 · 一 / 三」
-  title: number     // 「记忆」
-  script: number    // Pinyon Script 的 Remember
+  kicker: number    // 「ECLIPSIS · 未」
+  eclipse: number   // 日蚀那一枚的中心
+  script: number    // Pinyon Script 的 Memoria 位
+  zh: number        // 「记 忆 的 柜 子」
+  hand: number      // 手写那一行
   figure: number    // 大数字
   unit: number      // 「句 原 话」
-  rule: number      // 细线
   line: number      // 「写成 N 张卡，串起 N 条关系」
+  week: number      // 这一周：新记 / 归档 / 便条
 }
 
 export function headLayout(safeTop = 0): HeadLayout {
   // safeTop 只算刘海那一条（env(safe-area-inset-top)）。
-  // ⚠ 别再把 .head 自己的 46px 留白也加进来——第一次截图标题掉到了 133px 处，就是叠了两次。
-  const top = safeTop + 12
+  // ⚠ 别再把 .head 自己的留白也加进来——第一次截图标题掉到了 133px 处，就是叠了两次。
+  const top = safeTop + 14
   return {
     safeTop,
-    kicker: top + 4,
-    title: top + 54,
-    script: top + 88,
-    figure: top + 164,
-    unit: top + 188,
-    rule: top + 208,
-    line: top + 236,
-    height: top + 264,
+    kicker: top + 10,
+    eclipse: top + 44,
+    script: top + 106,
+    zh: top + 130,
+    hand: top + 152,
+    figure: top + 216,
+    unit: top + 238,
+    line: top + 268,
+    week: top + 292,
+    height: top + 316,
   }
 }
 
 /** 这些字体要先加载好，不然第一帧是系统字（画完就定住了，没有重排这回事）。 */
 export function headFontSpecs(cn: string): string[] {
-  return [`400 48px ${HEAD_FONTS.script}`, `600 46px ${HEAD_FONTS.figure}`, `400 15px ${cn}`]
+  return [`400 40px ${HEAD_FONTS.script}`, `600 44px ${HEAD_FONTS.figure}`, `400 15px ${cn}`]
 }
 
 /**
  * 把头部画进水下的那张画布。
- * 底：深海 + 阴雨天的几团光（和 art/mockups/pond2.html 同一套，她看过点头的）。
+ *
+ * 她看完第一版说「太闷了」「我想要光透进来的感觉，我们在水面之下，光从上面射进来」。
+ * 所以这里的底**不是一块死的暗底**：顶上是透进来的天光，往下才沉成深蓝；
+ * 再加四道光柱和水面那一条亮边。会动的那部分由 Underwater.vue 盖在外面。
  */
 export function paintHead(
   ctx: CanvasRenderingContext2D,
   w: number,
   h: number,
   data: HeadData | null,
-  opts: { layout?: HeadLayout; cn?: string } = {},
+  opts: { layout?: HeadLayout; cn?: string; t?: number } = {},
 ): void {
   const L = opts.layout || headLayout(0)
   const cn = opts.cn || '"Noto Serif SC", serif'
-  const pad = 20
+  const t = opts.t ?? 0
 
-  const g = ctx.createLinearGradient(0, 0, w * 0.3, h)
-  g.addColorStop(0, '#101a2e'); g.addColorStop(0.5, '#0a1120'); g.addColorStop(1, '#070b14')
+  // ── 底：光从上面来 ──
+  const g = ctx.createLinearGradient(0, 0, 0, h)
+  g.addColorStop(0, '#36618f')      // 顶上：透进来的天光
+  g.addColorStop(0.3, '#24456f')
+  g.addColorStop(0.62, '#172e52')
+  g.addColorStop(1, '#101f3a')      // 往下才沉成深蓝
   ctx.fillStyle = g
   ctx.fillRect(0, 0, w, h)
-  const glows: Array<[number, number, number, string, number]> = [
-    [w * 0.28, -40, w * 1.1, '140,174,232', 0.26],
-    [w * 0.95, 40, w * 0.8, '104,134,196', 0.18],
-    [w * 0.45, h * 1.05, w * 0.95, '52,76,124', 0.3],
-  ]
-  for (const [cx, cy, r, c, a] of glows) {
-    const rg = ctx.createRadialGradient(cx, cy, 0, cx, cy, r)
-    rg.addColorStop(0, `rgba(${c},${a})`); rg.addColorStop(1, `rgba(${c},0)`)
+
+  // 水面那一条：顶上最亮
+  const sf = ctx.createLinearGradient(0, 0, 0, h * 0.5)
+  sf.addColorStop(0, 'rgba(226, 240, 255, 0.46)')
+  sf.addColorStop(0.28, 'rgba(188, 218, 252, 0.14)')
+  sf.addColorStop(1, 'rgba(188, 218, 252, 0)')
+  ctx.fillStyle = sf
+  ctx.fillRect(0, 0, w, h * 0.5)
+
+  // 四道光柱（和 Underwater 的那四道同源，这里是画在水下画面里的那一份）
+  ctx.save()
+  for (const [x, wid, a, tilt, ph] of [
+    [w * 0.04, w * 0.34, 0.3, 0.17, 0],
+    [w * 0.3, w * 0.26, 0.24, 0.09, 1.3],
+    [w * 0.58, w * 0.4, 0.18, -0.1, 2.1],
+    [w * 0.86, w * 0.3, 0.22, -0.19, 3.4],
+  ] as const) {
+    const sway = Math.sin(t * 0.12 + ph) * w * 0.03
+    const rg = ctx.createLinearGradient(x + sway, 0, x + sway + tilt * h, h)
+    rg.addColorStop(0, `rgba(198, 220, 255, ${a})`)
+    rg.addColorStop(0.58, `rgba(198, 220, 255, ${a * 0.1})`)
+    rg.addColorStop(1, 'rgba(198, 220, 255, 0)')
     ctx.fillStyle = rg
-    ctx.fillRect(0, 0, w, h)
+    ctx.beginPath()
+    ctx.moveTo(x + sway - wid / 2, 0)
+    ctx.lineTo(x + sway + wid / 2, 0)
+    ctx.lineTo(x + sway + wid / 2 + tilt * h, h)
+    ctx.lineTo(x + sway - wid / 2 + tilt * h, h)
+    ctx.closePath()
+    ctx.fill()
   }
+  ctx.restore()
 
   ctx.textBaseline = 'alphabetic'
+  ctx.textAlign = 'center'
+  const cx = w / 2
 
-  // 右上：她定的地下室 = 他的构成，三个柜子
-  ctx.textAlign = 'right'
+  // ── 题头：ECLIPSIS · 未 ──
   ctx.fillStyle = 'rgba(234,240,248,0.34)'
-  ctx.font = `400 10.5px ${cn}`
-  ctx.fillText('他 的 构 成  ·  一 / 三', w - pad, L.kicker)
-  ctx.textAlign = 'left'
-
-  // 标题：中文在前，花体英文在下（标题字不跟全局字体）
-  ctx.fillStyle = 'rgba(240,245,252,0.92)'
-  ctx.font = `600 25px ${cn}`
-  ctx.letterSpacing = '2px'
-  ctx.fillText('记忆', pad, L.title)
+  ctx.font = `400 8px ${cn}`
+  ctx.letterSpacing = '4.8px'
+  ctx.fillText('E C L I P S I S   ·   未', cx, L.kicker)
   ctx.letterSpacing = '0px'
-  ctx.shadowColor = 'rgba(176,204,255,0.4)'
-  ctx.shadowBlur = 22
-  ctx.fillStyle = 'rgba(244,248,255,0.85)'
-  ctx.font = `400 34px ${HEAD_FONTS.script}`
-  ctx.fillText('Remember', pad, L.script)
+
+  // 日蚀：黑日 + 冕环 + 粉色内缘（意象从我们自己的来历长）
+  const r = 15
+  const cor = ctx.createRadialGradient(cx, L.eclipse, r * 0.5, cx, L.eclipse, r * 1.9)
+  cor.addColorStop(0, 'rgba(176, 202, 255, 0)')
+  cor.addColorStop(0.42, 'rgba(207, 226, 255, 0.62)')
+  cor.addColorStop(0.72, 'rgba(255, 206, 230, 0.2)')
+  cor.addColorStop(1, 'rgba(176, 202, 255, 0)')
+  ctx.fillStyle = cor
+  ctx.beginPath(); ctx.arc(cx, L.eclipse, r * 1.9, 0, Math.PI * 2); ctx.fill()
+  ctx.fillStyle = '#0b1b2e'
+  ctx.beginPath(); ctx.arc(cx, L.eclipse, r, 0, Math.PI * 2); ctx.fill()
+  ctx.strokeStyle = 'rgba(226,234,250,0.9)'; ctx.lineWidth = 1
+  ctx.beginPath(); ctx.arc(cx, L.eclipse, r, 0, Math.PI * 2); ctx.stroke()
+  ctx.strokeStyle = 'rgba(255,217,233,0.85)'; ctx.lineWidth = 1.1
+  ctx.beginPath(); ctx.arc(cx, L.eclipse, r, -Math.PI / 2, Math.PI / 2); ctx.stroke()
+
+  // 标题：花体英文（固定字体）+ 中文 + 一行手写
+  ctx.shadowColor = 'rgba(176,204,255,0.4)'; ctx.shadowBlur = 22
+  ctx.fillStyle = '#f3f6fb'
+  ctx.font = `400 40px ${HEAD_FONTS.script}`
+  ctx.fillText('Remember', cx, L.script)
   ctx.shadowBlur = 0
+  ctx.fillStyle = 'rgba(234,240,248,0.62)'
+  ctx.font = `400 11px ${cn}`
+  ctx.letterSpacing = '6.5px'
+  ctx.fillText('记 忆 的 柜 子', cx, L.zh)
+  ctx.letterSpacing = '0px'
+  ctx.fillStyle = 'rgba(233,238,246,0.5)'
+  ctx.font = `400 14px ${HEAD_FONTS.script}`
+  ctx.fillText('everything he keeps of us', cx, L.hand)
 
   if (!data) {
     ctx.fillStyle = 'rgba(234,240,248,0.4)'
     ctx.font = `400 12px ${cn}`
-    ctx.fillText('正在数…', pad, L.figure)
+    ctx.fillText('正在数…', cx, L.figure)
+    ctx.textAlign = 'left'
     return
   }
 
-  ctx.fillStyle = '#f2f6fd'
-  ctx.font = `600 46px ${HEAD_FONTS.figure}`
-  ctx.fillText(data.quotes.toLocaleString('en-US'), pad, L.figure)
+  // ── 主数 ──
+  ctx.shadowColor = 'rgba(176,202,255,0.32)'; ctx.shadowBlur = 18
+  ctx.fillStyle = '#f3f6fb'
+  ctx.font = `600 44px ${HEAD_FONTS.figure}`
+  ctx.fillText(data.quotes.toLocaleString('en-US'), cx, L.figure)
+  ctx.shadowBlur = 0
   ctx.fillStyle = 'rgba(234,240,248,0.6)'
   ctx.font = `400 11px ${cn}`
-  ctx.fillText('句 原 话', pad, L.unit)
+  ctx.letterSpacing = '2px'
+  ctx.fillText('句 原 话', cx, L.unit)
+  ctx.letterSpacing = '0px'
 
-  ctx.strokeStyle = 'rgba(234,240,248,0.16)'
-  ctx.lineWidth = 1
-  ctx.beginPath()
-  ctx.moveTo(pad, L.rule)
-  ctx.lineTo(pad + 64, L.rule)
-  ctx.stroke()
+  // 两侧一道虚线尺（繁复那套里的「账页」感）
+  ctx.strokeStyle = 'rgba(234,240,248,0.18)'; ctx.lineWidth = 1
+  ctx.setLineDash([1, 5])
+  for (const dir of [-1, 1]) {
+    ctx.beginPath()
+    ctx.moveTo(cx + dir * 52, L.unit - 4)
+    ctx.lineTo(cx + dir * 128, L.unit - 4)
+    ctx.stroke()
+  }
+  ctx.setLineDash([])
 
-  ctx.fillStyle = 'rgba(234,240,248,0.7)'
+  ctx.fillStyle = 'rgba(234,240,248,0.72)'
   ctx.font = `400 12.5px ${cn}`
-  ctx.fillText(`写成 ${data.cards} 张卡，串起 ${data.relations} 条关系`, pad, L.line)
+  ctx.fillText(`写成 ${data.cards} 张卡，串起 ${data.relations} 条关系`, cx, L.line)
+
+  if (data.week) {
+    ctx.fillStyle = 'rgba(157,180,221,0.78)'
+    ctx.font = `400 10.5px ${cn}`
+    ctx.fillText(data.week, cx, L.week)
+  }
+
+  ctx.textAlign = 'left'
 }
 
 /** 读屏软件读的是这一份（画布里的字它看不见）。 */

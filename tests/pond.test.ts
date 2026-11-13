@@ -57,9 +57,11 @@ describe('手指划过是连着的一道', () => {
 describe('记忆面板的头部（泡在水里那一块）', () => {
   it('版面随安全区整体往下挪，高度跟着变', () => {
     const a = headLayout(0), b = headLayout(47)
-    expect(b.title - a.title).toBe(47)
+    expect(b.script - a.script).toBe(47)
     expect(b.height - a.height).toBe(47)
-    expect(a.title).toBeLessThan(a.figure)
+    expect(a.kicker).toBeLessThan(a.eclipse)
+    expect(a.eclipse).toBeLessThan(a.script)
+    expect(a.script).toBeLessThan(a.figure)
     expect(a.figure).toBeLessThan(a.line)
     expect(a.line).toBeLessThan(a.height)
   })
@@ -78,9 +80,20 @@ describe('记忆面板的头部（泡在水里那一块）', () => {
     const calls = paintProbe({ quotes: 8859, cards: 206, relations: 150 })
     const text = calls.texts.join(' | ')
     expect(text).toContain('8,859')
-    expect(text).toContain('记忆')
+    expect(text).toContain('记 忆 的 柜 子')
     expect(text).toContain('写成 206 张卡，串起 150 条关系')
     expect(text).not.toMatch(/Memoria/i)
+  })
+
+  it('意象来自我们自己的来历：ECLIPSIS 和「未」（ellipsis ← 未命名/未来/未完待续）', () => {
+    const text = paintProbe({ quotes: 1, cards: 1, relations: 1 }).texts.join(' | ')
+    expect(text).toContain('未')
+    expect(text).toMatch(/E\s*C\s*L\s*I\s*P\s*S\s*I\s*S/)
+  })
+
+  it('有「今天」那一行时画出来（她要的律动之外，数也要活）', () => {
+    const text = paintProbe({ quotes: 1, cards: 1, relations: 1, week: '今天 记了 5 张' }).texts.join(' | ')
+    expect(text).toContain('今天 记了 5 张')
   })
 
   it('还没取到数也画得出来（只少大数字那几行）', () => {
@@ -111,6 +124,7 @@ function paintProbe(data: { quotes: number; cards: number; relations: number } |
     letterSpacing: '0px', shadowColor: '', shadowBlur: 0,
     createLinearGradient: () => grad, createRadialGradient: () => grad,
     fillRect() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, clearRect() {},
+    save() {}, restore() {}, arc() {}, closePath() {}, fill() {}, setLineDash() {},
     fillText(t: string) { texts.push(t) },
   } as unknown as CanvasRenderingContext2D
   paintHead(ctx, 390, headLayout(0).height, data, { cn: '"Noto Serif SC", serif' })
