@@ -50,13 +50,14 @@ const OBJ: Record<string, string> = {
  *   public/assets/rooms/basement/memory-water.jpg
  * 和房间底图同一套规矩（/assets/rooms/<房间>/...，nginx 那边缓存 30 天，换图要改文件名）。
  */
-const BG_PATH = '/assets/rooms/basement/memory-water.jpg'
 /**
- * ⚠ nginx 给 /assets/ 加了 30 天 immutable 缓存，同名换图手机不会重新下载。
- * 所以带一个按小时变的查询串：她在底图试衣间换完图，重开 App 就能看到新的。
- * （房间底图那边的做法是改文件名，但这张要反复试，不能每次改名字。）
+ * 底图（她 2026-11-13 定：「我们要不要直接放实际底图上去」）。
+ *
+ * ⚠ 不走 /assets/：那个前缀有 30 天 `immutable` 缓存，Safari 连查询串一起缓存，
+ * 换图后手机拿到的还是旧响应。底图试衣间要反复换，所以给它一条**不缓存**的专用路径
+ * （nginx snippets/memory-bg.conf → /_memory-bg.jpg，no-store）。
  */
-const BG_URL = `${BG_PATH}?v=${Math.floor(Date.now() / 36e5)}`
+const BG_URL = '/_memory-bg.jpg'
 /** 底图在不在（不在就用兜底，不要显示破图） */
 const bg = ref('')
 /** 头部那张水下画面用的底图（画进 canvas 的那一份） */
